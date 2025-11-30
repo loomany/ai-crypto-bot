@@ -337,10 +337,18 @@ def _format_signal(signal: Dict[str, Any]) -> str:
         "%Y-%m-%d %H:%M"
     )
     direction_text = "ЛОНГ" if signal.get("direction") == "long" else "ШОРТ"
+    symbol = signal["symbol"]
+    if symbol.endswith("USDT"):
+        base = symbol[:-4]
+        quote = "USDT"
+    else:
+        base = symbol
+        quote = ""
+    symbol_text = f"{base} / {quote}" if quote else base
 
     text = (
         "🔔 AI-сигнал (intraday)\n\n"
-        f"Монета: {signal['symbol']}\n"
+        f"Монета: {symbol_text}\n"
         f"Тип: {direction_text}\n\n"
         f"Зона входа: {entry_low:.4f}–{entry_high:.4f}\n"
         f"Стоп (SL): {signal['sl']:.4f}\n"
