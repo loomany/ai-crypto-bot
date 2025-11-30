@@ -43,10 +43,6 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         ],
         [
             KeyboardButton(text="🚀 Pump Detector"),
-            KeyboardButton(text="🧠 ML прогноз"),
-        ],
-        [
-            KeyboardButton(text="⚠️ Безопасность сделки"),
             KeyboardButton(text="ℹ️ Обучение терминам"),
         ],
     ]
@@ -278,18 +274,6 @@ async def back_to_main_menu(message: Message):
 async def back_to_main(message: Message):
     waiting_for_symbol.discard(message.chat.id)
     await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard())
-
-
-@dp.message(F.text == "🧠 ML прогноз")
-async def ml_forecast(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
-    await message.answer("Здесь будет ML-прогноз на 1ч/4ч/сутки.")
-
-
-@dp.message(F.text == "⚠️ Безопасность сделки")
-async def safety(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
-    await message.answer("Здесь будет риск-менеджмент и подсказки.")
 
 
 @dp.message(F.text == "ℹ️ Обучение терминам")
