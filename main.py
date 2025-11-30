@@ -9,6 +9,7 @@ from aiogram.types import (
 )
 from aiogram.filters import CommandStart
 from dotenv import load_dotenv
+from market_data import get_ticker_price
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -48,6 +49,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 BOT_TOKEN = load_settings()
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
+waiting_for_symbol: set[int] = set()
 
 
 # ===== ХЭНДЛЕРЫ =====
@@ -64,7 +66,14 @@ async def cmd_start(message: Message):
 
 @dp.message(F.text == "📊 Анализ монеты")
 async def analyze_coin(message: Message):
-    await message.answer("Здесь будет анализ монеты (цена, тренд, RSI). Пока заглушка.")
+    waiting_for_symbol.add(message.chat.id)
+
+    await message.answer(
+        "📊 *Анализ монеты*\n\n"
+        "Введи тикер монеты (например: BTC, ETH, SOL)\n"
+        "_Можно писать: BTC или BTCUSDT_",
+        parse_mode="Markdown",
+    )
 
 
 @dp.message(F.text == "🎯 AI-сигналы")
@@ -90,6 +99,43 @@ async def safety(message: Message):
 @dp.message(F.text == "ℹ️ Обучение терминам")
 async def education(message: Message):
     await message.answer("Здесь будет справочник: RSI, MACD, orderflow и т.д.")
+
+
+@dp.message()
+async def process_symbol(message: Message):
+    chat_id = message.chat.id
+
+    if chat_id not in waiting_for_symbol:
+        return
+
+    waiting_for_symbol.remove(chat_id)
+
+    symbol = (message.text or "").strip().upper()
+    if not symbol:
+        await message.answer("Я ожидал тикер монеты. Попробуй ещё раз нажать «📊 Анализ монеты».")
+        return
+
+    if not symbol.endswith("USDT"):
+        symbol_pair = symbol + "USDT"
+    else:
+        symbol_pair = symbol
+
+    data = await get_ticker_price(symbol_pair)
+
+    if not data:
+        await message.answer("❌ Не удалось получить данные. Проверь тикер (например: BTC, ETH, SOL).")
+        return
+
+    price = data["price"]
+    change = data["change_24h"]
+    emoji = "📈" if change >= 0 else "📉"
+
+    await message.answer(
+        f"🪙 Монета: {symbol}\n"
+        f"💰 Цена: {price} USDT\n"
+        f"{emoji} Изменение за 24ч: {change}%\n"
+        f"Источник: Binance"
+    )
 
 
 @dp.message()
