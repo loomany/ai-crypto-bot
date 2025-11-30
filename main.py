@@ -41,10 +41,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="📊 Анализ монеты"),
             KeyboardButton(text="🎯 AI-сигналы"),
         ],
-        [
-            KeyboardButton(text="🚀 Pump Detector"),
-            KeyboardButton(text="ℹ️ Обучение терминам"),
-        ],
+        [KeyboardButton(text="🚀 Pump Detector")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -274,12 +271,6 @@ async def back_to_main_menu(message: Message):
 async def back_to_main(message: Message):
     waiting_for_symbol.discard(message.chat.id)
     await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard())
-
-
-@dp.message(F.text == "ℹ️ Обучение терминам")
-async def education(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
-    await message.answer("Здесь будет справочник: RSI, MACD, orderflow и т.д.")
 
 
 def _trend_to_text(trend: str) -> str:
