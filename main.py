@@ -125,9 +125,9 @@ bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 waiting_for_symbol: set[int] = set()
 signal_cache: Dict[Tuple[str, str, float, float], float] = {}
-
-_RECENT_AI_SIGNALS: Dict[Tuple, float] = {}
-DEDUP_WINDOW_SECONDS = 60 * 60  # 60 minutes
+LAST_SIGNALS: Dict[str, Dict[str, Any]] = {}
+COOLDOWN_PER_SYMBOL = 60 * 60 * 3  # 3 hours
+ENTRY_DUP_THRESHOLD = 0.1  # percent
 
 DB_PATH = "ai_signals.db"
 # Сканируем рынок каждые 30 секунд, чтобы рассылка была оперативной
@@ -190,7 +190,7 @@ async def ai_signals_now(message: Message):
 
     signals = await scan_market()
     if not signals:
-        await message.answer("Сейчас нет сетапов с высокой вероятностью (score >= 80).")
+        await message.answer("Сейчас нет сетапов с высокой вероятностью (score >= 90).")
         return
 
     signals = sorted(signals, key=lambda s: s.get("score", 0), reverse=True)
@@ -339,7 +339,7 @@ def fmt_price(value: float) -> str:
         return f"{value:.8f}"
 
 
-def _remember_signal(signal: Dict[str, Any], ttl: int = 3600) -> bool:
+def _remember_signal(signal: Dict[str, Any], ttl: int = COOLDOWN_PER_SYMBOL) -> bool:
     key = (
         signal["symbol"],
         signal.get("direction", "long"),
@@ -361,30 +361,38 @@ def _remember_signal(signal: Dict[str, Any], ttl: int = 3600) -> bool:
     return True
 
 
+def _entry_diff_percent(prev_entry: Tuple[float, float], new_entry: Tuple[float, float]) -> float:
+    prev_mid = (prev_entry[0] + prev_entry[1]) / 2 if prev_entry else 0
+    new_mid = (new_entry[0] + new_entry[1]) / 2 if new_entry else 0
+    if prev_mid == 0:
+        return 0.0
+    return abs(new_mid - prev_mid) / prev_mid * 100
+
+
 def _is_new_ai_signal(signal: Dict[str, Any]) -> bool:
     now = time.time()
-
-    key = (
-        signal["symbol"],
-        signal["direction"],
+    symbol = signal["symbol"]
+    direction = signal.get("direction", "long")
+    entry_zone = (
         round(signal["entry_zone"][0], 6),
         round(signal["entry_zone"][1], 6),
-        round(signal["sl"], 6),
-        round(signal["tp1"], 6),
-        round(signal["tp2"], 6),
     )
 
-    to_delete = []
-    for k, ts in _RECENT_AI_SIGNALS.items():
-        if now - ts > DEDUP_WINDOW_SECONDS:
-            to_delete.append(k)
-    for k in to_delete:
-        _RECENT_AI_SIGNALS.pop(k, None)
+    last = LAST_SIGNALS.get(symbol)
+    if last:
+        if now - last["timestamp"] < COOLDOWN_PER_SYMBOL:
+            return False
+        if last["direction"] == direction:
+            diff = _entry_diff_percent(last["entry"], entry_zone)
+            if diff < ENTRY_DUP_THRESHOLD:
+                return False
 
-    if key in _RECENT_AI_SIGNALS:
-        return False
+    LAST_SIGNALS[symbol] = {
+        "entry": entry_zone,
+        "direction": direction,
+        "timestamp": now,
+    }
 
-    _RECENT_AI_SIGNALS[key] = now
     return True
 
 
@@ -487,7 +495,7 @@ async def signals_worker():
             signals = await scan_market()
             print("SCAN OK", len(signals))
             for signal in signals:
-                if signal.get("score", 0) < 80:
+                if signal.get("score", 0) < 90:
                     continue
                 if not _is_new_ai_signal(signal):
                     print(
