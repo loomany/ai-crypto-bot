@@ -225,16 +225,6 @@ def _prepare_signal(
     if score < 90:
         return None
 
-    reason_parts = [
-        "Глобальный слой: 30d", 
-        f"тренд {monthly_trend} ({monthly['trend_change']:.1f}%)",
-        f"RSI30 {rsi_30:.1f}",
-        f"объём 30d {volume_ratio_30:.2f}x",
-        f"RSI 1H {rsi_1h:.1f} в комфортной зоне",
-        f"объём 1H {volume_ratio:.2f}x от среднего {volume_avg:.2f}",
-        f"R:R ~{rr:.2f}:1",
-    ]
-
     return {
         "symbol": symbol,
         "direction": "long",
@@ -243,7 +233,15 @@ def _prepare_signal(
         "tp1": round(tp1, 4),
         "tp2": round(tp2, 4),
         "score": int(score),
-        "reason": ", ".join(reason_parts),
+        "reason": {
+            "trend_1d": trend_1d,
+            "trend_4h": trend_4h,
+            "rsi_1h": rsi_1h,
+            "rsi_1h_zone": "комфортная зона",
+            "volume_ratio": volume_ratio,
+            "volume_avg": volume_avg,
+            "rr": rr,
+        },
         "levels": {
             "support": round(monthly["support"], 4),
             "resistance": round(monthly["resistance"], 4),
