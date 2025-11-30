@@ -71,6 +71,42 @@ def _atr(klines: Sequence[Dict[str, float]], period: int = 14) -> float:
     return sum(window) / len(window)
 
 
+def _analyze_monthly(klines_1d: Sequence[Dict[str, float]]) -> Dict[str, Any]:
+    last_30 = list(klines_1d[-30:]) if klines_1d else []
+    closes = [k["close"] for k in last_30]
+    highs = [k["high"] for k in last_30]
+    lows = [k["low"] for k in last_30]
+    volumes = [k["volume"] for k in last_30]
+
+    trend_change = _percent_change(closes)
+    if trend_change >= 10:
+        trend = "bullish"
+    elif trend_change <= -10:
+        trend = "bearish"
+    else:
+        trend = "sideways"
+
+    rsi_30 = _rsi(list(closes)) if closes else 50.0
+    avg_volume = sum(volumes) / len(volumes) if volumes else 0.0
+    volume_today = volumes[-1] if volumes else 0.0
+    volume_ratio_30 = volume_today / avg_volume if avg_volume else 0.0
+
+    support = min(lows) if lows else 0.0
+    resistance = max(highs) if highs else 0.0
+    atr_30 = _atr(last_30, period=min(14, len(last_30) - 1)) if len(last_30) > 1 else 0.0
+
+    return {
+        "trend": trend,
+        "trend_change": trend_change,
+        "rsi": rsi_30,
+        "volume_ratio": volume_ratio_30,
+        "avg_volume": avg_volume,
+        "support": support,
+        "resistance": resistance,
+        "atr": atr_30,
+    }
+
+
 def _entry_zone(lows: Sequence[float], buffer: float) -> Tuple[float, float]:
     if not lows:
         return 0.0, 0.0
@@ -96,6 +132,7 @@ def _prepare_signal(
     closes_15m: Sequence[float],
     volumes_1h: Sequence[float],
     klines_1h: Sequence[Dict[str, float]],
+    klines_1d: Sequence[Dict[str, float]],
 ) -> Optional[Dict[str, Any]]:
     # Trends
     change_1d = _percent_change(closes_1d)
@@ -111,10 +148,19 @@ def _prepare_signal(
 
     volume_ratio, volume_avg = _volume_spike(volumes_1h)
 
+    monthly = _analyze_monthly(klines_1d)
+    monthly_trend = monthly["trend"]
+    rsi_30 = monthly["rsi"]
+    volume_ratio_30 = monthly["volume_ratio"]
+
     # Conditions for long
     if trend_1d in {"bearish"}:
         return None
     if trend_4h in {"bearish"}:
+        return None
+    if monthly_trend == "bearish":
+        return None
+    if rsi_30 > 70:
         return None
     if rsi_1h >= 70 or rsi_1h <= 30:
         return None
@@ -141,35 +187,51 @@ def _prepare_signal(
         return None
 
     score = 0
+    score += 25 if monthly_trend == "bullish" else 10 if monthly_trend == "sideways" else 0
     score += 20 if trend_1d == "bullish" else 5 if trend_1d == "sideways" else 0
     score += 20 if trend_4h == "bullish" else 5 if trend_4h in {"sideways", "slightly_bullish"} else 0
+    score += 10 if trend_4h == "bullish" and trend_1d == "bullish" else 0
     score += 10 if trend_1h not in {"bearish", "slightly_bearish"} else 0
     if 40 <= rsi_1h <= 65:
         score += 10
+    if rsi_30 < 60:
+        score += 5
     if volume_ratio >= 1.2:
         score += 10
     elif volume_ratio >= 0.7:
         score += 5
+    if volume_ratio_30 > 1.5:
+        score += 10
+    elif volume_ratio_30 < 0.5:
+        score -= 10
     score += 15 if rr >= 2 else 0
     if rr >= 3:
         score += 5
     if rsi_1h > 70:
         score -= 20
+    if rsi_30 > 70:
+        score -= 15
+    if rsi_30 < 35:
+        score -= 15
     if trend_4h == "bearish":
         score -= 20
     if trend_1d == "bearish":
         score -= 25
+    if monthly_trend == "bearish":
+        score -= 20
     if volume_ratio < 0.7:
         score -= 10
 
-    if score < 80:
+    if score < 90:
         return None
 
-    valid_until = int(time.time()) + 60 * 60
     reason_parts = [
-        "1D и 4H в бычьем или нейтральном режиме",
+        "Глобальный слой: 30d", 
+        f"тренд {monthly_trend} ({monthly['trend_change']:.1f}%)",
+        f"RSI30 {rsi_30:.1f}",
+        f"объём 30d {volume_ratio_30:.2f}x",
         f"RSI 1H {rsi_1h:.1f} в комфортной зоне",
-        f"объём {volume_ratio:.2f}x от среднего {volume_avg:.2f}",
+        f"объём 1H {volume_ratio:.2f}x от среднего {volume_avg:.2f}",
         f"R:R ~{rr:.2f}:1",
     ]
 
@@ -181,8 +243,12 @@ def _prepare_signal(
         "tp1": round(tp1, 4),
         "tp2": round(tp2, 4),
         "score": int(score),
-        "valid_until": valid_until,
         "reason": ", ".join(reason_parts),
+        "levels": {
+            "support": round(monthly["support"], 4),
+            "resistance": round(monthly["resistance"], 4),
+            "atr_30": round(monthly["atr"], 4),
+        },
     }
 
 
@@ -232,6 +298,7 @@ async def scan_market(batch_delay: float = 0.2, batch_size: int = 5) -> List[Dic
                 closes_15m,
                 volumes_1h,
                 klines["1h"],
+                klines["1d"],
             )
             if signal:
                 signals.append(signal)
