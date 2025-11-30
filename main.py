@@ -128,10 +128,11 @@ async def process_symbol(message: Message):
 
     price = data["price"]
     change = data["change_24h"]
+    coin_symbol = data["symbol"]
     emoji = "📈" if change >= 0 else "📉"
 
     await message.answer(
-        f"🪙 Монета: {symbol}\n"
+        f"🪙 Монета: {coin_symbol}\n"
         f"💰 Цена: {price} USDT\n"
         f"{emoji} Изменение за 24ч: {change}%\n"
         f"Источник: Binance"
