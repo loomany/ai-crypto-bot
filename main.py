@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sqlite3
+import time
 from contextlib import suppress
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
@@ -15,6 +16,8 @@ from aiogram.filters import CommandStart
 from dotenv import load_dotenv
 
 from market_data import get_coin_analysis
+from pump_detector import scan_pumps, format_pump_message
+from pump_db import add_pump_subscriber, remove_pump_subscriber, get_pump_subscribers
 from signals import scan_market
 
 
@@ -46,6 +49,16 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="⚠️ Безопасность сделки"),
             KeyboardButton(text="ℹ️ Обучение терминам"),
         ],
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+
+def pump_menu_keyboard() -> ReplyKeyboardMarkup:
+    kb = [
+        [KeyboardButton(text="🔥 Пампы сейчас")],
+        [KeyboardButton(text="🔔 Включить авто-пампы")],
+        [KeyboardButton(text="🚫 Отключить авто-пампы")],
+        [KeyboardButton(text="⬅️ Назад в главное меню")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -205,9 +218,59 @@ async def ai_signals_unsubscribe(message: Message):
 
 
 @dp.message(F.text == "🚀 Pump Detector")
-async def pump_detector(message: Message):
+async def pump_detector_entry(message: Message):
     waiting_for_symbol.discard(message.chat.id)
-    await message.answer("Здесь будет Pump Detector.")
+    await message.answer(
+        "🚀 Pump Detector\n\n"
+        "Я ищу реальные пампы по всем монетам Binance (USDT).\n"
+        "Выбери режим:",
+        reply_markup=pump_menu_keyboard(),
+    )
+
+
+@dp.message(F.text == "🔥 Пампы сейчас")
+async def pumps_now(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
+    await message.answer("⏳ Ищу пампы по всем монетам Binance...")
+    signals = await scan_pumps()
+    if not signals:
+        await message.answer("Сейчас явных пампов не найдено.")
+        return
+
+    signals = sorted(signals, key=lambda s: s["change_1m"], reverse=True)[:5]
+
+    for sig in signals:
+        await message.answer(
+            format_pump_message(sig),
+            parse_mode="Markdown",
+        )
+
+
+@dp.message(F.text == "🔔 Включить авто-пампы")
+async def subscribe_pumps(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
+    add_pump_subscriber(message.chat.id)
+    await message.answer(
+        "✅ Авто-оповещения Pump Detector включены.\n"
+        "Я буду присылать пампы по монетам Binance, когда найду их.",
+        reply_markup=pump_menu_keyboard(),
+    )
+
+
+@dp.message(F.text == "🚫 Отключить авто-пампы")
+async def unsubscribe_pumps(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
+    remove_pump_subscriber(message.chat.id)
+    await message.answer(
+        "⭕ Авто-оповещения Pump Detector выключены.",
+        reply_markup=pump_menu_keyboard(),
+    )
+
+
+@dp.message(F.text == "⬅️ Назад в главное меню")
+async def back_to_main_menu(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
+    await message.answer("Главное меню:", reply_markup=main_menu_keyboard())
 
 
 @dp.message(F.text == "⬅️ Главное меню")
@@ -334,6 +397,43 @@ async def _broadcast_signals(signals: List[Dict[str, Any]]):
                 await bot.send_message(chat_id, text)
             except Exception as e:
                 print(f"[ai_signals] Failed to send to {chat_id}: {e}")
+
+
+async def pump_worker(bot: Bot):
+    """
+    Периодически сканирует рынок и рассылает авто-пампы подписчикам.
+    """
+    last_sent: dict[str, int] = {}
+
+    while True:
+        try:
+            subscribers = get_pump_subscribers()
+            if not subscribers:
+                await asyncio.sleep(15)
+                continue
+
+            signals = await scan_pumps()
+            now_min = int(time.time() // 60)
+
+            for sig in signals:
+                symbol = sig["symbol"]
+
+                if last_sent.get(symbol) == now_min:
+                    continue
+
+                last_sent[symbol] = now_min
+                text = format_pump_message(sig)
+
+                for chat_id in subscribers:
+                    try:
+                        await bot.send_message(chat_id, text, parse_mode="Markdown")
+                    except Exception:
+                        continue
+
+        except Exception:
+            await asyncio.sleep(10)
+
+        await asyncio.sleep(10)
 
 
 async def _signals_worker():
@@ -475,12 +575,16 @@ async def main():
     print("Бот запущен!")
     init_db()
     signals_task = asyncio.create_task(_signals_worker())
+    pump_task = asyncio.create_task(pump_worker(bot))
     try:
         await dp.start_polling(bot)
     finally:
         signals_task.cancel()
         with suppress(asyncio.CancelledError):
             await signals_task
+        pump_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await pump_task
 
 
 if __name__ == "__main__":
