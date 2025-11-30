@@ -15,6 +15,7 @@ from aiogram.types import (
 from aiogram.filters import CommandStart
 from dotenv import load_dotenv
 
+from coin_info import get_coin_description
 from market_data import get_coin_analysis
 from pump_detector import scan_pumps, format_pump_message
 from pump_db import add_pump_subscriber, remove_pump_subscriber, get_pump_subscribers
@@ -456,6 +457,15 @@ async def process_symbol(message: Message):
     else:
         symbol_pair = symbol
 
+    if symbol_pair.endswith("USDT"):
+        base = symbol_pair[:-4]
+        quote = "USDT"
+    else:
+        base = symbol_pair
+        quote = ""
+
+    symbol_human = f"{base} / {quote}" if quote else base
+
     await message.answer("⏳ Делаю анализ по Binance, пару секунд...")
 
     analysis = await get_coin_analysis(symbol_pair)
@@ -525,8 +535,8 @@ async def process_symbol(message: Message):
         "high": "повышенный",
     }.get(risk, "средний")
 
-    text = (
-        f"📊 Анализ {symbol_pair}\n\n"
+    analysis_text = (
+        f"📊 Анализ {symbol_human}\n\n"
         f"💰 Цена: {price:.2f} USDT\n"
         f"{emoji_change} Изм. 24ч: {change:+.2f}%\n\n"
         f"🔭 Глобально (4ч):\n"
@@ -551,10 +561,13 @@ async def process_symbol(message: Message):
         f"• TP2: {tp2:.2f}\n"
         f"• SL: {sl:.2f}\n\n"
         f"⚠️ Риск сделки: {risk_text}.\n"
-        f"Источник данных: Binance"
+        "Источник данных: Binance\n\n"
     )
 
-    await message.answer(text)
+    coin_desc = get_coin_description(symbol_pair)
+    analysis_text += f"ℹ️ О монете:\n{coin_desc}"
+
+    await message.answer(analysis_text)
 
 
 @dp.message()
