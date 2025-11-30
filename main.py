@@ -346,9 +346,6 @@ def _remember_signal(signal: Dict[str, Any], ttl: int = 3600) -> bool:
 
 def _format_signal(signal: Dict[str, Any]) -> str:
     entry_low, entry_high = signal["entry_zone"]
-    valid_until = datetime.fromtimestamp(signal["valid_until"]).strftime(
-        "%Y-%m-%d %H:%M"
-    )
     direction_text = "ЛОНГ" if signal.get("direction") == "long" else "ШОРТ"
     symbol = signal["symbol"]
     if symbol.endswith("USDT"):
@@ -369,7 +366,7 @@ def _format_signal(signal: Dict[str, Any]) -> str:
         f"• TP1: {signal['tp1']:.4f}\n"
         f"• TP2: {signal['tp2']:.4f}\n\n"
         f"Оценка сигнала: {signal['score']}/100\n"
-        f"Актуален до: {valid_until}\n\n"
+        "\n"
         "Кратко:\n"
         f"{signal['reason']}\n\n"
         "⚠️ Бот не знает твоего депозита и не даёт размер позиции.\n"
