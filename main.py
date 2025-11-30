@@ -1,5 +1,9 @@
 import asyncio
 import os
+import sqlite3
+from contextlib import suppress
+from datetime import datetime
+from typing import Any, Dict, List, Tuple
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
@@ -11,6 +15,7 @@ from aiogram.filters import CommandStart
 from dotenv import load_dotenv
 
 from market_data import get_coin_analysis
+from signals import scan_market
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -45,12 +50,77 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
+def ai_signals_keyboard() -> ReplyKeyboardMarkup:
+    kb = [
+        [KeyboardButton(text="🔥 Активные сигналы сейчас")],
+        [
+            KeyboardButton(text="🔔 Включить авто-сигналы"),
+            KeyboardButton(text="🚫 Отключить авто-сигналы"),
+        ],
+        [KeyboardButton(text="⬅️ Главное меню")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+
+# ===== РАБОТА С ПОДПИСКАМИ =====
+
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS ai_signals_subscribers (chat_id INTEGER PRIMARY KEY)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def add_subscription(chat_id: int) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR IGNORE INTO ai_signals_subscribers (chat_id) VALUES (?)",
+            (chat_id,),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def remove_subscription(chat_id: int) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM ai_signals_subscribers WHERE chat_id = ?", (chat_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def list_subscriptions() -> List[int]:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT chat_id FROM ai_signals_subscribers")
+        return [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 # ===== СОЗДАЁМ БОТА =====
 
 BOT_TOKEN = load_settings()
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 waiting_for_symbol: set[int] = set()
+signal_cache: Dict[Tuple[str, str, float, float], float] = {}
+
+DB_PATH = "ai_signals.db"
+AI_SCAN_INTERVAL = 300  # seconds
 
 
 # ===== ХЭНДЛЕРЫ =====
@@ -79,15 +149,71 @@ async def analyze_coin(message: Message):
 
 
 @dp.message(F.text == "🎯 AI-сигналы")
-async def ai_signals(message: Message):
+async def ai_signals_menu(message: Message):
     waiting_for_symbol.discard(message.chat.id)
-    await message.answer("Здесь будут AI-сигналы (Buy/Sell, TP/SL).")
+    await message.answer(
+        "🎯 AI-сигналы\n\nВыбери режим:\n1) 🔥 Активные сигналы сейчас\n"
+        "2) 🔔 Включить авто-сигналы\n3) 🚫 Отключить авто-сигналы",
+        reply_markup=ai_signals_keyboard(),
+    )
+
+
+@dp.message(F.text == "🔥 Активные сигналы сейчас")
+async def ai_signals_now(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
+    await message.answer("⏳ Сканируем рынок Binance по USDT-парам, подожди...")
+
+    signals = await scan_market()
+    if not signals:
+        await message.answer("Сейчас нет сетапов с высокой вероятностью (score >= 80).")
+        return
+
+    signals = sorted(signals, key=lambda s: s.get("score", 0), reverse=True)
+    for signal in signals[:10]:
+        await message.answer(_format_signal(signal))
+
+
+@dp.message(F.text == "🔔 Включить авто-сигналы")
+async def ai_signals_subscribe(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
+    is_new = add_subscription(message.chat.id)
+    if is_new:
+        await message.answer(
+            "Готово! Ты подписан на авто-рассылку AI-сигналов.",
+            reply_markup=ai_signals_keyboard(),
+        )
+    else:
+        await message.answer(
+            "Подписка уже активна. Будем присылать новые сигналы автоматически.",
+            reply_markup=ai_signals_keyboard(),
+        )
+
+
+@dp.message(F.text == "🚫 Отключить авто-сигналы")
+async def ai_signals_unsubscribe(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
+    removed = remove_subscription(message.chat.id)
+    if removed:
+        await message.answer(
+            "Авто-сигналы отключены. Возвращайся, когда потребуется!",
+            reply_markup=ai_signals_keyboard(),
+        )
+    else:
+        await message.answer(
+            "У тебя не было активной подписки.", reply_markup=ai_signals_keyboard()
+        )
 
 
 @dp.message(F.text == "🚀 Pump Detector")
 async def pump_detector(message: Message):
     waiting_for_symbol.discard(message.chat.id)
     await message.answer("Здесь будет Pump Detector.")
+
+
+@dp.message(F.text == "⬅️ Главное меню")
+async def back_to_main(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
+    await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard())
 
 
 @dp.message(F.text == "🧠 ML прогноз")
@@ -142,6 +268,82 @@ def _macd_text(signal: str) -> str:
     if signal == "bearish":
         return "медвежий (ослабляет тренд)"
     return "нейтральный"
+
+
+def _remember_signal(signal: Dict[str, Any], ttl: int = 3600) -> bool:
+    key = (
+        signal["symbol"],
+        signal.get("direction", "long"),
+        round(signal["entry_zone"][0], 4),
+        round(signal["entry_zone"][1], 4),
+    )
+    now = asyncio.get_event_loop().time()
+    expires_at = now + ttl
+
+    # cleanup
+    for cached_key, exp in list(signal_cache.items()):
+        if exp <= now:
+            del signal_cache[cached_key]
+
+    if key in signal_cache:
+        return False
+
+    signal_cache[key] = expires_at
+    return True
+
+
+def _format_signal(signal: Dict[str, Any]) -> str:
+    entry_low, entry_high = signal["entry_zone"]
+    valid_until = datetime.fromtimestamp(signal["valid_until"]).strftime(
+        "%Y-%m-%d %H:%M"
+    )
+    direction_text = "ЛОНГ" if signal.get("direction") == "long" else "ШОРТ"
+
+    text = (
+        "🔔 AI-сигнал (intraday)\n\n"
+        f"Монета: {signal['symbol']}\n"
+        f"Тип: {direction_text}\n\n"
+        f"Зона входа: {entry_low:.4f}–{entry_high:.4f}\n"
+        f"Стоп (SL): {signal['sl']:.4f}\n"
+        "Цели:\n"
+        f"• TP1: {signal['tp1']:.4f}\n"
+        f"• TP2: {signal['tp2']:.4f}\n\n"
+        f"Оценка сигнала: {signal['score']}/100\n"
+        f"Актуален до: {valid_until}\n\n"
+        "Кратко:\n"
+        f"{signal['reason']}\n\n"
+        "⚠️ Бот не знает твоего депозита и не даёт размер позиции.\n"
+        "Решение по объёму входа принимаешь сам.\n"
+        "Источник данных: Binance"
+    )
+    return text
+
+
+async def _broadcast_signals(signals: List[Dict[str, Any]]):
+    subscribers = list_subscriptions()
+    if not subscribers:
+        return
+
+    for signal in signals:
+        if not _remember_signal(signal):
+            continue
+
+        text = _format_signal(signal)
+        for chat_id in subscribers:
+            try:
+                await bot.send_message(chat_id, text)
+            except Exception as e:
+                print(f"[ai_signals] Failed to send to {chat_id}: {e}")
+
+
+async def _signals_worker():
+    while True:
+        try:
+            signals = await scan_market()
+            await _broadcast_signals(signals)
+        except Exception as e:
+            print(f"[ai_signals] Worker error: {e}")
+        await asyncio.sleep(AI_SCAN_INTERVAL)
 
 
 @dp.message()
@@ -271,7 +473,14 @@ async def fallback(message: Message):
 
 async def main():
     print("Бот запущен!")
-    await dp.start_polling(bot)
+    init_db()
+    signals_task = asyncio.create_task(_signals_worker())
+    try:
+        await dp.start_polling(bot)
+    finally:
+        signals_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await signals_task
 
 
 if __name__ == "__main__":
