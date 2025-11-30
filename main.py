@@ -133,7 +133,8 @@ waiting_for_symbol: set[int] = set()
 signal_cache: Dict[Tuple[str, str, float, float], float] = {}
 
 DB_PATH = "ai_signals.db"
-AI_SCAN_INTERVAL = 300  # seconds
+# Сканируем рынок каждые 30 секунд, чтобы рассылка была оперативной
+AI_SCAN_INTERVAL = 30  # seconds
 
 
 # ===== ХЭНДЛЕРЫ =====
@@ -382,21 +383,28 @@ def _format_signal(signal: Dict[str, Any]) -> str:
     return text
 
 
-async def _broadcast_signals(signals: List[Dict[str, Any]]):
+async def send_signal_to_all(signal_dict: Dict[str, Any]):
+    """
+    Отправляет сигнал всем подписчикам без блокировки event loop.
+    """
     subscribers = list_subscriptions()
     if not subscribers:
         return
 
-    for signal in signals:
-        if not _remember_signal(signal):
-            continue
+    if not _remember_signal(signal_dict):
+        return
 
-        text = _format_signal(signal)
-        for chat_id in subscribers:
-            try:
-                await bot.send_message(chat_id, text)
-            except Exception as e:
-                print(f"[ai_signals] Failed to send to {chat_id}: {e}")
+    text = _format_signal(signal_dict)
+
+    tasks = []
+    for chat_id in subscribers:
+        tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
+
+    # Выполняем отправки параллельно и логируем ошибки
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for chat_id, res in zip(subscribers, results):
+        if isinstance(res, Exception):
+            print(f"[ai_signals] Failed to send to {chat_id}: {res}")
 
 
 async def pump_worker(bot: Bot):
@@ -436,11 +444,13 @@ async def pump_worker(bot: Bot):
         await asyncio.sleep(10)
 
 
-async def _signals_worker():
+async def signals_worker():
     while True:
         try:
             signals = await scan_market()
-            await _broadcast_signals(signals)
+            print("SCAN OK", len(signals))
+            for signal in signals:
+                await send_signal_to_all(signal)
         except Exception as e:
             print(f"[ai_signals] Worker error: {e}")
         await asyncio.sleep(AI_SCAN_INTERVAL)
@@ -574,7 +584,7 @@ async def fallback(message: Message):
 async def main():
     print("Бот запущен!")
     init_db()
-    signals_task = asyncio.create_task(_signals_worker())
+    signals_task = asyncio.create_task(signals_worker())
     pump_task = asyncio.create_task(pump_worker(bot))
     try:
         await dp.start_polling(bot)
