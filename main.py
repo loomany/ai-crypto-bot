@@ -576,7 +576,7 @@ async def process_symbol(message: Message):
         "Источник данных: Binance\n\n"
     )
 
-    coin_desc = get_coin_description(symbol_pair)
+    coin_desc = await get_coin_description(symbol_pair)
     analysis_text += f"ℹ️ О монете:\n{coin_desc}"
 
     await message.answer(analysis_text)
