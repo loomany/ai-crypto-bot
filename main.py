@@ -126,6 +126,9 @@ dp = Dispatcher()
 waiting_for_symbol: set[int] = set()
 signal_cache: Dict[Tuple[str, str, float, float], float] = {}
 
+_RECENT_AI_SIGNALS: Dict[Tuple, float] = {}
+DEDUP_WINDOW_SECONDS = 60 * 60  # 60 minutes
+
 DB_PATH = "ai_signals.db"
 # Сканируем рынок каждые 30 секунд, чтобы рассылка была оперативной
 AI_SCAN_INTERVAL = 30  # seconds
@@ -344,6 +347,33 @@ def _remember_signal(signal: Dict[str, Any], ttl: int = 3600) -> bool:
     return True
 
 
+def _is_new_ai_signal(signal: Dict[str, Any]) -> bool:
+    now = time.time()
+
+    key = (
+        signal["symbol"],
+        signal["direction"],
+        round(signal["entry_zone"][0], 6),
+        round(signal["entry_zone"][1], 6),
+        round(signal["sl"], 6),
+        round(signal["tp1"], 6),
+        round(signal["tp2"], 6),
+    )
+
+    to_delete = []
+    for k, ts in _RECENT_AI_SIGNALS.items():
+        if now - ts > DEDUP_WINDOW_SECONDS:
+            to_delete.append(k)
+    for k in to_delete:
+        _RECENT_AI_SIGNALS.pop(k, None)
+
+    if key in _RECENT_AI_SIGNALS:
+        return False
+
+    _RECENT_AI_SIGNALS[key] = now
+    return True
+
+
 def _format_signal(signal: Dict[str, Any]) -> str:
     entry_low, entry_high = signal["entry_zone"]
     direction_text = "ЛОНГ" if signal.get("direction") == "long" else "ШОРТ"
@@ -443,6 +473,13 @@ async def signals_worker():
             signals = await scan_market()
             print("SCAN OK", len(signals))
             for signal in signals:
+                if signal.get("score", 0) < 80:
+                    continue
+                if not _is_new_ai_signal(signal):
+                    print(
+                        f"[ai_signals] Duplicate skipped: {signal.get('symbol')} {signal.get('direction')}"
+                    )
+                    continue
                 await send_signal_to_all(signal)
         except Exception as e:
             print(f"[ai_signals] Worker error: {e}")
