@@ -49,7 +49,6 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 
 def pump_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = [
-        [KeyboardButton(text="🔥 Пампы сейчас")],
         [KeyboardButton(text="🔔 Включить авто-пампы")],
         [KeyboardButton(text="🚫 Отключить авто-пампы")],
         [KeyboardButton(text="⬅️ Назад в главное меню")],
@@ -59,11 +58,8 @@ def pump_menu_keyboard() -> ReplyKeyboardMarkup:
 
 def ai_signals_keyboard() -> ReplyKeyboardMarkup:
     kb = [
-        [KeyboardButton(text="🔥 Активные сигналы сейчас")],
-        [
-            KeyboardButton(text="🔔 Включить авто-сигналы"),
-            KeyboardButton(text="🚫 Отключить авто-сигналы"),
-        ],
+        [KeyboardButton(text="🔔 Включить авто-сигналы")],
+        [KeyboardButton(text="🚫 Отключить авто-сигналы")],
         [KeyboardButton(text="⬅️ Главное меню")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -177,25 +173,9 @@ async def analyze_coin(message: Message):
 async def ai_signals_menu(message: Message):
     waiting_for_symbol.discard(message.chat.id)
     await message.answer(
-        "🎯 AI-сигналы\n\nВыбери режим:\n1) 🔥 Активные сигналы сейчас\n"
-        "2) 🔔 Включить авто-сигналы\n3) 🚫 Отключить авто-сигналы",
+        "🎯 AI-сигналы\n\nВыбери режим:\n1) 🔔 Включить авто-сигналы\n2) 🚫 Отключить авто-сигналы",
         reply_markup=ai_signals_keyboard(),
     )
-
-
-@dp.message(F.text == "🔥 Активные сигналы сейчас")
-async def ai_signals_now(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
-    await message.answer("⏳ Сканируем рынок Binance по USDT-парам, подожди...")
-
-    signals = await scan_market()
-    if not signals:
-        await message.answer("Сейчас нет сетапов с высокой вероятностью (score >= 90).")
-        return
-
-    signals = sorted(signals, key=lambda s: s.get("score", 0), reverse=True)
-    for signal in signals[:10]:
-        await message.answer(_format_signal(signal))
 
 
 @dp.message(F.text == "🔔 Включить авто-сигналы")
@@ -238,24 +218,6 @@ async def pump_detector_entry(message: Message):
         "Выбери режим:",
         reply_markup=pump_menu_keyboard(),
     )
-
-
-@dp.message(F.text == "🔥 Пампы сейчас")
-async def pumps_now(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
-    await message.answer("⏳ Ищу пампы по всем монетам Binance...")
-    signals = await scan_pumps()
-    if not signals:
-        await message.answer("Сейчас явных пампов не найдено.")
-        return
-
-    signals = sorted(signals, key=lambda s: s["change_1m"], reverse=True)[:5]
-
-    for sig in signals:
-        await message.answer(
-            format_pump_message(sig),
-            parse_mode="Markdown",
-        )
 
 
 @dp.message(F.text == "🔔 Включить авто-пампы")
@@ -339,6 +301,27 @@ def fmt_price(value: float) -> str:
         return f"{value:.8f}"
 
 
+def _trend_short_text(trend: str) -> str:
+    if trend == "bullish":
+        return "бычий"
+    if trend == "bearish":
+        return "медвежий"
+    return "нейтральный"
+
+
+def _rsi_short_zone(rsi: float) -> str:
+    if 40 <= rsi <= 60:
+        return "комфортная зона"
+    if rsi < 40:
+        return "зона перепроданности"
+    return "зона перекупленности"
+
+
+def _format_signed_number(value: float, decimals: int = 1) -> str:
+    sign = "−" if value < 0 else "+"
+    return f"{sign}{abs(value):.{decimals}f}"
+
+
 def _remember_signal(signal: Dict[str, Any], ttl: int = COOLDOWN_PER_SYMBOL) -> bool:
     key = (
         signal["symbol"],
@@ -408,19 +391,52 @@ def _format_signal(signal: Dict[str, Any]) -> str:
         quote = ""
     symbol_text = f"{base} / {quote}" if quote else base
 
+    entry_mid = (entry_low + entry_high) / 2
+    tp1_pct = (signal["tp1"] / entry_mid - 1) * 100
+    tp2_pct = (signal["tp2"] / entry_mid - 1) * 100
+    sl_pct = (signal["sl"] / entry_mid - 1) * 100
+
+    base_capital = 100
+    tp1_usdt = base_capital * tp1_pct / 100
+    tp2_usdt = base_capital * tp2_pct / 100
+    sl_usdt = base_capital * sl_pct / 100
+
+    raw_reason = signal.get("reason")
+    reason = raw_reason if isinstance(raw_reason, dict) else {}
+    trend_1d = _trend_short_text(reason.get("trend_1d", "neutral"))
+    trend_4h = _trend_short_text(reason.get("trend_4h", "neutral"))
+    rsi_1h = float(reason.get("rsi_1h", 50.0))
+    rsi_zone = reason.get("rsi_1h_zone") or _rsi_short_zone(rsi_1h)
+    volume_ratio = reason.get("volume_ratio", 0.0)
+    volume_avg = reason.get("volume_avg", 0.0)
+    rr = reason.get("rr", 0.0)
+
+    short_block = (
+        "Кратко:\n"
+        f"• 1D тренд: {trend_1d}\n"
+        f"• 4H тренд: {trend_4h}\n"
+        f"• RSI 1H: {rsi_1h:.1f} ({rsi_zone})\n"
+        f"• Объём: {volume_ratio:.2f}x от среднего {volume_avg:.2f}\n"
+        f"• R:R: ~{rr:.2f}:1"
+    )
+
     text = (
         "🔔 AI-сигнал (intraday)\n\n"
         f"Монета: {symbol_text}\n"
         f"Тип: {direction_text}\n\n"
-        f"Зона входа: {entry_low:.4f}–{entry_high:.4f}\n"
-        f"Стоп (SL): {signal['sl']:.4f}\n"
+        "Зона входа:\n"
+        f"• {entry_low:.4f} – {entry_high:.4f}\n"
+        "Стоп (SL):\n"
+        f"• {signal['sl']:.4f}  ({_format_signed_number(sl_pct)}%)\n\n"
         "Цели:\n"
-        f"• TP1: {signal['tp1']:.4f}\n"
-        f"• TP2: {signal['tp2']:.4f}\n\n"
-        f"Оценка сигнала: {signal['score']}/100\n"
-        "\n"
-        "Кратко:\n"
-        f"{signal['reason']}\n\n"
+        f"• TP1: {signal['tp1']:.4f}  ({_format_signed_number(tp1_pct)}%)\n"
+        f"• TP2: {signal['tp2']:.4f}  ({_format_signed_number(tp2_pct)}%)\n\n"
+        "Пример для позиции 100 USDT:\n"
+        f"• До TP1: {_format_signed_number(tp1_usdt)} USDT\n"
+        f"• До TP2: {_format_signed_number(tp2_usdt)} USDT\n"
+        f"• До SL: {_format_signed_number(sl_usdt)} USDT\n\n"
+        f"Оценка сигнала: {signal['score']}/100\n\n"
+        f"{short_block}\n\n"
         "⚠️ Бот не знает твоего депозита и не даёт размер позиции.\n"
         "Решение по объёму входа принимаешь сам.\n"
         "Источник данных: Binance"
