@@ -310,6 +310,18 @@ def _macd_text(signal: str) -> str:
     return "нейтральный"
 
 
+def fmt_price(value: float) -> str:
+    v = abs(value)
+    if v >= 100:
+        return f"{value:.0f}"
+    elif v >= 1:
+        return f"{value:.2f}"
+    elif v >= 0.01:
+        return f"{value:.4f}"
+    else:
+        return f"{value:.8f}"
+
+
 def _remember_signal(signal: Dict[str, Any], ttl: int = 3600) -> bool:
     key = (
         signal["symbol"],
@@ -537,14 +549,14 @@ async def process_symbol(message: Message):
 
     analysis_text = (
         f"📊 Анализ {symbol_human}\n\n"
-        f"💰 Цена: {price:.2f} USDT\n"
+        f"💰 Цена: {fmt_price(price)} USDT\n"
         f"{emoji_change} Изм. 24ч: {change:+.2f}%\n\n"
         f"🔭 Глобально (4ч):\n"
         f"• Тренд: {trend_4h}\n"
         f"• RSI: {rsi_4h:.1f} — {rsi_4h_txt}\n"
         f"• Уровни:\n"
-        f"  • Поддержка: {support:.2f}\n"
-        f"  • Сопротивление: {resistance:.2f}\n\n"
+        f"  • Поддержка: {fmt_price(support)}\n"
+        f"  • Сопротивление: {fmt_price(resistance)}\n\n"
         f"⏱ Основной тренд (1ч):\n"
         f"• Тренд: {trend_1h}\n"
         f"• RSI: {rsi_1h:.1f} — {rsi_1h_txt}\n"
@@ -553,13 +565,13 @@ async def process_symbol(message: Message):
         f"🕒 Локально (15м):\n"
         f"• Тренд: {trend_15}\n"
         f"• RSI: {rsi_15:.1f} — {rsi_15_txt}\n"
-        f"• Возможна коррекция к зоне {entry_low:.2f}–{entry_high:.2f}\n\n"
+        f"• Возможна коррекция к зоне {fmt_price(entry_low)}–{fmt_price(entry_high)}\n\n"
         f"🧠 Вердикт:\n"
         f"{verdict_text}\n\n"
         f"🎯 Пример уровней для сделки (для обучения, не финсовет):\n"
-        f"• TP1: {tp1:.2f}\n"
-        f"• TP2: {tp2:.2f}\n"
-        f"• SL: {sl:.2f}\n\n"
+        f"• TP1: {fmt_price(tp1)}\n"
+        f"• TP2: {fmt_price(tp2)}\n"
+        f"• SL: {fmt_price(sl)}\n\n"
         f"⚠️ Риск сделки: {risk_text}.\n"
         "Источник данных: Binance\n\n"
     )

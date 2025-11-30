@@ -71,7 +71,7 @@ def _support_resistance(closes: List[float]) -> tuple[float, float]:
         return 0.0, 0.0
     support = min(closes)
     resistance = max(closes)
-    return round(support, 2), round(resistance, 2)
+    return round(support, 8), round(resistance, 8)
 
 
 def _volume_description(volumes: List[float]) -> str:
@@ -219,15 +219,15 @@ async def get_coin_analysis(symbol: str) -> Optional[Dict[str, Any]]:
         support = tf4h["support"]
         resistance = tf4h["resistance"]
     else:
-        support = round(price * 0.95, 2)
-        resistance = round(price * 1.05, 2)
+        support = round(price * 0.95, 8)
+        resistance = round(price * 1.05, 8)
 
     # Простые уровни для сделки
-    entry_low = round(price * 0.97, 2)
-    entry_high = round(price * 0.98, 2)
-    tp1 = round(price * 1.018, 2)
-    tp2 = round(price * 1.035, 2)
-    sl = round(price * 0.985, 2)
+    entry_low = round(price * 0.97, 8)
+    entry_high = round(price * 0.98, 8)
+    tp1 = round(price * 1.018, 8)
+    tp2 = round(price * 1.035, 8)
+    sl = round(price * 0.985, 8)
 
     # Оценка риска по RSI на 15m
     tf15 = tf_data.get("15m")
@@ -241,7 +241,7 @@ async def get_coin_analysis(symbol: str) -> Optional[Dict[str, Any]]:
 
     return {
         "symbol": symbol,
-        "price": round(price, 2),
+        "price": round(price, 8),
         "change_24h": round(change_24h, 2),
         "tf": tf_data,
         "levels": {
