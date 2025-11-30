@@ -57,6 +57,7 @@ waiting_for_symbol: set[int] = set()
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
     text = (
         "Привет! Я будущий AI-крипто бот 🚀\n\n"
         "Сейчас я в режиме разработки. Меню уже работает.\n"
@@ -79,26 +80,31 @@ async def analyze_coin(message: Message):
 
 @dp.message(F.text == "🎯 AI-сигналы")
 async def ai_signals(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
     await message.answer("Здесь будут AI-сигналы (Buy/Sell, TP/SL).")
 
 
 @dp.message(F.text == "🚀 Pump Detector")
 async def pump_detector(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
     await message.answer("Здесь будет Pump Detector.")
 
 
 @dp.message(F.text == "🧠 ML прогноз")
 async def ml_forecast(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
     await message.answer("Здесь будет ML-прогноз на 1ч/4ч/сутки.")
 
 
 @dp.message(F.text == "⚠️ Безопасность сделки")
 async def safety(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
     await message.answer("Здесь будет риск-менеджмент и подсказки.")
 
 
 @dp.message(F.text == "ℹ️ Обучение терминам")
 async def education(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
     await message.answer("Здесь будет справочник: RSI, MACD, orderflow и т.д.")
 
 
@@ -144,8 +150,6 @@ async def process_symbol(message: Message):
 
     if chat_id not in waiting_for_symbol:
         return
-
-    waiting_for_symbol.remove(chat_id)
 
     symbol = (message.text or "").strip().upper()
     if not symbol:
