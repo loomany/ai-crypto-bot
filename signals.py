@@ -1,8 +1,23 @@
 import asyncio
-import time
+from statistics import mean
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from market_data import _fetch_json, _get_klines, _rsi
+from binance_client import Candle, get_required_candles
+from market_data import _fetch_json
+from trading_core import (
+    _compute_rsi_series,
+    _nearest_level,
+    analyze_orderflow,
+    compute_atr,
+    compute_ema,
+    compute_score,
+    detect_rsi_divergence,
+    detect_trend_and_structure,
+    find_key_levels,
+    is_bb_extreme_reversal,
+    is_liquidity_sweep,
+    is_volume_climax,
+)
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 
@@ -25,245 +40,202 @@ async def _get_spot_usdt_symbols() -> List[str]:
     return symbols
 
 
-def _percent_change(values: Sequence[float]) -> float:
-    if len(values) < 2:
-        return 0.0
-    first, last = values[0], values[-1]
-    if first == 0:
-        return 0.0
-    return (last - first) / first * 100
-
-
-def _trend_from_change(change: float, strong: float = 3.0, weak: float = 1.0) -> str:
-    if change >= strong:
-        return "bullish"
-    if change <= -strong:
-        return "bearish"
-    if change >= weak:
-        return "slightly_bullish"
-    if change <= -weak:
-        return "slightly_bearish"
-    return "sideways"
-
-
-def _volume_spike(volumes: Sequence[float]) -> Tuple[float, float]:
+def _volume_ratio(volumes: Sequence[float]) -> Tuple[float, float]:
     if not volumes:
         return 0.0, 0.0
-    avg = sum(volumes[:-1]) / max(len(volumes) - 1, 1)
+    avg = mean(volumes[:-1]) if len(volumes) > 1 else volumes[0]
+    avg = avg if avg > 0 else 0.0
     last = volumes[-1]
-    ratio = last / avg if avg > 0 else 0.0
+    ratio = last / avg if avg else 0.0
     return ratio, avg
 
 
-def _atr(klines: Sequence[Dict[str, float]], period: int = 14) -> float:
-    if len(klines) < 2:
-        return 0.0
-    trs: List[float] = []
-    for i in range(1, len(klines)):
-        high = klines[i]["high"]
-        low = klines[i]["low"]
-        prev_close = klines[i - 1]["close"]
-        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-        trs.append(tr)
-    if not trs:
-        return 0.0
-    window = trs[-period:]
-    return sum(window) / len(window)
+async def _gather_klines(symbol: str) -> Optional[Dict[str, List[Candle]]]:
+    candles = await get_required_candles(symbol)
+    if not candles:
+        return None
+
+    required_keys = ["1d", "4h", "1h", "15m", "5m"]
+    if not all(candles.get(tf) for tf in required_keys):
+        return None
+
+    return {tf: candles[tf] for tf in required_keys}
 
 
-def _analyze_monthly(klines_1d: Sequence[Dict[str, float]]) -> Dict[str, Any]:
-    last_30 = list(klines_1d[-30:]) if klines_1d else []
-    closes = [k["close"] for k in last_30]
-    highs = [k["high"] for k in last_30]
-    lows = [k["low"] for k in last_30]
-    volumes = [k["volume"] for k in last_30]
+async def _prepare_signal(symbol: str, candles: Dict[str, List[Candle]]) -> Optional[Dict[str, Any]]:
+    candles_1d = candles["1d"]
+    candles_4h = candles["4h"]
+    candles_1h = candles["1h"]
+    candles_15m = candles["15m"]
+    candles_5m = candles["5m"]
 
-    trend_change = _percent_change(closes)
-    if trend_change >= 10:
-        trend = "bullish"
-    elif trend_change <= -10:
-        trend = "bearish"
+    current_price = candles_5m[-1].close
+
+    daily_structure = detect_trend_and_structure(candles_1d)
+    h4_structure = detect_trend_and_structure(candles_4h)
+    h1_structure = detect_trend_and_structure(candles_1h)
+
+    global_trend = daily_structure["trend"] if daily_structure["trend"] != "range" else h4_structure["trend"]
+    local_trend = h1_structure["trend"]
+
+    key_levels = find_key_levels(candles_1d)
+
+    recent_h1 = candles_1h[-24:]
+    recent_15m = candles_15m[-32:]
+    key_levels["highs"].extend([c.high for c in recent_h1])
+    key_levels["lows"].extend([c.low for c in recent_h1])
+    key_levels["highs"].extend([c.high for c in recent_15m])
+    key_levels["lows"].extend([c.low for c in recent_15m])
+    key_levels["highs"] = sorted(set(key_levels["highs"]))
+    key_levels["lows"] = sorted(set(key_levels["lows"]))
+
+    nearest_high, dist_high = _nearest_level(current_price, key_levels["highs"])
+    nearest_low, dist_low = _nearest_level(current_price, key_levels["lows"])
+
+    candidate_side: Optional[str] = None
+    level_touched: Optional[float] = None
+
+    if dist_low is not None and dist_low <= 0.6:
+        candidate_side = "LONG"
+        level_touched = nearest_low
+
+    if dist_high is not None and dist_high <= 0.6:
+        if candidate_side is None or (dist_high is not None and dist_high < (dist_low or 100)):
+            candidate_side = "SHORT"
+            level_touched = nearest_high
+
+    if not candidate_side:
+        return None
+
+    sweep = is_liquidity_sweep(
+        candles_5m[-6:] if len(candles_5m) >= 6 else candles_5m,
+        level_touched,
+        "long" if candidate_side == "LONG" else "short",
+    )
+    volume_spike = is_volume_climax(candles_5m)
+
+    closes_15m = [c.close for c in candles_15m]
+    closes_5m = [c.close for c in candles_5m]
+    rsi_15m = _compute_rsi_series(closes_15m)
+    rsi_5m = _compute_rsi_series(closes_5m)
+    rsi_div = False
+    if candidate_side == "LONG":
+        rsi_div = detect_rsi_divergence(closes_15m, rsi_15m, "bullish") or detect_rsi_divergence(
+            closes_5m, rsi_5m, "bullish"
+        )
     else:
-        trend = "sideways"
+        rsi_div = detect_rsi_divergence(closes_15m, rsi_15m, "bearish") or detect_rsi_divergence(
+            closes_5m, rsi_5m, "bearish"
+        )
 
-    rsi_30 = _rsi(list(closes)) if closes else 50.0
-    avg_volume = sum(volumes) / len(volumes) if volumes else 0.0
-    volume_today = volumes[-1] if volumes else 0.0
-    volume_ratio_30 = volume_today / avg_volume if avg_volume else 0.0
+    atr_15m = compute_atr(candles_15m[-60:]) if len(candles_15m) >= 15 else None
+    stop_buffer = atr_15m * 0.8 if atr_15m else current_price * 0.003
 
-    support = min(lows) if lows else 0.0
-    resistance = max(highs) if highs else 0.0
-    atr_30 = _atr(last_30, period=min(14, len(last_30) - 1)) if len(last_30) > 1 else 0.0
+    if candidate_side == "LONG":
+        sl = (level_touched or current_price) - max(stop_buffer, current_price * 0.005)
+        entry_from = max((level_touched or current_price) * 0.998, current_price * 0.997)
+        entry_to = current_price * 1.001
+        risk = entry_to - sl
+        tp1 = entry_to + risk * 2
+        tp2 = entry_to + risk * 3
+    else:
+        sl = (level_touched or current_price) + max(stop_buffer, current_price * 0.005)
+        entry_to = current_price * 0.999
+        entry_from = current_price * 1.001
+        risk = sl - entry_to
+        tp1 = entry_to - risk * 2
+        tp2 = entry_to - risk * 3
 
-    return {
-        "trend": trend,
-        "trend_change": trend_change,
-        "rsi": rsi_30,
-        "volume_ratio": volume_ratio_30,
-        "avg_volume": avg_volume,
-        "support": support,
-        "resistance": resistance,
-        "atr": atr_30,
+    atr_ok = True
+    if atr_15m and risk > 0:
+        min_stop = atr_15m * 0.5
+        max_stop = atr_15m * 2.0
+        atr_ok = min_stop <= risk <= max_stop
+
+    bb_extreme_15 = is_bb_extreme_reversal(
+        candles_15m[-40:] if len(candles_15m) >= 40 else candles_15m,
+        direction="long" if candidate_side == "LONG" else "short",
+    )
+    bb_extreme_5 = is_bb_extreme_reversal(
+        candles_5m[-40:] if len(candles_5m) >= 40 else candles_5m,
+        direction="long" if candidate_side == "LONG" else "short",
+    )
+    bb_extreme = bb_extreme_15 or bb_extreme_5
+
+    closes_1h = [c.close for c in candles_1h]
+    ema50_1h = compute_ema(closes_1h, 50) if len(closes_1h) >= 50 else None
+    ema200_1h = compute_ema(closes_1h, 200) if len(closes_1h) >= 200 else None
+    ma_trend_ok = False
+    if ema50_1h and ema200_1h:
+        if candidate_side == "LONG" and current_price >= ema50_1h >= ema200_1h:
+            ma_trend_ok = True
+        if candidate_side == "SHORT" and current_price <= ema50_1h <= ema200_1h:
+            ma_trend_ok = True
+
+    orderflow = await analyze_orderflow(symbol)
+
+    context = {
+        "candidate_side": candidate_side,
+        "global_trend": global_trend,
+        "local_trend": local_trend,
+        "near_key_level": True,
+        "liquidity_sweep": sweep,
+        "volume_climax": volume_spike,
+        "rsi_divergence": rsi_div,
+        "atr_ok": atr_ok,
+        "bb_extreme": bb_extreme,
+        "ma_trend_ok": ma_trend_ok,
+        "orderflow_bullish": orderflow.get("orderflow_bullish", False),
+        "orderflow_bearish": orderflow.get("orderflow_bearish", False),
+        "whale_activity": orderflow.get("whale_activity", False),
     }
 
+    raw_score = compute_score(context)
 
-def _entry_zone(lows: Sequence[float], buffer: float) -> Tuple[float, float]:
-    if not lows:
-        return 0.0, 0.0
-    anchor_low = min(lows)
-    low_zone = anchor_low
-    high_zone = anchor_low + buffer
-    return round(low_zone, 4), round(high_zone, 4)
-
-
-def _risk_reward(entry: float, sl: float, tp1: float) -> float:
-    risk = entry - sl
-    reward = tp1 - entry
-    if risk <= 0:
-        return 0.0
-    return reward / risk
-
-
-def _prepare_signal(
-    symbol: str,
-    closes_1d: Sequence[float],
-    closes_4h: Sequence[float],
-    closes_1h: Sequence[float],
-    closes_15m: Sequence[float],
-    volumes_1h: Sequence[float],
-    klines_1h: Sequence[Dict[str, float]],
-    klines_1d: Sequence[Dict[str, float]],
-) -> Optional[Dict[str, Any]]:
-    # Trends
-    change_1d = _percent_change(closes_1d)
-    change_4h = _percent_change(closes_4h)
-    change_1h = _percent_change(closes_1h)
-
-    trend_1d = _trend_from_change(change_1d)
-    trend_4h = _trend_from_change(change_4h, strong=2.0, weak=0.5)
-    trend_1h = _trend_from_change(change_1h, strong=1.0, weak=0.3)
-
-    rsi_1h = _rsi(list(closes_1h)) if closes_1h else 50.0
-    rsi_15m = _rsi(list(closes_15m)) if closes_15m else 50.0
-
-    volume_ratio, volume_avg = _volume_spike(volumes_1h)
-
-    monthly = _analyze_monthly(klines_1d)
-    monthly_trend = monthly["trend"]
-    rsi_30 = monthly["rsi"]
-    volume_ratio_30 = monthly["volume_ratio"]
-
-    # Conditions for long
-    if trend_1d in {"bearish"}:
-        return None
-    if trend_4h in {"bearish"}:
-        return None
-    if monthly_trend == "bearish":
-        return None
-    if rsi_30 > 70:
-        return None
-    if rsi_1h >= 70 or rsi_1h <= 30:
-        return None
-    if volume_ratio < 0.7:
+    if abs(raw_score) < 70:
         return None
 
-    last_price = closes_15m[-1] if closes_15m else closes_1h[-1]
-    recent_lows = list(closes_1h[-20:] + closes_15m[-20:]) if closes_15m else list(closes_1h[-20:])
-    recent_lows = [v for v in recent_lows if v > 0]
-    buffer = last_price * 0.003
-    entry_low, entry_high = _entry_zone(recent_lows[-5:], buffer)
+    side = "LONG" if raw_score >= 70 else "SHORT"
+    rr = abs((tp1 - entry_to) / risk) if risk != 0 else 0.0
 
-    atr = _atr(klines_1h)
-    stop_distance = max(atr * 0.7, last_price * 0.01)
-    sl = max(entry_low - stop_distance, entry_low * 0.96)
-    if (entry_low - sl) / entry_low > 0.04:
-        sl = entry_low * 0.96
-
-    tp1 = entry_high + (entry_high - sl) * 2.0
-    tp2 = entry_high + (entry_high - sl) * 3.0
-
-    rr = _risk_reward(entry_high, sl, tp1)
     if rr < 2:
         return None
 
-    score = 0
-    score += 25 if monthly_trend == "bullish" else 10 if monthly_trend == "sideways" else 0
-    score += 20 if trend_1d == "bullish" else 5 if trend_1d == "sideways" else 0
-    score += 20 if trend_4h == "bullish" else 5 if trend_4h in {"sideways", "slightly_bullish"} else 0
-    score += 10 if trend_4h == "bullish" and trend_1d == "bullish" else 0
-    score += 10 if trend_1h not in {"bearish", "slightly_bearish"} else 0
-    if 40 <= rsi_1h <= 65:
-        score += 10
-    if rsi_30 < 60:
-        score += 5
-    if volume_ratio >= 1.2:
-        score += 10
-    elif volume_ratio >= 0.7:
-        score += 5
-    if volume_ratio_30 > 1.5:
-        score += 10
-    elif volume_ratio_30 < 0.5:
-        score -= 10
-    score += 15 if rr >= 2 else 0
-    if rr >= 3:
-        score += 5
-    if rsi_1h > 70:
-        score -= 20
-    if rsi_30 > 70:
-        score -= 15
-    if rsi_30 < 35:
-        score -= 15
-    if trend_4h == "bearish":
-        score -= 20
-    if trend_1d == "bearish":
-        score -= 25
-    if monthly_trend == "bearish":
-        score -= 20
-    if volume_ratio < 0.7:
-        score -= 10
+    rsi_1h_series = _compute_rsi_series(closes_1h)
+    rsi_1h_value = rsi_1h_series[-1] if rsi_1h_series else 50.0
+    rsi_zone = "комфортная зона"
+    if rsi_1h_value >= 70:
+        rsi_zone = "перекупленность"
+    elif rsi_1h_value <= 30:
+        rsi_zone = "перепроданность"
 
-    if score < 90:
-        return None
+    volume_ratio, volume_avg = _volume_ratio([c.volume for c in candles_1h])
+
+    support_level = nearest_low if nearest_low is not None else level_touched
+    resistance_level = nearest_high if nearest_high is not None else level_touched
 
     return {
         "symbol": symbol,
-        "direction": "long",
-        "entry_zone": (round(entry_low, 4), round(entry_high, 4)),
+        "direction": "long" if side == "LONG" else "short",
+        "entry_zone": (round(entry_from, 4), round(entry_to, 4)),
         "sl": round(sl, 4),
         "tp1": round(tp1, 4),
         "tp2": round(tp2, 4),
-        "score": int(score),
+        "score": min(95, abs(raw_score)),
         "reason": {
-            "trend_1d": trend_1d,
-            "trend_4h": trend_4h,
-            "rsi_1h": rsi_1h,
-            "rsi_1h_zone": "комфортная зона",
+            "trend_1d": global_trend,
+            "trend_4h": h4_structure["trend"],
+            "rsi_1h": rsi_1h_value,
+            "rsi_1h_zone": rsi_zone,
             "volume_ratio": volume_ratio,
             "volume_avg": volume_avg,
             "rr": rr,
         },
         "levels": {
-            "support": round(monthly["support"], 4),
-            "resistance": round(monthly["resistance"], 4),
-            "atr_30": round(monthly["atr"], 4),
+            "support": round(support_level or 0.0, 4),
+            "resistance": round(resistance_level or 0.0, 4),
+            "atr_30": round(atr_15m or 0.0, 4),
         },
-    }
-
-
-async def _gather_klines(symbol: str) -> Optional[Dict[str, Any]]:
-    klines_1d = await _get_klines(symbol, "1d", limit=60)
-    klines_4h = await _get_klines(symbol, "4h", limit=120)
-    klines_1h = await _get_klines(symbol, "1h", limit=120)
-    klines_15m = await _get_klines(symbol, "15m", limit=96)
-
-    if not (klines_1d and klines_4h and klines_1h and klines_15m):
-        return None
-
-    return {
-        "1d": klines_1d,
-        "4h": klines_4h,
-        "1h": klines_1h,
-        "15m": klines_15m,
     }
 
 
@@ -282,22 +254,8 @@ async def scan_market(batch_delay: float = 0.2, batch_size: int = 5) -> List[Dic
         for symbol, klines in zip(batch, klines_list):
             if not klines:
                 continue
-            closes_1d = [k["close"] for k in klines["1d"]]
-            closes_4h = [k["close"] for k in klines["4h"]]
-            closes_1h = [k["close"] for k in klines["1h"]]
-            closes_15m = [k["close"] for k in klines["15m"]]
-            volumes_1h = [k["volume"] for k in klines["1h"]]
 
-            signal = _prepare_signal(
-                symbol,
-                closes_1d,
-                closes_4h,
-                closes_1h,
-                closes_15m,
-                volumes_1h,
-                klines["1h"],
-                klines["1d"],
-            )
+            signal = await _prepare_signal(symbol, klines)
             if signal:
                 signals.append(signal)
 
