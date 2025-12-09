@@ -268,6 +268,98 @@ def _nearest_level(price: float, levels: Iterable[float]) -> Tuple[Optional[floa
     return best_level, best_distance
 
 
+# ============================================================
+# EMA / Bollinger / Orderflow helpers
+# ============================================================
+
+def compute_ema(closes: List[float], period: int) -> Optional[float]:
+    if len(closes) < period:
+        return None
+    k = 2 / (period + 1)
+    ema = closes[0]
+    for price in closes[1:]:
+        ema = price * k + ema * (1 - k)
+    return ema
+
+
+def compute_bollinger_bands(
+    closes: List[float], period: int = 20, mult: float = 2.0
+) -> Tuple[List[float], List[float], List[float]]:
+    """
+    Возвращает (middle, upper, lower) списки той же длины, что и closes.
+    Для первых period-1 значений можно вернуть те же значения, что и последний рассчитанный.
+    """
+    if len(closes) < period:
+        return [closes[-1]] * len(closes), [closes[-1]] * len(closes), [closes[-1]] * len(closes)
+
+    middles: List[float] = []
+    uppers: List[float] = []
+    lowers: List[float] = []
+
+    for i in range(len(closes)):
+        if i < period - 1:
+            middles.append(closes[i])
+            uppers.append(closes[i])
+            lowers.append(closes[i])
+        else:
+            window = closes[i - period + 1 : i + 1]
+            m = sum(window) / period
+            var = sum((x - m) ** 2 for x in window) / period
+            std = var ** 0.5
+            middles.append(m)
+            uppers.append(m + mult * std)
+            lowers.append(m - mult * std)
+
+    return middles, uppers, lowers
+
+
+def is_bb_extreme_reversal(
+    candles: List[Candle], period: int = 20, mult: float = 2.0, direction: str = "long"
+) -> bool:
+    """
+    По Боллинджеру ищем экстремум + возврат внутрь канала.
+
+    long:
+      - low < lower_band
+      - close > lower_band
+    short:
+      - high > upper_band
+      - close < upper_band
+    """
+    if len(candles) < period + 2:
+        return False
+
+    closes = [c.close for c in candles]
+    _, upper, lower = compute_bollinger_bands(closes, period=period, mult=mult)
+
+    last = candles[-1]
+    last_upper = upper[-1]
+    last_lower = lower[-1]
+
+    if direction == "long":
+        return last.low < last_lower and last.close > last_lower
+    else:
+        return last.high > last_upper and last.close < last_upper
+
+
+async def analyze_orderflow(symbol: str) -> Dict[str, bool]:
+    """
+    Заглушка под ордерфлоу/китов.
+
+    Codex: реализовать здесь анализ ордерфлоу с Binance futures:
+      - дисбаланс taker buy / taker sell за последние N минут
+      - крупные сделки (whales) по объёму
+      - изменение open interest, funding и т.д.
+
+    Пока возвращаем нейтральные значения, чтобы код работал без реализации.
+    """
+    return {
+        "orderflow_bullish": False,
+        "orderflow_bearish": False,
+        "whale_activity": False,
+    }
+
+
 def compute_score(context: Dict) -> int:
     side = context.get("candidate_side")
     if not side:
@@ -275,6 +367,7 @@ def compute_score(context: Dict) -> int:
 
     score = 0.0
 
+    # Глобальный тренд
     global_trend = context.get("global_trend")
     if global_trend == "up" and side == "LONG":
         score += 25
@@ -283,6 +376,7 @@ def compute_score(context: Dict) -> int:
     elif global_trend in ("up", "down"):
         score -= 15
 
+    # Локальный тренд
     local_trend = context.get("local_trend")
     if local_trend == "up" and side == "LONG":
         score += 15
@@ -291,22 +385,41 @@ def compute_score(context: Dict) -> int:
     elif local_trend in ("up", "down"):
         score -= 10
 
+    # Работа от ключевого уровня
     if context.get("near_key_level"):
-        score += 20 if side == "LONG" else 20
+        score += 20
 
+    # Снос ликвидности
     if context.get("liquidity_sweep"):
-        score += 15 if side == "LONG" else 15
+        score += 15
 
+    # Объёмный всплеск
     if context.get("volume_climax"):
-        score += 10 if side == "LONG" else 10
+        score += 10
 
+    # RSI дивергенция
     if context.get("rsi_divergence"):
         score += 10
 
+    # ATR-адекватность стопа
     if context.get("atr_ok"):
         score += 5
     else:
         score -= 5
+
+    # Bollinger экстремум + возврат
+    if context.get("bb_extreme"):
+        score += 15
+
+    # EMA тренд (EMA50/EMA200 в нужную сторону)
+    if context.get("ma_trend_ok"):
+        score += 10
+
+    # Ордерфлоу / киты
+    if context.get("orderflow_bullish") and side == "LONG":
+        score += 10
+    if context.get("orderflow_bearish") and side == "SHORT":
+        score += 10
 
     return int(round(score))
 
@@ -619,6 +732,31 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
         max_stop = atr_15m * 2.0
         atr_ok = min_stop <= risk <= max_stop
 
+    # Bollinger экстремум на 15m/5m
+    bb_extreme_15 = is_bb_extreme_reversal(
+        candles_15m[-40:] if len(candles_15m) >= 40 else candles_15m,
+        direction="long" if candidate_side == "LONG" else "short",
+    )
+    bb_extreme_5 = is_bb_extreme_reversal(
+        candles_5m[-40:] if len(candles_5m) >= 40 else candles_5m,
+        direction="long" if candidate_side == "LONG" else "short",
+    )
+    bb_extreme = bb_extreme_15 or bb_extreme_5
+
+    # EMA50/EMA200 на 1H
+    closes_1h = [c.close for c in candles_1h]
+    ema50_1h = compute_ema(closes_1h, 50) if len(closes_1h) >= 50 else None
+    ema200_1h = compute_ema(closes_1h, 200) if len(closes_1h) >= 200 else None
+    ma_trend_ok = False
+    if ema50_1h and ema200_1h:
+        if candidate_side == "LONG" and current_price >= ema50_1h >= ema200_1h:
+            ma_trend_ok = True
+        if candidate_side == "SHORT" and current_price <= ema50_1h <= ema200_1h:
+            ma_trend_ok = True
+
+    # Ордерфлоу / киты (заглушка, Codex реализует внутри analyze_orderflow)
+    orderflow = await analyze_orderflow(BTC_SYMBOL)
+
     context = {
         "candidate_side": candidate_side,
         "global_trend": global_trend,
@@ -628,6 +766,11 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
         "volume_climax": volume_spike,
         "rsi_divergence": rsi_div,
         "atr_ok": atr_ok,
+        "bb_extreme": bb_extreme,
+        "ma_trend_ok": ma_trend_ok,
+        "orderflow_bullish": orderflow.get("orderflow_bullish", False),
+        "orderflow_bearish": orderflow.get("orderflow_bearish", False),
+        "whale_activity": orderflow.get("whale_activity", False),
     }
 
     raw_score = compute_score(context)
@@ -652,7 +795,16 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
         "Объёмный всплеск на закрытии" if volume_spike else "Без объёмного климакса",
         "RSI дивергенция обнаружена" if rsi_div else "Дивергенция не подтверждена",
         "ATR в норме для стопа" if atr_ok else "ATR: стоп вне допустимого диапазона",
+        "Bollinger: экстремум + возврат внутрь" if bb_extreme else "Bollinger: явного экстремума нет",
+        "EMA50/EMA200 в сторону сделки" if ma_trend_ok else "EMA50/EMA200 не подтверждают тренд",
     ]
+
+    if orderflow.get("orderflow_bullish") or orderflow.get("orderflow_bearish"):
+        explanation_parts.append(
+            f"Ордерфлоу в пользу {side} (дисбаланс крупных покупок/продаж)"
+        )
+    else:
+        explanation_parts.append("Ордерфлоу/киты: явного перекоса нет или не учитывается.")
 
     return BTCSingal(
         timestamp=now,
