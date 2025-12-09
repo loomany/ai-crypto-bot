@@ -16,6 +16,7 @@ from aiogram.filters import CommandStart
 from dotenv import load_dotenv
 
 from coin_info import get_coin_description
+from btc_module import router as btc_router, btc_auto_signal_worker, get_btc_main_keyboard
 from market_data import get_coin_analysis
 from pump_detector import scan_pumps, format_pump_message
 from pump_db import add_pump_subscriber, remove_pump_subscriber, get_pump_subscribers
@@ -42,6 +43,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="📊 Анализ монеты"),
             KeyboardButton(text="🎯 AI-сигналы"),
         ],
+        [KeyboardButton(text="₿ BTC (intraday)")],
         [KeyboardButton(text="🚀 Pump Detector")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -119,6 +121,7 @@ def list_subscriptions() -> List[int]:
 BOT_TOKEN = load_settings()
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
+dp.include_router(btc_router)
 waiting_for_symbol: set[int] = set()
 signal_cache: Dict[Tuple[str, str, float, float], float] = {}
 LAST_SIGNALS: Dict[str, Dict[str, Any]] = {}
@@ -251,6 +254,18 @@ async def back_to_main_menu(message: Message):
 async def back_to_main(message: Message):
     waiting_for_symbol.discard(message.chat.id)
     await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard())
+
+
+@dp.message(F.text == "₿ BTC (intraday)")
+async def open_btc_menu(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
+    await message.answer(
+        "BTC-модуль (интрадей) — только BTCUSDT:\n\n"
+        "• Разовый сигнал LONG/SHORT\n"
+        "• Автоуведомления раз в 15 минут\n\n"
+        "Выбирай действие:",
+        reply_markup=get_btc_main_keyboard(),
+    )
 
 
 def _trend_to_text(trend: str) -> str:
@@ -666,6 +681,7 @@ async def main():
     init_db()
     signals_task = asyncio.create_task(signals_worker())
     pump_task = asyncio.create_task(pump_worker(bot))
+    btc_task = asyncio.create_task(btc_auto_signal_worker(bot))
     try:
         await dp.start_polling(bot)
     finally:
@@ -675,6 +691,9 @@ async def main():
         pump_task.cancel()
         with suppress(asyncio.CancelledError):
             await pump_task
+        btc_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await btc_task
 
 
 if __name__ == "__main__":
