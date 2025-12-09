@@ -16,7 +16,11 @@ from aiogram.filters import CommandStart
 from dotenv import load_dotenv
 
 from coin_info import get_coin_description
-from btc_module import router as btc_router, btc_auto_signal_worker, get_btc_main_keyboard
+from btc_module import (
+    router as btc_router,
+    btc_realtime_signal_worker,
+    get_btc_main_keyboard,
+)
 from market_data import get_coin_analysis
 from pump_detector import scan_pumps, format_pump_message
 from pump_db import add_pump_subscriber, remove_pump_subscriber, get_pump_subscribers
@@ -681,7 +685,7 @@ async def main():
     init_db()
     signals_task = asyncio.create_task(signals_worker())
     pump_task = asyncio.create_task(pump_worker(bot))
-    btc_task = asyncio.create_task(btc_auto_signal_worker(bot))
+    btc_task = asyncio.create_task(btc_realtime_signal_worker(bot))
     try:
         await dp.start_polling(bot)
     finally:
