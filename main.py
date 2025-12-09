@@ -25,6 +25,10 @@ from market_data import get_coin_analysis
 from pump_detector import scan_pumps, format_pump_message
 from pump_db import add_pump_subscriber, remove_pump_subscriber, get_pump_subscribers
 from signals import scan_market
+from whales_module import (
+    whales_realtime_worker,
+    storage as whales_storage,
+)
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -48,6 +52,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="🎯 AI-сигналы"),
         ],
         [KeyboardButton(text="₿ BTC (intraday)")],
+        [KeyboardButton(text="🐳 Киты (ТОП-5)")],
         [KeyboardButton(text="🚀 Pump Detector")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -57,6 +62,15 @@ def pump_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = [
         [KeyboardButton(text="🔔 Включить авто-пампы")],
         [KeyboardButton(text="🚫 Отключить авто-пампы")],
+        [KeyboardButton(text="⬅️ Назад в главное меню")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+
+def whales_menu_keyboard() -> ReplyKeyboardMarkup:
+    kb = [
+        [KeyboardButton(text="🔔 Включить уведомления")],
+        [KeyboardButton(text="🚫 Отключить уведомления")],
         [KeyboardButton(text="⬅️ Назад в главное меню")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -227,6 +241,18 @@ async def pump_detector_entry(message: Message):
     )
 
 
+@dp.message(F.text == "🐳 Киты (ТОП-5)")
+async def whales_menu(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
+    await message.answer(
+        "🐳 Киты (ТОП-5)\n\n"
+        "Вижу крупные сделки и поток ордеров по BTC, ETH, SOL, BNB, XRP на Binance Futures.\n\n"
+        "Модуль даёт ранние разворотные сигналы, предупреждает о начале/конце трендов, "
+        "показывает пампы/дампы и активность китов в реальном времени.",
+        reply_markup=whales_menu_keyboard(),
+    )
+
+
 @dp.message(F.text == "🔔 Включить авто-пампы")
 async def subscribe_pumps(message: Message):
     waiting_for_symbol.discard(message.chat.id)
@@ -245,6 +271,26 @@ async def unsubscribe_pumps(message: Message):
     await message.answer(
         "⭕ Авто-оповещения Pump Detector выключены.",
         reply_markup=pump_menu_keyboard(),
+    )
+
+
+@dp.message(F.text == "🔔 Включить уведомления")
+async def enable_whales(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
+    whales_storage.set_notifications(message.chat.id, True)
+    await message.answer(
+        "✅ Уведомления по китам включены. Буду присылать сигналы по ТОП-5 монетам.",
+        reply_markup=whales_menu_keyboard(),
+    )
+
+
+@dp.message(F.text == "🚫 Отключить уведомления")
+async def disable_whales(message: Message):
+    waiting_for_symbol.discard(message.chat.id)
+    whales_storage.set_notifications(message.chat.id, False)
+    await message.answer(
+        "⭕ Уведомления по китам выключены.",
+        reply_markup=whales_menu_keyboard(),
     )
 
 
@@ -686,6 +732,7 @@ async def main():
     signals_task = asyncio.create_task(signals_worker())
     pump_task = asyncio.create_task(pump_worker(bot))
     btc_task = asyncio.create_task(btc_realtime_signal_worker(bot))
+    whales_task = asyncio.create_task(whales_realtime_worker(bot))
     try:
         await dp.start_polling(bot)
     finally:
@@ -698,6 +745,9 @@ async def main():
         btc_task.cancel()
         with suppress(asyncio.CancelledError):
             await btc_task
+        whales_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await whales_task
 
 
 if __name__ == "__main__":
