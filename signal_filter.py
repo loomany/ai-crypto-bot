@@ -67,7 +67,7 @@ def ai_min_score(level: FilterLevel) -> int:
     if level == "aggressive":
         return 80
     if level == "strict":
-        return 93
+        return 94
     return 90  # normal
 
 
@@ -77,7 +77,7 @@ def btc_min_probability(level: FilterLevel) -> int:
         return 70
     if level == "strict":
         return 90
-    return 80  # normal
+    return 82  # normal
 
 
 def whales_min_probability(level: FilterLevel) -> int:
@@ -92,7 +92,7 @@ def whales_min_probability(level: FilterLevel) -> int:
 def pumps_min_strength(level: FilterLevel) -> float:
     # Силу пампа Codex выберет сам (например, pct роста за 5–15м)
     if level == "aggressive":
-        return 8.0   # % или условная величина
+        return 7.0   # % или условная величина
     if level == "strict":
         return 15.0
     return 10.0
