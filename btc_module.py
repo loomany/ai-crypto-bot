@@ -32,6 +32,7 @@ from trading_core import (
     analyze_orderflow,
     compute_score,
 )
+from health import mark_tick, mark_ok, mark_error
 
 # ============================================================
 # Константы и базовые настройки
@@ -195,17 +196,19 @@ async def btc_realtime_signal_worker(bot):
         try:
             candles_5m = await fetch_klines(BTC_SYMBOL, "5m", 3)
             if len(candles_5m) < 2:
+                mark_tick("btc", extra="нет достаточных свечей 5m")
                 await asyncio.sleep(5)
                 continue
 
             last_candle = candles_5m[-1]
+            mark_ok("btc", extra=f"last_close={last_candle.close:.2f}")
             if (
                 last_checked_candle_close_time is None
                 or last_candle.close_time > last_checked_candle_close_time
             ):
                 last_checked_candle_close_time = last_candle.close_time
                 signal = await generate_btc_signal(desired_side=None)
-
+                mark_tick("btc", extra=f"side={signal.side}, prob={signal.probability:.0f}")
                 if signal.side in ("LONG", "SHORT"):
                     entry_mid = 0.0
                     if signal.entry_from and signal.entry_to:
@@ -237,7 +240,9 @@ async def btc_realtime_signal_worker(bot):
                         storage.add_signal(signal)
 
         except Exception as e:
-            print(f"[btc_realtime_signal_worker] error: {e}")
+            msg = f"error: {e}"
+            print(f"[btc_realtime_signal_worker] {msg}")
+            mark_error("btc", msg)
 
         await asyncio.sleep(2)
 

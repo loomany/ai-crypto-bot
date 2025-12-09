@@ -37,6 +37,7 @@ from market_data import get_coin_analysis
 from pump_detector import scan_pumps, format_pump_message
 from pump_db import add_pump_subscriber, remove_pump_subscriber, get_pump_subscribers
 from signals import scan_market
+from health import MODULES, mark_tick, mark_ok, mark_error
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -287,6 +288,15 @@ async def unsubscribe_pumps(message: Message):
         "⭕ Авто-оповещения Pump Detector выключены.",
         reply_markup=pump_menu_keyboard(),
     )
+
+
+@dp.message(F.text == "/testadmin")
+async def test_admin(message: Message):
+    lines = ["🛠 Статус модулей:\n"]
+    for key, st in MODULES.items():
+        lines.append(f"{st.name}:\n{st.as_text()}\n")
+
+    await message.answer("\n".join(lines))
 
 
 @dp.message(F.text == "⬅️ Назад в главное меню")
@@ -542,16 +552,14 @@ async def pump_worker(bot: Bot):
 
     while True:
         try:
-            if not is_trading_time():
-                await asyncio.sleep(10)
-                continue
-
             subscribers = get_pump_subscribers()
+            mark_tick("pumps", extra=f"подписчиков: {len(subscribers)}")
             if not subscribers:
                 await asyncio.sleep(15)
                 continue
 
             signals = await scan_pumps()
+            mark_ok("pumps", extra=f"найдено пампов: {len(signals)}")
             now_min = int(time.time() // 60)
 
             for sig in signals:
@@ -569,7 +577,10 @@ async def pump_worker(bot: Bot):
                     except Exception:
                         continue
 
-        except Exception:
+        except Exception as e:
+            msg = f"error: {e}"
+            print(f"[pump_worker] {msg}")
+            mark_error("pumps", msg)
             await asyncio.sleep(10)
 
         await asyncio.sleep(10)
@@ -578,11 +589,8 @@ async def pump_worker(bot: Bot):
 async def signals_worker():
     while True:
         try:
-            if not is_trading_time():
-                await asyncio.sleep(AI_SCAN_INTERVAL)
-                continue
-
             signals = await scan_market()
+            mark_ok("ai_signals", extra=f"кандидатов: {len(signals)}")
             print("SCAN OK", len(signals))
             for signal in signals:
                 if signal.get("score", 0) < 90:
@@ -592,9 +600,15 @@ async def signals_worker():
                         f"[ai_signals] Duplicate skipped: {signal.get('symbol')} {signal.get('direction')}"
                     )
                     continue
+                print(
+                    f"[ai_signals] SEND {signal['symbol']} {signal['direction']} score={signal['score']}"
+                )
                 await send_signal_to_all(signal)
         except Exception as e:
-            print(f"[ai_signals] Worker error: {e}")
+            msg = f"Worker error: {e}"
+            print(f"[ai_signals] {msg}")
+            mark_error("ai_signals", msg)
+        mark_tick("ai_signals")
         await asyncio.sleep(AI_SCAN_INTERVAL)
 
 
