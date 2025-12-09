@@ -16,6 +16,7 @@ from aiogram.types import (
 )
 from aiogram.fsm.context import FSMContext
 from health import mark_tick, mark_ok, mark_error
+from signal_filter import get_user_filter, whales_min_probability
 
 # ============================================================
 # НАСТРОЙКИ МОДУЛЯ КИТОВ
@@ -506,6 +507,10 @@ async def whales_realtime_worker(bot):
                 text = format_whale_alert(signal)
                 for uid in user_ids:
                     try:
+                        level = get_user_filter(uid)
+                        min_prob = whales_min_probability(level)
+                        if int(signal.probability or 0) < min_prob:
+                            continue
                         await bot.send_message(chat_id=uid, text=text)
                     except Exception:
                         continue

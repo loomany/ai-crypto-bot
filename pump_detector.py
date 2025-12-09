@@ -138,6 +138,8 @@ def _calc_signal_from_klines(symbol: str, klines: list[list[str]]) -> Dict[str, 
     if not sig_type:
         return None
 
+    strength = abs(change_5m)
+
     signal = {
         "symbol": symbol,
         "price": last_price,
@@ -146,6 +148,7 @@ def _calc_signal_from_klines(symbol: str, klines: list[list[str]]) -> Dict[str, 
         "volume_mul": round(volume_mul, 2),
         "type": sig_type,
         "detected_at": time.time(),
+        "strength": strength,
     }
 
     if not _remember_signal(signal):
