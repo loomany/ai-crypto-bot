@@ -26,6 +26,13 @@ from whales_module import (
     router as whales_router,
     whales_realtime_worker,
 )
+from pro_modules import (
+    router as pro_router,
+    orderflow_pro_worker,
+    smart_money_worker,
+    ai_patterns_worker,
+    market_regime_worker,
+)
 from market_data import get_coin_analysis
 from pump_detector import scan_pumps, format_pump_message
 from pump_db import add_pump_subscriber, remove_pump_subscriber, get_pump_subscribers
@@ -58,7 +65,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         ],
         [
             KeyboardButton(text="🐳 Киты (ТОП-5)"),
-            # сюда потом можно добавить ещё одну кнопку, если появится новый модуль
+            KeyboardButton(text="🧠 PRO-модули"),
         ],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -159,6 +166,7 @@ bot: Bot | None = None
 dp = Dispatcher()
 dp.include_router(btc_router)
 dp.include_router(whales_router)
+dp.include_router(pro_router)
 waiting_for_symbol: set[int] = set()
 signal_cache: Dict[Tuple[str, str, float, float], float] = {}
 LAST_SIGNALS: Dict[str, Dict[str, Any]] = {}
@@ -728,6 +736,10 @@ async def main():
     pump_task = asyncio.create_task(pump_worker(bot))
     btc_task = asyncio.create_task(btc_realtime_signal_worker(bot))
     whales_task = asyncio.create_task(whales_realtime_worker(bot))
+    orderflow_task = asyncio.create_task(orderflow_pro_worker(bot))
+    smart_money_task = asyncio.create_task(smart_money_worker(bot))
+    ai_patterns_task = asyncio.create_task(ai_patterns_worker(bot))
+    regime_task = asyncio.create_task(market_regime_worker(bot))
     try:
         await dp.start_polling(bot)
     finally:
@@ -743,6 +755,21 @@ async def main():
         whales_task.cancel()
         with suppress(asyncio.CancelledError):
             await whales_task
+        orderflow_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await orderflow_task
+
+        smart_money_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await smart_money_task
+
+        ai_patterns_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await ai_patterns_task
+
+        regime_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await regime_task
 
 
 if __name__ == "__main__":

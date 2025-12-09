@@ -302,83 +302,21 @@ async def _of_fetch_oi_history(session: aiohttp.ClientSession, symbol: str):
 
 async def analyze_orderflow(symbol: str) -> Dict[str, bool]:
     """
-    Анализирует ордерфлоу по Binance Futures, оценивая дисбаланс агрессоров,
-    активность крупных сделок и динамику OI.
+    Анализ ордерфлоу (дисбаланс taker buy / taker sell, киты и т.д.).
+
+    Codex:
+      - реализовать через Binance Futures API:
+          * /fapi/v1/aggTrades
+          * /fapi/v1/klines
+          * /futures/data/openInterestHist
+          * /fapi/v1/premiumIndex (funding)
+      - вернуть флаги:
+          orderflow_bullish, orderflow_bearish, whale_activity
     """
-
-    now_ms = int(time.time() * 1000)
-    start_ms = now_ms - 15 * 60 * 1000
-
-    async with aiohttp.ClientSession() as session:
-        trades_task = asyncio.create_task(_of_fetch_agg_trades(session, symbol, start_ms, now_ms))
-        oi_task = asyncio.create_task(_of_fetch_oi_history(session, symbol))
-        trades, oi_hist = await asyncio.gather(trades_task, oi_task)
-
-    if not trades:
-        return {
-            "orderflow_bullish": False,
-            "orderflow_bearish": False,
-            "whale_activity": False,
-        }
-
-    taker_buy_quote = 0.0
-    taker_sell_quote = 0.0
-    whale_buy_usd = 0.0
-    whale_sell_usd = 0.0
-
-    for tr in trades:
-        try:
-            price = float(tr.get("p", 0.0))
-            qty = float(tr.get("q", 0.0))
-            usd_value = price * qty
-            is_buyer_maker = bool(tr.get("m"))
-        except Exception:
-            continue
-
-        if usd_value >= MIN_WHALE_TRADE_USD:
-            if is_buyer_maker:
-                whale_sell_usd += usd_value
-            else:
-                whale_buy_usd += usd_value
-
-        if is_buyer_maker:
-            taker_sell_quote += usd_value
-        else:
-            taker_buy_quote += usd_value
-
-    orderflow_imbalance_pct = 0.0
-    total_flow = taker_buy_quote + taker_sell_quote
-    if total_flow > 0:
-        orderflow_imbalance_pct = (taker_buy_quote - taker_sell_quote) / total_flow * 100
-
-    oi_change_pct = 0.0
-    if oi_hist and len(oi_hist) >= 2:
-        try:
-            first_oi = float(oi_hist[0]["sumOpenInterest"])
-            last_oi = float(oi_hist[-1]["sumOpenInterest"])
-            if first_oi > 0:
-                oi_change_pct = (last_oi - first_oi) / first_oi * 100
-        except Exception:
-            oi_change_pct = 0.0
-
-    whale_activity = (whale_buy_usd + whale_sell_usd) >= STRONG_WHALE_TRADE_USD
-
-    orderflow_bullish = (
-        whale_buy_usd > whale_sell_usd
-        and orderflow_imbalance_pct >= 20
-        and oi_change_pct >= 3
-    )
-
-    orderflow_bearish = (
-        whale_sell_usd > whale_buy_usd
-        and orderflow_imbalance_pct <= -20
-        and oi_change_pct <= -3
-    )
-
     return {
-        "orderflow_bullish": orderflow_bullish,
-        "orderflow_bearish": orderflow_bearish,
-        "whale_activity": whale_activity,
+        "orderflow_bullish": False,
+        "orderflow_bearish": False,
+        "whale_activity": False,
     }
 
 
@@ -442,5 +380,27 @@ def compute_score(context: Dict) -> int:
         score += 10
     if context.get("orderflow_bearish") and side == "SHORT":
         score += 10
+    if context.get("whale_activity"):
+        score += 5
+
+    # AI-паттерны
+    pattern_trend = context.get("ai_pattern_trend")  # "bullish" / "bearish" / None
+    pattern_strength = context.get("ai_pattern_strength", 0)
+    if pattern_trend and pattern_strength:
+        if pattern_trend == "bullish" and side == "LONG":
+            score += min(15, pattern_strength / 5)
+        elif pattern_trend == "bearish" and side == "SHORT":
+            score += min(15, pattern_strength / 5)
+        else:
+            score -= min(10, pattern_strength / 7)
+
+    # Market Regime
+    regime = context.get("market_regime")  # "risk_on" / "risk_off" / "neutral"
+    if regime == "risk_on" and side == "LONG":
+        score += 10
+    elif regime == "risk_off" and side == "SHORT":
+        score += 10
+    elif regime in ("risk_on", "risk_off"):
+        score -= 5
 
     return int(round(score))
