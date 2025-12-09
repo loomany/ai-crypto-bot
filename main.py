@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.exceptions import SkipHandler
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import (
     Message,
@@ -584,9 +583,9 @@ async def signals_worker():
 async def process_symbol(message: Message):
     chat_id = message.chat.id
 
-    # Если мы НЕ ждём тикер – отдать апдейт другим хендлерам (BTC, киты, меню и т.д.)
+    # Если мы НЕ ждём тикер – просто выходим, чтобы другие хендлеры могли обработать сообщение
     if chat_id not in waiting_for_symbol:
-        raise SkipHandler()
+        return
 
     symbol = (message.text or "").strip().upper()
     if not symbol:
