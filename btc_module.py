@@ -15,6 +15,8 @@ from aiogram.types import (
 from aiogram.fsm.context import FSMContext
 
 from binance_client import Candle, fetch_klines, get_required_candles
+from ai_patterns import analyze_ai_patterns
+from market_regime import get_market_regime
 from trading_core import (
     detect_trend_and_structure,
     find_key_levels,
@@ -421,6 +423,10 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
     # Ордерфлоу / киты (заглушка, Codex реализует внутри analyze_orderflow)
     orderflow = await analyze_orderflow(BTC_SYMBOL)
 
+    # AI-паттерны и Market Regime
+    pattern_info = await analyze_ai_patterns(BTC_SYMBOL, candles_1h, candles_15m, candles_5m)
+    market_info = await get_market_regime()
+
     context = {
         "candidate_side": candidate_side,
         "global_trend": global_trend,
@@ -435,6 +441,9 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
         "orderflow_bullish": orderflow.get("orderflow_bullish", False),
         "orderflow_bearish": orderflow.get("orderflow_bearish", False),
         "whale_activity": orderflow.get("whale_activity", False),
+        "ai_pattern_trend": pattern_info.get("pattern_trend"),
+        "ai_pattern_strength": pattern_info.get("pattern_strength", 0),
+        "market_regime": market_info.get("regime", "neutral"),
     }
 
     raw_score = compute_score(context)
