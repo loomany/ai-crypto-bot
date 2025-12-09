@@ -22,6 +22,70 @@ from trading_core import (
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 
 EXCHANGE_INFO_URL = f"{BINANCE_BASE_URL}/exchangeInfo"
+BTC_SYMBOL = "BTCUSDT"
+
+
+async def get_btc_context() -> Dict[str, Any]:
+    """
+    Анализирует BTCUSDT и возвращает контекст рынка:
+      - тренды 1d / 1h
+      - RSI 15m
+      - отношение объёма последней 15m свечи к среднему за N свечей
+      - флаги allow_longs / allow_shorts
+    """
+
+    candles = await get_required_candles(BTC_SYMBOL)
+    candles_1d = candles.get("1d", []) if candles else []
+    candles_1h = candles.get("4h", []) or candles.get("1h", []) if candles else []
+    candles_15m = candles.get("15m", []) if candles else []
+
+    if not candles_1d or not candles_1h or not candles_15m:
+        return {
+            "trend_1d": "range",
+            "trend_1h": "range",
+            "rsi_15m": 50.0,
+            "volume_ratio_15m": 0.0,
+            "allow_longs": False,
+            "allow_shorts": False,
+        }
+
+    daily_structure = detect_trend_and_structure(candles_1d)
+    h1_structure = detect_trend_and_structure(candles_1h)
+
+    btc_trend_1d = daily_structure["trend"]
+    btc_trend_1h = h1_structure["trend"]
+
+    closes_15m = [c.close for c in candles_15m]
+    rsi_15m_series = _compute_rsi_series(closes_15m)
+    rsi_15m_value = rsi_15m_series[-1] if rsi_15m_series else 50.0
+
+    vols = [c.volume for c in candles_15m[-21:-1]]
+    last_vol = candles_15m[-1].volume if candles_15m else 0.0
+    avg_vol = mean(vols) if vols else 0.0
+    volume_ratio_15m = last_vol / avg_vol if avg_vol > 0 else 0.0
+
+    allow_longs = (
+        btc_trend_1d in ("up", "range")
+        and btc_trend_1h == "up"
+        and 40 <= rsi_15m_value <= 65
+        and volume_ratio_15m >= 1.2
+    )
+
+    allow_shorts = (
+        btc_trend_1d in ("down", "range")
+        and btc_trend_1h == "down"
+        and 35 <= rsi_15m_value <= 70
+        and volume_ratio_15m >= 1.2
+    )
+
+    return {
+        "trend_1d": btc_trend_1d,
+        "trend_1h": btc_trend_1h,
+        "rsi_15m": rsi_15m_value,
+        "volume_ratio_15m": volume_ratio_15m,
+        "allow_longs": allow_longs,
+        "allow_shorts": allow_shorts,
+    }
 
 
 async def _get_spot_usdt_symbols() -> List[str]:
@@ -62,7 +126,9 @@ async def _gather_klines(symbol: str) -> Optional[Dict[str, List[Candle]]]:
     return {tf: candles[tf] for tf in required_keys}
 
 
-async def _prepare_signal(symbol: str, candles: Dict[str, List[Candle]]) -> Optional[Dict[str, Any]]:
+async def _prepare_signal(
+    symbol: str, candles: Dict[str, List[Candle]], btc_ctx: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
     candles_1d = candles["1d"]
     candles_4h = candles["4h"]
     candles_1h = candles["1h"]
@@ -70,6 +136,10 @@ async def _prepare_signal(symbol: str, candles: Dict[str, List[Candle]]) -> Opti
     candles_5m = candles["5m"]
 
     current_price = candles_5m[-1].close
+
+    # Отсекаем сверхдешёвые монеты
+    if current_price < 0.00001:
+        return None
 
     daily_structure = detect_trend_and_structure(candles_1d)
     h4_structure = detect_trend_and_structure(candles_4h)
@@ -128,6 +198,12 @@ async def _prepare_signal(symbol: str, candles: Dict[str, List[Candle]]) -> Opti
             closes_5m, rsi_5m, "bearish"
         )
 
+    if candidate_side == "LONG" and not btc_ctx.get("allow_longs", False):
+        return None
+
+    if candidate_side == "SHORT" and not btc_ctx.get("allow_shorts", False):
+        return None
+
     atr_15m = compute_atr(candles_15m[-60:]) if len(candles_15m) >= 15 else None
     stop_buffer = atr_15m * 0.8 if atr_15m else current_price * 0.003
 
@@ -172,6 +248,12 @@ async def _prepare_signal(symbol: str, candles: Dict[str, List[Candle]]) -> Opti
         if candidate_side == "SHORT" and current_price <= ema50_1h <= ema200_1h:
             ma_trend_ok = True
 
+    if not ma_trend_ok:
+        return None
+
+    if not atr_ok:
+        return None
+
     orderflow = await analyze_orderflow(symbol)
 
     context = {
@@ -192,7 +274,7 @@ async def _prepare_signal(symbol: str, candles: Dict[str, List[Candle]]) -> Opti
 
     raw_score = compute_score(context)
 
-    if abs(raw_score) < 70:
+    if abs(raw_score) < 80:
         return None
 
     side = "LONG" if raw_score >= 70 else "SHORT"
@@ -210,6 +292,10 @@ async def _prepare_signal(symbol: str, candles: Dict[str, List[Candle]]) -> Opti
         rsi_zone = "перепроданность"
 
     volume_ratio, volume_avg = _volume_ratio([c.volume for c in candles_1h])
+
+    # Требуем хотя бы 30% всплеска объёма
+    if volume_ratio < 1.3:
+        return None
 
     support_level = nearest_low if nearest_low is not None else level_touched
     resistance_level = nearest_high if nearest_high is not None else level_touched
@@ -244,6 +330,13 @@ async def scan_market(batch_delay: float = 0.2, batch_size: int = 5) -> List[Dic
     Сканирует весь рынок Binance по спотовым USDT-парам и возвращает сигналы.
     """
     symbols = await _get_spot_usdt_symbols()
+
+    btc_ctx = await get_btc_context()
+
+    # Если ни лонги, ни шорты сейчас не разрешены — сразу выходим
+    if not btc_ctx["allow_longs"] and not btc_ctx["allow_shorts"]:
+        return []
+
     signals: List[Dict[str, Any]] = []
 
     for i in range(0, len(symbols), batch_size):
@@ -255,7 +348,7 @@ async def scan_market(batch_delay: float = 0.2, batch_size: int = 5) -> List[Dic
             if not klines:
                 continue
 
-            signal = await _prepare_signal(symbol, klines)
+            signal = await _prepare_signal(symbol, klines, btc_ctx)
             if signal:
                 signals.append(signal)
 

@@ -1,7 +1,18 @@
+import asyncio
+import time
 from statistics import mean
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+import aiohttp
 
 from binance_client import Candle
+
+BINANCE_FAPI_BASE = "https://fapi.binance.com/fapi/v1"
+OI_HISTORY_ENDPOINT = "https://fapi.binance.com/futures/data/openInterestHist"
+
+MIN_WHALE_TRADE_USD = 100_000
+STRONG_WHALE_TRADE_USD = 300_000
+MEGA_WHALE_TRADE_USD = 1_000_000
 
 
 def _pivot_highs_lows(candles: List[Candle], left: int = 2, right: int = 2) -> tuple[list[Tuple[int, float]], list[Tuple[int, float]]]:
@@ -261,21 +272,113 @@ def is_bb_extreme_reversal(
         return last.high > last_upper and last.close < last_upper
 
 
+async def _of_fetch_json(session: aiohttp.ClientSession, url: str, params: Dict[str, Any]):
+    try:
+        async with session.get(url, params=params, timeout=10) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+    except Exception:
+        return None
+
+
+async def _of_fetch_agg_trades(session: aiohttp.ClientSession, symbol: str, start_ms: int, end_ms: int):
+    params = {
+        "symbol": symbol,
+        "startTime": start_ms,
+        "endTime": end_ms,
+        "limit": 1000,
+    }
+    return await _of_fetch_json(session, f"{BINANCE_FAPI_BASE}/aggTrades", params)
+
+
+async def _of_fetch_oi_history(session: aiohttp.ClientSession, symbol: str):
+    params = {
+        "symbol": symbol,
+        "period": "5m",
+        "limit": 3,
+    }
+    return await _of_fetch_json(session, OI_HISTORY_ENDPOINT, params)
+
+
 async def analyze_orderflow(symbol: str) -> Dict[str, bool]:
     """
-    Заглушка под ордерфлоу/китов.
-
-    Codex: реализовать здесь анализ ордерфлоу с Binance futures:
-      - дисбаланс taker buy / taker sell за последние N минут
-      - крупные сделки (whales) по объёму
-      - изменение open interest, funding и т.д.
-
-    Пока возвращаем нейтральные значения, чтобы код работал без реализации.
+    Анализирует ордерфлоу по Binance Futures, оценивая дисбаланс агрессоров,
+    активность крупных сделок и динамику OI.
     """
+
+    now_ms = int(time.time() * 1000)
+    start_ms = now_ms - 15 * 60 * 1000
+
+    async with aiohttp.ClientSession() as session:
+        trades_task = asyncio.create_task(_of_fetch_agg_trades(session, symbol, start_ms, now_ms))
+        oi_task = asyncio.create_task(_of_fetch_oi_history(session, symbol))
+        trades, oi_hist = await asyncio.gather(trades_task, oi_task)
+
+    if not trades:
+        return {
+            "orderflow_bullish": False,
+            "orderflow_bearish": False,
+            "whale_activity": False,
+        }
+
+    taker_buy_quote = 0.0
+    taker_sell_quote = 0.0
+    whale_buy_usd = 0.0
+    whale_sell_usd = 0.0
+
+    for tr in trades:
+        try:
+            price = float(tr.get("p", 0.0))
+            qty = float(tr.get("q", 0.0))
+            usd_value = price * qty
+            is_buyer_maker = bool(tr.get("m"))
+        except Exception:
+            continue
+
+        if usd_value >= MIN_WHALE_TRADE_USD:
+            if is_buyer_maker:
+                whale_sell_usd += usd_value
+            else:
+                whale_buy_usd += usd_value
+
+        if is_buyer_maker:
+            taker_sell_quote += usd_value
+        else:
+            taker_buy_quote += usd_value
+
+    orderflow_imbalance_pct = 0.0
+    total_flow = taker_buy_quote + taker_sell_quote
+    if total_flow > 0:
+        orderflow_imbalance_pct = (taker_buy_quote - taker_sell_quote) / total_flow * 100
+
+    oi_change_pct = 0.0
+    if oi_hist and len(oi_hist) >= 2:
+        try:
+            first_oi = float(oi_hist[0]["sumOpenInterest"])
+            last_oi = float(oi_hist[-1]["sumOpenInterest"])
+            if first_oi > 0:
+                oi_change_pct = (last_oi - first_oi) / first_oi * 100
+        except Exception:
+            oi_change_pct = 0.0
+
+    whale_activity = (whale_buy_usd + whale_sell_usd) >= STRONG_WHALE_TRADE_USD
+
+    orderflow_bullish = (
+        whale_buy_usd > whale_sell_usd
+        and orderflow_imbalance_pct >= 20
+        and oi_change_pct >= 3
+    )
+
+    orderflow_bearish = (
+        whale_sell_usd > whale_buy_usd
+        and orderflow_imbalance_pct <= -20
+        and oi_change_pct <= -3
+    )
+
     return {
-        "orderflow_bullish": False,
-        "orderflow_bearish": False,
-        "whale_activity": False,
+        "orderflow_bullish": orderflow_bullish,
+        "orderflow_bearish": orderflow_bearish,
+        "whale_activity": whale_activity,
     }
 
 

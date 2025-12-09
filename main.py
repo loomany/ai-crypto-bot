@@ -3,7 +3,7 @@ import os
 import sqlite3
 import time
 from contextlib import suppress
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Tuple
 
 from aiogram import Bot, Dispatcher, F
@@ -82,6 +82,27 @@ def ai_signals_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
+# ===== ВРЕМЯ ТОРГОВ =====
+
+ALMATY_TZ = timezone(timedelta(hours=5))
+
+
+def is_trading_time() -> bool:
+    """
+    Возвращает True, если сейчас можно отправлять новые сигналы.
+    Правила:
+      - Не торгуем в глубокую ночь: 02:00–08:00 по Алматы.
+      - Не торгуем в субботу и воскресенье.
+    """
+
+    now = datetime.now(ALMATY_TZ)
+    if now.weekday() >= 5:
+        return False
+    if 2 <= now.hour < 8:
+        return False
+    return True
+
+
 # ===== РАБОТА С ПОДПИСКАМИ =====
 
 
@@ -141,7 +162,7 @@ dp.include_router(whales_router)
 waiting_for_symbol: set[int] = set()
 signal_cache: Dict[Tuple[str, str, float, float], float] = {}
 LAST_SIGNALS: Dict[str, Dict[str, Any]] = {}
-COOLDOWN_PER_SYMBOL = 60 * 60 * 3  # 3 hours
+COOLDOWN_PER_SYMBOL = 60 * 60 * 2  # 2 hours
 ENTRY_DUP_THRESHOLD = 0.1  # percent
 
 DB_PATH = "ai_signals.db"
@@ -513,6 +534,10 @@ async def pump_worker(bot: Bot):
 
     while True:
         try:
+            if not is_trading_time():
+                await asyncio.sleep(10)
+                continue
+
             subscribers = get_pump_subscribers()
             if not subscribers:
                 await asyncio.sleep(15)
@@ -545,6 +570,10 @@ async def pump_worker(bot: Bot):
 async def signals_worker():
     while True:
         try:
+            if not is_trading_time():
+                await asyncio.sleep(AI_SCAN_INTERVAL)
+                continue
+
             signals = await scan_market()
             print("SCAN OK", len(signals))
             for signal in signals:
