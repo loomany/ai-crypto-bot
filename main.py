@@ -53,9 +53,14 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="📊 Анализ монеты"),
             KeyboardButton(text="🎯 AI-сигналы"),
         ],
-        [KeyboardButton(text="₿ BTC (intraday)")],
-        [KeyboardButton(text="🚀 Pump Detector")],
-        [KeyboardButton(text="🐳 Киты (ТОП-5)")],
+        [
+            KeyboardButton(text="₿ BTC (intraday)"),
+            KeyboardButton(text="🚀 Pump Detector"),
+        ],
+        [
+            KeyboardButton(text="🐳 Киты (ТОП-5)"),
+            # сюда потом можно добавить ещё одну кнопку, если появится новый модуль
+        ],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -273,8 +278,9 @@ async def open_btc_menu(message: Message):
     waiting_for_symbol.discard(message.chat.id)
     await message.answer(
         "BTC-модуль (интрадей) — только BTCUSDT:\n\n"
-        "• Разовый сигнал LONG/SHORT\n"
-        "• Автоуведомления раз в 15 минут\n\n"
+        "• Автоматические сигналы LONG/SHORT\n"
+        "• Сигнал приходит сразу, как только появляется сетап\n"
+        "• Горизонт сделок: внутри 24 часов\n\n"
         "Выбирай действие:",
         reply_markup=get_btc_main_keyboard(),
     )
