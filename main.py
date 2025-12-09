@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
 from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
@@ -692,7 +693,7 @@ async def fallback(message: Message):
 
 async def main():
     global bot
-    bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     print("Бот запущен!")
     init_db()
     signals_task = asyncio.create_task(signals_worker())
