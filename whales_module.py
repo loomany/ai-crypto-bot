@@ -129,7 +129,7 @@ async def whales_menu_command(message: Message, state: FSMContext):
     await message.answer(_whales_menu_text(), reply_markup=get_whales_keyboard())
 
 
-@router.message(F.text == "🐳 Киты (ТОП-5)")
+@router.message(F.text.startswith("🐳 Киты"))
 async def whales_menu_from_main_button(message: Message, state: FSMContext):
     """
     Обработка нажатия кнопки из главного меню (ReplyKeyboard).

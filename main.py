@@ -128,7 +128,7 @@ def list_subscriptions() -> List[int]:
 # ===== СОЗДАЁМ БОТА =====
 
 BOT_TOKEN = load_settings()
-bot = Bot(BOT_TOKEN)
+bot: Bot | None = None
 dp = Dispatcher()
 dp.include_router(btc_router)
 dp.include_router(whales_router)
@@ -473,6 +473,10 @@ async def send_signal_to_all(signal_dict: Dict[str, Any]):
     """
     Отправляет сигнал всем подписчикам без блокировки event loop.
     """
+    if bot is None:
+        print("[ai_signals] Bot is not initialized; skipping send.")
+        return
+
     subscribers = list_subscriptions()
     if not subscribers:
         return
@@ -687,6 +691,8 @@ async def fallback(message: Message):
 # ===== ТОЧКА ВХОДА =====
 
 async def main():
+    global bot
+    bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
     print("Бот запущен!")
     init_db()
     signals_task = asyncio.create_task(signals_worker())
