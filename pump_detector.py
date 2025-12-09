@@ -3,6 +3,8 @@ from typing import List, Dict, Any
 
 import aiohttp
 
+from binance_client import fetch_klines
+
 BINANCE_API = "https://api.binance.com"
 PUMP_1M_THRESHOLD = 2.5
 PUMP_5M_THRESHOLD = 5.0
@@ -295,3 +297,74 @@ def format_pump_message(signal: Dict[str, Any]) -> str:
         f"{_format_plan(signal)}"
     )
     return text
+
+
+async def generate_pump_alert(symbol: str) -> str | None:
+    """
+    Получает последние 1m свечи по символу и формирует текст алерта,
+    если обнаружен памп или дамп.
+
+    Использует тот же пороговый анализ, что и scan_pumps(), но работает
+    через binance_client.fetch_klines, чтобы использовать общую логику
+    получения данных.
+    """
+
+    klines = await fetch_klines(symbol, "1m", 25)
+    if len(klines) < 6:
+        return None
+
+    closes = [k.close for k in klines]
+    volumes = [k.volume for k in klines]
+
+    last_price = closes[-1]
+    price_1m = closes[-2]
+    price_5m = closes[-6]
+
+    change_1m = (last_price / price_1m - 1) * 100
+    change_5m = (last_price / price_5m - 1) * 100
+
+    volume_5m = sum(volumes[-5:])
+    avg_volume_1m = sum(volumes[:-5]) / max(1, len(volumes) - 5)
+    avg_volume_5m = avg_volume_1m * 5
+    if avg_volume_5m <= 0:
+        return None
+    volume_mul = volume_5m / avg_volume_5m
+
+    if last_price < MIN_PRICE_USDT:
+        return None
+
+    volume_5m_usdt = volume_5m * last_price
+    if volume_5m_usdt < MIN_VOLUME_5M_USDT:
+        return None
+
+    sig_type = None
+    if (
+        change_1m >= PUMP_1M_THRESHOLD
+        and change_5m >= PUMP_5M_THRESHOLD
+        and volume_mul >= PUMP_VOLUME_THRESHOLD
+    ):
+        sig_type = "pump"
+    elif (
+        change_1m <= -DUMP_1M_THRESHOLD
+        and change_5m <= -DUMP_5M_THRESHOLD
+        and volume_mul >= PUMP_VOLUME_THRESHOLD
+    ):
+        sig_type = "dump"
+
+    if not sig_type:
+        return None
+
+    signal = {
+        "symbol": symbol,
+        "price": last_price,
+        "change_1m": round(change_1m, 2),
+        "change_5m": round(change_5m, 2),
+        "volume_mul": round(volume_mul, 2),
+        "type": sig_type,
+        "detected_at": time.time(),
+    }
+
+    if not _remember_signal(signal):
+        return None
+
+    return format_pump_message(signal)
