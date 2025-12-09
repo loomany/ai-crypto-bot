@@ -129,21 +129,6 @@ async def whales_menu_command(message: Message, state: FSMContext):
     await message.answer(_whales_menu_text(), reply_markup=get_whales_keyboard())
 
 
-@router.message(F.text.startswith("🐳 Киты"))
-async def whales_menu_from_main_button(message: Message, state: FSMContext):
-    """
-    Обработка нажатия кнопки из главного меню (ReplyKeyboard).
-    Открываем то же самое меню, что и по /whales.
-    """
-    await whales_menu_command(message, state)
-
-
-@router.callback_query(F.data == "menu_whales")
-async def open_whales_menu_from_main(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await callback.message.answer(_whales_menu_text(), reply_markup=get_whales_keyboard())
-
-
 # ============================================================
 # ХЕНДЛЕРЫ ВКЛ/ВЫКЛ УВЕДОМЛЕНИЙ ПО КИТАМ
 # ============================================================
