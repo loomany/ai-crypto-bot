@@ -15,6 +15,7 @@ from aiogram.types import (
     KeyboardButton,
 )
 from aiogram.fsm.context import FSMContext
+from health import mark_tick, mark_ok, mark_error
 
 # ============================================================
 # НАСТРОЙКИ МОДУЛЯ КИТОВ
@@ -481,6 +482,7 @@ async def whales_realtime_worker(bot):
     while True:
         try:
             user_ids = whales_storage.get_all_whales_users()
+            mark_tick("whales", extra=f"подписчиков: {len(user_ids)}")
             if not user_ids:
                 await asyncio.sleep(5)
                 continue
@@ -489,6 +491,8 @@ async def whales_realtime_worker(bot):
                 signal = await analyze_whales(symbol)
                 if signal is None:
                     continue
+
+                mark_ok("whales", extra=f"{symbol}: side={signal.side}, prob={signal.probability:.0f}")
 
                 # защита от однотипного спама:
                 last_side = last_signals.get(symbol)
@@ -507,7 +511,9 @@ async def whales_realtime_worker(bot):
                         continue
 
         except Exception as e:
-            print(f"[whales_realtime_worker] error: {e}")
+            msg = f"error: {e}"
+            print(f"[whales_realtime_worker] {msg}")
+            mark_error("whales", msg)
 
         # Пауза между проходами по монетам.
         # Codex может тюнить (2–10 секунд).

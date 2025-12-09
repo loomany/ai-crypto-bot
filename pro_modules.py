@@ -9,6 +9,7 @@ from aiogram import Bot
 from trading_core import analyze_orderflow
 from ai_patterns import analyze_ai_patterns
 from market_regime import get_market_regime
+from health import mark_tick, mark_ok, mark_error
 
 router = Router(name="pro_modules")
 
@@ -166,6 +167,7 @@ async def orderflow_pro_worker(bot: Bot):
     while True:
         try:
             user_ids = pro_storage.users_for_orderflow()
+            mark_tick("orderflow", extra=f"подписчиков: {len(user_ids)}")
             if not user_ids:
                 await asyncio.sleep(10)
                 continue
@@ -192,6 +194,8 @@ async def orderflow_pro_worker(bot: Bot):
                     continue
                 last_side[symbol] = side
 
+                mark_ok("orderflow", extra=f"{symbol}: side={side}")
+
                 reason = ", ".join(reason_parts) if reason_parts else "сильный дисбаланс ордерфлоу"
                 text = (
                     f"📊 Orderflow PRO — {symbol}\n\n"
@@ -207,7 +211,9 @@ async def orderflow_pro_worker(bot: Bot):
                         continue
 
         except Exception as e:
-            print(f"[orderflow_pro_worker] error: {e}")
+            msg = f"error: {e}"
+            print(f"[orderflow_pro_worker] {msg}")
+            mark_error("orderflow", msg)
 
         await asyncio.sleep(5)
 
@@ -227,11 +233,13 @@ async def smart_money_worker(bot: Bot):
     while True:
         try:
             user_ids = pro_storage.users_for_smart_money()
+            mark_tick("smart_money", extra=f"подписчиков: {len(user_ids)}")
             if not user_ids:
                 await asyncio.sleep(30)
                 continue
 
             signals = []  # Codex: заменить на реальный вызов on-chain сканера
+            mark_ok("smart_money", extra=f"сигналов: {len(signals)}")
 
             for sig in signals:
                 symbol = sig["symbol"]
@@ -257,7 +265,9 @@ async def smart_money_worker(bot: Bot):
                         continue
 
         except Exception as e:
-            print(f"[smart_money_worker] error: {e}")
+            msg = f"error: {e}"
+            print(f"[smart_money_worker] {msg}")
+            mark_error("smart_money", msg)
 
         await asyncio.sleep(60)
 
@@ -277,6 +287,7 @@ async def ai_patterns_worker(bot: Bot):
     while True:
         try:
             user_ids = pro_storage.users_for_ai_patterns()
+            mark_tick("ai_patterns", extra=f"подписчиков: {len(user_ids)}")
             if not user_ids:
                 await asyncio.sleep(30)
                 continue
@@ -296,6 +307,11 @@ async def ai_patterns_worker(bot: Bot):
 
                 if strength < 70 or not direction or not name:
                     continue
+
+                mark_ok(
+                    "ai_patterns",
+                    extra=f"{symbol}: {name} strength={strength}/trend={direction}",
+                )
 
                 signature = f"{direction}:{name}"
                 if last_pattern.get(symbol) == signature:
@@ -318,7 +334,9 @@ async def ai_patterns_worker(bot: Bot):
                         continue
 
         except Exception as e:
-            print(f"[ai_patterns_worker] error: {e}")
+            msg = f"error: {e}"
+            print(f"[ai_patterns_worker] {msg}")
+            mark_error("ai_patterns", msg)
 
         await asyncio.sleep(60)
 
@@ -334,6 +352,7 @@ async def market_regime_worker(bot: Bot):
     while True:
         try:
             user_ids = pro_storage.users_for_market_regime()
+            mark_tick("regime", extra=f"подписчиков: {len(user_ids)}")
             if not user_ids:
                 await asyncio.sleep(60 * 30)
                 continue
@@ -341,6 +360,7 @@ async def market_regime_worker(bot: Bot):
             info = await get_market_regime()
             regime = info.get("regime", "neutral")
             desc = info.get("description", "")
+            mark_ok("regime", extra=f"режим={regime}")
             if regime == last_regime:
                 await asyncio.sleep(60 * 30)
                 continue
@@ -362,6 +382,8 @@ async def market_regime_worker(bot: Bot):
                     continue
 
         except Exception as e:
-            print(f"[market_regime_worker] error: {e}")
+            msg = f"error: {e}"
+            print(f"[market_regime_worker] {msg}")
+            mark_error("regime", msg)
 
         await asyncio.sleep(60 * 60)
