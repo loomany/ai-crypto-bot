@@ -38,6 +38,15 @@ from pump_detector import scan_pumps, format_pump_message
 from pump_db import add_pump_subscriber, remove_pump_subscriber, get_pump_subscribers
 from signals import scan_market
 from health import MODULES, mark_tick, mark_ok, mark_error
+from signal_filter import (
+    init_filter_table,
+    set_user_filter,
+    get_user_filter,
+    ai_min_score,
+    btc_min_probability,
+    whales_min_probability,
+    pumps_min_strength,
+)
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -68,6 +77,9 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="🐳 Киты (ТОП-5)"),
             KeyboardButton(text="🧠 PRO-модули"),
         ],
+        [
+            KeyboardButton(text="⚙️ Фильтр сигналов"),
+        ],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -85,6 +97,23 @@ def ai_signals_keyboard() -> ReplyKeyboardMarkup:
     kb = [
         [KeyboardButton(text="🔔 Включить авто-сигналы")],
         [KeyboardButton(text="🚫 Отключить авто-сигналы")],
+        [KeyboardButton(text="⬅️ Главное меню")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+
+def signal_filter_keyboard(current: str | None = None) -> ReplyKeyboardMarkup:
+    postfix = {
+        "aggressive": " (текущий)",
+        "normal": " (текущий)",
+        "strict": " (текущий)",
+    }
+    cur = current or "normal"
+
+    kb = [
+        [KeyboardButton(text="🔥 Больше сетапов" + (postfix["aggressive"] if cur == "aggressive" else ""))],
+        [KeyboardButton(text="🎯 Сбалансированный" + (postfix["normal"] if cur == "normal" else ""))],
+        [KeyboardButton(text="🧊 Только топ-сигналы" + (postfix["strict"] if cur == "strict" else ""))],
         [KeyboardButton(text="⬅️ Главное меню")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -123,6 +152,8 @@ def init_db():
         conn.commit()
     finally:
         conn.close()
+
+    init_filter_table()
 
 
 def add_subscription(chat_id: int) -> bool:
@@ -256,6 +287,50 @@ async def ai_signals_unsubscribe(message: Message):
         await message.answer(
             "У тебя не было активной подписки.", reply_markup=ai_signals_keyboard()
         )
+
+
+@dp.message(F.text == "⚙️ Фильтр сигналов")
+async def open_filter_menu(message: Message):
+    level = get_user_filter(message.chat.id)
+    text = (
+        "⚙️ Настройка фильтра сигналов\n\n"
+        "Выбери режим, насколько жёстко фильтровать авто-сигналы:\n\n"
+        "🔥 Больше сетапов — больше сделок, но качество чуть ниже.\n"
+        "🎯 Сбалансированный — режим по умолчанию.\n"
+        "🧊 Только топ-сигналы — мало, но самые сильные сетапы.\n\n"
+        "Режим влияет на AI-сигналы, BTC-модуль, Pump Detector и Китов."
+    )
+    await message.answer(text, reply_markup=signal_filter_keyboard(current=level))
+
+
+@dp.message(F.text.startswith("🔥 Больше сетапов"))
+async def set_filter_aggressive(message: Message):
+    set_user_filter(message.chat.id, "aggressive")
+    await message.answer(
+        "🔥 Режим фильтра: БОЛЬШЕ СЕТАПОВ.\n\n"
+        "Сигналов будет больше, но они чуть агрессивнее.",
+        reply_markup=signal_filter_keyboard(current="aggressive"),
+    )
+
+
+@dp.message(F.text.startswith("🎯 Сбалансированный"))
+async def set_filter_normal(message: Message):
+    set_user_filter(message.chat.id, "normal")
+    await message.answer(
+        "🎯 Режим фильтра: СБАЛАНСИРОВАННЫЙ.\n\n"
+        "Стандартный баланс между количеством и качеством сигналов.",
+        reply_markup=signal_filter_keyboard(current="normal"),
+    )
+
+
+@dp.message(F.text.startswith("🧊 Только топ-сигналы"))
+async def set_filter_strict(message: Message):
+    set_user_filter(message.chat.id, "strict")
+    await message.answer(
+        "🧊 Режим фильтра: ТОЛЬКО ТОП-СИГНАЛЫ.\n\n"
+        "Будем присылать только самые сильные сетапы.",
+        reply_markup=signal_filter_keyboard(current="strict"),
+    )
 
 
 @dp.message(F.text == "🚀 Pump Detector")
@@ -534,12 +609,19 @@ async def send_signal_to_all(signal_dict: Dict[str, Any]):
     text = _format_signal(signal_dict)
 
     tasks = []
+    recipients: list[int] = []
     for chat_id in subscribers:
+        level = get_user_filter(chat_id)
+        min_score = ai_min_score(level)
+        if signal_dict.get("score", 0) < min_score:
+            continue
+
+        recipients.append(chat_id)
         tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
 
     # Выполняем отправки параллельно и логируем ошибки
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    for chat_id, res in zip(subscribers, results):
+    for chat_id, res in zip(recipients, results):
         if isinstance(res, Exception):
             print(f"[ai_signals] Failed to send to {chat_id}: {res}")
 
@@ -568,10 +650,18 @@ async def pump_worker(bot: Bot):
                 if last_sent.get(symbol) == now_min:
                     continue
 
-                last_sent[symbol] = now_min
                 text = format_pump_message(sig)
 
+                # ФИЛЬТР ПО СИЛЕ ПАМПА
+                strength = float(sig.get("strength", 0.0))
+
                 for chat_id in subscribers:
+                    level = get_user_filter(chat_id)
+                    min_strength = pumps_min_strength(level)
+                    if strength < min_strength:
+                        continue
+
+                    last_sent[symbol] = now_min
                     try:
                         await bot.send_message(chat_id, text, parse_mode="Markdown")
                     except Exception:
@@ -593,7 +683,7 @@ async def signals_worker():
             mark_ok("ai_signals", extra=f"кандидатов: {len(signals)}")
             print("SCAN OK", len(signals))
             for signal in signals:
-                if signal.get("score", 0) < 90:
+                if signal.get("score", 0) < ai_min_score("aggressive"):
                     continue
                 if not _is_new_ai_signal(signal):
                     print(

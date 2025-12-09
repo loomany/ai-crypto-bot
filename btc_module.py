@@ -33,6 +33,7 @@ from trading_core import (
     compute_score,
 )
 from health import mark_tick, mark_ok, mark_error
+from signal_filter import get_user_filter, btc_min_probability
 
 # ============================================================
 # Константы и базовые настройки
@@ -233,6 +234,10 @@ async def btc_realtime_signal_worker(bot):
 
                         for user_id in user_ids:
                             try:
+                                level = get_user_filter(user_id)
+                                min_prob = btc_min_probability(level)
+                                if int(signal.probability or 0) < min_prob:
+                                    continue
                                 await bot.send_message(chat_id=user_id, text=text)
                             except Exception:
                                 continue
