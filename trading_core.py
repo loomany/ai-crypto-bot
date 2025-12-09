@@ -1,18 +1,41 @@
-import asyncio
 import time
 from statistics import mean
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import aiohttp
 
 from binance_client import Candle
 
-BINANCE_FAPI_BASE = "https://fapi.binance.com/fapi/v1"
-OI_HISTORY_ENDPOINT = "https://fapi.binance.com/futures/data/openInterestHist"
+# ==============================
+# Binance Futures (Orderflow)
+# ==============================
 
-MIN_WHALE_TRADE_USD = 100_000
-STRONG_WHALE_TRADE_USD = 300_000
-MEGA_WHALE_TRADE_USD = 1_000_000
+BINANCE_FAPI_BASE = "https://fapi.binance.com"
+
+AGG_TRADES_ENDPOINT = f"{BINANCE_FAPI_BASE}/fapi/v1/aggTrades"
+OI_HISTORY_ENDPOINT = f"{BINANCE_FAPI_BASE}/futures/data/openInterestHist"
+
+# Пороги для "китов" и дисбаланса
+MIN_WHALE_TRADE_USD = 100_000      # сделка от 100k$ считается крупной
+STRONG_IMBALANCE_PCT = 15.0        # от 15% перекоса считаем сильный дисбаланс
+STRONG_OI_CHANGE_PCT = 1.0         # от 1% изменения OI считаем значимым
+MEGA_WHALE_TRADE_USD = 300_000     # для флага whale_activity
+
+
+async def _fetch_futures_json(url: str, params: Dict) -> Optional[Dict]:
+    """
+    Универсальный helper для запросов к Binance Futures.
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, timeout=10) as resp:
+                resp.raise_for_status()
+                return await resp.json()
+    except Exception as e:
+        # Если что-то упало — просто пишем в лог и возвращаем None,
+        # чтобы не ломать весь бот.
+        print(f"[analyze_orderflow] fetch error {url}: {e}")
+        return None
 
 
 def _pivot_highs_lows(candles: List[Candle], left: int = 2, right: int = 2) -> tuple[list[Tuple[int, float]], list[Tuple[int, float]]]:
@@ -272,51 +295,119 @@ def is_bb_extreme_reversal(
         return last.high > last_upper and last.close < last_upper
 
 
-async def _of_fetch_json(session: aiohttp.ClientSession, url: str, params: Dict[str, Any]):
-    try:
-        async with session.get(url, params=params, timeout=10) as resp:
-            resp.raise_for_status()
-            return await resp.json()
-    except Exception:
-        return None
+async def analyze_orderflow(symbol: str) -> Dict[str, bool]:
+    """
+    Реальный анализ ордерфлоу по Binance Futures для symbol (например, BTCUSDT).
 
+    Что считаем:
+    - taker buy / taker sell объём (USDT) за последние 5 минут
+    - дисбаланс в % между покупками и продажами
+    - изменение Open Interest за ~15 минут
+    - наличие очень крупных сделок (whales)
 
-async def _of_fetch_agg_trades(session: aiohttp.ClientSession, symbol: str, start_ms: int, end_ms: int):
-    params = {
+    Возвращаем:
+    {
+        "orderflow_bullish": True/False,
+        "orderflow_bearish": True/False,
+        "whale_activity": True/False,
+    }
+    """
+
+    now_ms = int(time.time() * 1000)
+    # смотрим последние 5 минут сделок
+    start_ms = now_ms - 5 * 60 * 1000
+
+    # 1) Трейды (aggTrades) для расчёта ордерфлоу и китов
+    trades_params = {
         "symbol": symbol,
         "startTime": start_ms,
-        "endTime": end_ms,
+        "endTime": now_ms,
         "limit": 1000,
     }
-    return await _of_fetch_json(session, f"{BINANCE_FAPI_BASE}/aggTrades", params)
+    trades = await _fetch_futures_json(AGG_TRADES_ENDPOINT, trades_params)
 
-
-async def _of_fetch_oi_history(session: aiohttp.ClientSession, symbol: str):
-    params = {
+    # 2) История Open Interest за 3 последних интервала 5m
+    oi_params = {
         "symbol": symbol,
         "period": "5m",
         "limit": 3,
     }
-    return await _of_fetch_json(session, OI_HISTORY_ENDPOINT, params)
+    oi_hist = await _fetch_futures_json(OI_HISTORY_ENDPOINT, oi_params)
 
+    taker_buy_quote = 0.0
+    taker_sell_quote = 0.0
+    max_trade_usd = 0.0
 
-async def analyze_orderflow(symbol: str) -> Dict[str, bool]:
-    """
-    Анализ ордерфлоу (дисбаланс taker buy / taker sell, киты и т.д.).
+    if trades:
+        for tr in trades:
+            try:
+                price = float(tr.get("p", 0.0))
+                qty = float(tr.get("q", 0.0))
+                usd_value = price * qty
+                max_trade_usd = max(max_trade_usd, usd_value)
 
-    Codex:
-      - реализовать через Binance Futures API:
-          * /fapi/v1/aggTrades
-          * /fapi/v1/klines
-          * /futures/data/openInterestHist
-          * /fapi/v1/premiumIndex (funding)
-      - вернуть флаги:
-          orderflow_bullish, orderflow_bearish, whale_activity
-    """
+                # m = isBuyerMaker:
+                # True  -> сделка инициирована SELL (taker sell) → объём в sell
+                # False -> сделка инициирована BUY (taker buy) → объём в buy
+                is_buyer_maker = bool(tr.get("m"))
+                if is_buyer_maker:
+                    taker_sell_quote += usd_value
+                else:
+                    taker_buy_quote += usd_value
+            except Exception:
+                continue
+
+    total_flow = taker_buy_quote + taker_sell_quote
+    orderflow_imbalance_pct = 0.0
+    if total_flow > 0:
+        orderflow_imbalance_pct = (taker_buy_quote - taker_sell_quote) / total_flow * 100.0
+
+    # 3) Изменение Open Interest в %
+    oi_change_pct = 0.0
+    if oi_hist and isinstance(oi_hist, list) and len(oi_hist) >= 2:
+        try:
+            first_oi = float(oi_hist[0]["sumOpenInterest"])
+            last_oi = float(oi_hist[-1]["sumOpenInterest"])
+            if first_oi > 0:
+                oi_change_pct = (last_oi - first_oi) / first_oi * 100.0
+        except Exception:
+            oi_change_pct = 0.0
+
+    # 4) Логика сигналов
+
+    orderflow_bullish = False
+    orderflow_bearish = False
+
+    # Бычий ордерфлоу:
+    # - сильный перекос в сторону taker buy
+    # - OI растёт (открывают новые позиции в направлении движения)
+    if (
+        orderflow_imbalance_pct >= STRONG_IMBALANCE_PCT
+        and oi_change_pct >= STRONG_OI_CHANGE_PCT
+    ):
+        orderflow_bullish = True
+
+    # Медвежий ордерфлоу:
+    # - сильный перекос в сторону taker sell
+    # - OI падает (массово закрывают/шортят)
+    if (
+        orderflow_imbalance_pct <= -STRONG_IMBALANCE_PCT
+        and oi_change_pct <= -STRONG_OI_CHANGE_PCT
+    ):
+        orderflow_bearish = True
+
+    # Флаг китовой активности:
+    # либо есть очень крупные сделки, либо сильное движение OI
+    whale_activity = (
+        max_trade_usd >= MIN_WHALE_TRADE_USD
+        or abs(oi_change_pct) >= 3.0
+        or max_trade_usd >= MEGA_WHALE_TRADE_USD
+    )
+
     return {
-        "orderflow_bullish": False,
-        "orderflow_bearish": False,
-        "whale_activity": False,
+        "orderflow_bullish": orderflow_bullish,
+        "orderflow_bearish": orderflow_bearish,
+        "whale_activity": whale_activity,
     }
 
 
