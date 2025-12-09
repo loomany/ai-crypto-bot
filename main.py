@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import SkipHandler
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import (
     Message,
@@ -690,6 +691,30 @@ async def process_symbol(message: Message):
 
 @dp.message()
 async def fallback(message: Message):
+    known_buttons = {
+        "📊 Анализ монеты",
+        "🎯 AI-сигналы",
+        "₿ BTC (intraday)",
+        "🚀 Pump Detector",
+        "🐳 Киты (ТОП-5)",
+        "🔔 Включить авто-сигналы",
+        "🚫 Отключить авто-сигналы",
+        "🔔 Включить авто-пампы",
+        "🚫 Отключить авто-пампы",
+        "⬅️ Назад в главное меню",
+        "⬅️ Главное меню",
+        "🔔 Включить уведомления по BTC",
+        "🚫 Отключить уведомления по BTC",
+        "🐳 Включить уведомления по китам",
+        "🐳 Отключить уведомления по китам",
+    }
+
+    if message.text in known_buttons:
+        raise SkipHandler()
+
+    if message.chat.id in waiting_for_symbol:
+        raise SkipHandler()
+
     await message.answer("Нажми кнопку в меню — пока я понимаю только их.")
 
 
