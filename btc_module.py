@@ -10,6 +10,8 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
 )
 from aiogram.fsm.context import FSMContext
 
@@ -428,25 +430,19 @@ def compute_score(context: Dict) -> int:
 # Клавиатура (только уведомления)
 # ============================================================
 
-def get_btc_main_keyboard() -> InlineKeyboardMarkup:
+def get_btc_main_keyboard() -> ReplyKeyboardMarkup:
     """
-    Меню BTC:
-    - Включить уведомление
-    - Отключить уведомление
+    Нижнее меню BTC:
+    - Включить уведомления по BTC
+    - Отключить уведомления по BTC
+    - Назад в главное меню
     """
     kb = [
-        [
-            InlineKeyboardButton(
-                text="Включить уведомление", callback_data="btc_notify_on"
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="Отключить уведомление", callback_data="btc_notify_off"
-            ),
-        ],
+        [KeyboardButton(text="🔔 Включить уведомления по BTC")],
+        [KeyboardButton(text="🚫 Отключить уведомления по BTC")],
+        [KeyboardButton(text="⬅️ Главное меню")],
     ]
-    return InlineKeyboardMarkup(inline_keyboard=kb)
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
 # ============================================================
@@ -472,28 +468,28 @@ async def btc_menu_command(message: Message, state: FSMContext):
 # Хендлеры включения / отключения уведомлений
 # ============================================================
 
-@router.callback_query(F.data == "btc_notify_on")
-async def handle_btc_notify_on(callback: CallbackQuery):
-    await callback.answer()
-
-    user_id = callback.from_user.id
+@router.message(F.text == "🔔 Включить уведомления по BTC")
+async def handle_btc_notify_on_message(message: Message):
+    user_id = message.from_user.id
     storage.set_notifications(user_id, True)
 
-    await callback.message.answer(
+    await message.answer(
         "✅ Уведомления по BTC включены.\n\n"
         "Бот будет автоматически присылать сигналы LONG/SHORT по BTCUSDT, "
-        "как только появляется новый сильный сетап (интрадей, внутри 24 часов)."
+        "как только появляется новый сильный сетап (интрадей, внутри 24 часов).",
+        reply_markup=get_btc_main_keyboard(),
     )
 
 
-@router.callback_query(F.data == "btc_notify_off")
-async def handle_btc_notify_off(callback: CallbackQuery):
-    await callback.answer()
-
-    user_id = callback.from_user.id
+@router.message(F.text == "🚫 Отключить уведомления по BTC")
+async def handle_btc_notify_off_message(message: Message):
+    user_id = message.from_user.id
     storage.set_notifications(user_id, False)
 
-    await callback.message.answer("❌ Уведомления по BTC отключены.")
+    await message.answer(
+        "❌ Уведомления по BTC отключены.",
+        reply_markup=get_btc_main_keyboard(),
+    )
 
 
 # ============================================================
