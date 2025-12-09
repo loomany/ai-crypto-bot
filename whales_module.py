@@ -11,6 +11,8 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
 )
 from aiogram.fsm.context import FSMContext
 
@@ -103,6 +105,21 @@ def get_whales_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
+def get_whales_reply_keyboard() -> ReplyKeyboardMarkup:
+    """
+    Нижняя панель для модуля китов:
+    - Включить уведомления
+    - Отключить уведомления
+    - Назад в главное меню
+    """
+    kb = [
+        [KeyboardButton(text="🐳 Включить уведомления по китам")],
+        [KeyboardButton(text="🐳 Отключить уведомления по китам")],
+        [KeyboardButton(text="⬅️ Главное меню")],  # обработчик уже есть в main.py
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+
 # ============================================================
 # КОМАНДА /whales — вход в меню китов
 # ============================================================
@@ -126,7 +143,12 @@ async def whales_menu_command(message: Message, state: FSMContext):
     """
     Команда /whales — управление сигналами по крупным китам (ТОП-5 монет).
     """
-    await message.answer(_whales_menu_text(), reply_markup=get_whales_keyboard())
+    await message.answer(_whales_menu_text(), reply_markup=get_whales_reply_keyboard())
+
+
+@router.message(F.text.startswith("🐳 Киты"))
+async def whales_menu_from_main_button(message: Message, state: FSMContext):
+    await whales_menu_command(message, state)
 
 
 # ============================================================
@@ -162,6 +184,33 @@ async def handle_whales_notify_off(callback: CallbackQuery):
         "Ты всегда можешь снова включить их командой /whales."
     )
 
+
+@router.message(F.text == "🐳 Включить уведомления по китам")
+async def whales_notify_on_message(message: Message):
+    user_id = message.from_user.id
+    whales_storage.set_whales_notify(user_id, True)
+
+    await message.answer(
+        "✅ Уведомления по КИТАМ включены.\n\n"
+        "Теперь ты будешь получать сигналы, когда крупные игроки:\n"
+        "• Массово ПОКУПАЮТ или ПРОДАЮТ BTC, ETH, SOL, BNB, XRP\n"
+        "• Сильно меняют Open Interest\n"
+        "• Формируют мощный перекос ордерфлоу.\n\n"
+        "Используй это как фильтр: не лезь против китов.",
+        reply_markup=get_whales_reply_keyboard(),
+    )
+
+
+@router.message(F.text == "🐳 Отключить уведомления по китам")
+async def whales_notify_off_message(message: Message):
+    user_id = message.from_user.id
+    whales_storage.set_whales_notify(user_id, False)
+
+    await message.answer(
+        "❌ Уведомления по КИТАМ отключены.\n\n"
+        "Ты всегда можешь снова включить их командой /whales или кнопкой в меню.",
+        reply_markup=get_whales_reply_keyboard(),
+    )
 
 # ============================================================
 # УТИЛИТЫ ДЛЯ РАБОТЫ С BINANCE FUTURES
