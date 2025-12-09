@@ -130,8 +130,12 @@ async def whales_menu_command(message: Message, state: FSMContext):
 
 
 @router.message(F.text == "🐳 Киты (ТОП-5)")
-async def whales_menu_button(message: Message, state: FSMContext):
-    await message.answer(_whales_menu_text(), reply_markup=get_whales_keyboard())
+async def whales_menu_from_main_button(message: Message, state: FSMContext):
+    """
+    Обработка нажатия кнопки из главного меню (ReplyKeyboard).
+    Открываем то же самое меню, что и по /whales.
+    """
+    await whales_menu_command(message, state)
 
 
 @router.callback_query(F.data == "menu_whales")
