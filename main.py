@@ -25,6 +25,7 @@ from btc_module import (
 from whales_module import (
     router as whales_router,
     whales_realtime_worker,
+    get_whales_keyboard,
 )
 from market_data import get_coin_analysis
 from pump_detector import scan_pumps, format_pump_message
@@ -276,6 +277,24 @@ async def open_btc_menu(message: Message):
         "• Автоуведомления раз в 15 минут\n\n"
         "Выбирай действие:",
         reply_markup=get_btc_main_keyboard(),
+    )
+
+
+@dp.message(F.text == "🐳 Киты (ТОП-5)")
+async def open_whales_menu(message: Message):
+    """
+    Открываем меню китов из главного меню (ReplyKeyboard).
+    """
+    await message.answer(
+        "🐳 Модуль КИТОВ (ордерфлоу, крупные сделки, OI, CVD)\n\n"
+        "Монеты: BTC, ETH, SOL, BNB, XRP\n"
+        "Бот будет присылать сигналы, когда крупные игроки массово ВХОДЯТ или ВЫХОДЯТ из этих монет.\n\n"
+        "Это помогает:\n"
+        "• Видеть, куда заходит крупный капитал\n"
+        "• Раньше замечать начало тренда или разворот\n"
+        "• Не заходить против китов\n\n"
+        "Выбери действие:",
+        reply_markup=get_whales_keyboard(),
     )
 
 
