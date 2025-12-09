@@ -107,12 +107,9 @@ def get_whales_keyboard() -> InlineKeyboardMarkup:
 # КОМАНДА /whales — вход в меню китов
 # ============================================================
 
-@router.message(F.text == "/whales")
-async def whales_menu_command(message: Message, state: FSMContext):
-    """
-    Команда /whales — управление сигналами по крупным китам (ТОП-5 монет).
-    """
-    await message.answer(
+
+def _whales_menu_text() -> str:
+    return (
         "🐳 Модуль КИТОВ (ордерфлоу, крупные сделки, OI, CVD)\n\n"
         "Монеты: BTC, ETH, SOL, BNB, XRP\n"
         "Бот будет присылать сигналы, когда крупные игроки массово ВХОДЯТ или ВЫХОДЯТ из этих монет.\n\n"
@@ -120,9 +117,27 @@ async def whales_menu_command(message: Message, state: FSMContext):
         "• Видеть, куда заходит крупный капитал\n"
         "• Раньше замечать начало тренда или разворот\n"
         "• Не заходить против китов\n\n"
-        "Выбери действие:",
-        reply_markup=get_whales_keyboard(),
+        "Выбери действие:"
     )
+
+
+@router.message(F.text == "/whales")
+async def whales_menu_command(message: Message, state: FSMContext):
+    """
+    Команда /whales — управление сигналами по крупным китам (ТОП-5 монет).
+    """
+    await message.answer(_whales_menu_text(), reply_markup=get_whales_keyboard())
+
+
+@router.message(F.text == "🐳 Киты (ТОП-5)")
+async def whales_menu_button(message: Message, state: FSMContext):
+    await message.answer(_whales_menu_text(), reply_markup=get_whales_keyboard())
+
+
+@router.callback_query(F.data == "menu_whales")
+async def open_whales_menu_from_main(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.answer(_whales_menu_text(), reply_markup=get_whales_keyboard())
 
 
 # ============================================================

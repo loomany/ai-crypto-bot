@@ -53,6 +53,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         ],
         [KeyboardButton(text="₿ BTC (intraday)")],
         [KeyboardButton(text="🚀 Pump Detector")],
+        [KeyboardButton(text="🐳 Киты (ТОП-5)")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
