@@ -5,7 +5,7 @@ DB_PATH = "ai_signals.db"
 
 FilterLevel = Literal["aggressive", "normal", "strict"]
 
-DEFAULT_LEVEL: FilterLevel = "normal"
+DEFAULT_LEVEL: FilterLevel = "aggressive"
 
 
 def _get_conn():
@@ -64,35 +64,35 @@ def get_user_filter(chat_id: int) -> FilterLevel:
 
 def ai_min_score(level: FilterLevel) -> int:
     # оценка сигнала из signals.py (field: score)
-    if level == "aggressive":
+    if level in ("aggressive", "normal"):
         return 80
     if level == "strict":
         return 94
-    return 90  # normal
+    return 80
 
 
 def btc_min_probability(level: FilterLevel) -> int:
     # probability из BTCSingal
-    if level == "aggressive":
+    if level in ("aggressive", "normal"):
         return 70
     if level == "strict":
         return 90
-    return 82  # normal
+    return 70
 
 
 def whales_min_probability(level: FilterLevel) -> int:
     # probability в WhaleSignal
-    if level == "aggressive":
+    if level in ("aggressive", "normal"):
         return 70
     if level == "strict":
         return 90
-    return 80
+    return 70
 
 
 def pumps_min_strength(level: FilterLevel) -> float:
     # Силу пампа Codex выберет сам (например, pct роста за 5–15м)
-    if level == "aggressive":
+    if level in ("aggressive", "normal"):
         return 7.0   # % или условная величина
     if level == "strict":
         return 15.0
-    return 10.0
+    return 7.0

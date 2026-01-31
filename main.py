@@ -36,13 +36,13 @@ from pro_modules import (
 from market_data import get_coin_analysis
 from pump_detector import scan_pumps, format_pump_message
 from pump_db import add_pump_subscriber, remove_pump_subscriber, get_pump_subscribers
-from signals import scan_market
+from signals import scan_market, get_alt_watch_symbol
+from market_regime import get_market_regime
 from health import MODULES, mark_tick, mark_ok, mark_error
 from signal_filter import (
     init_filter_table,
     set_user_filter,
     get_user_filter,
-    ai_min_score,
     btc_min_probability,
     whales_min_probability,
     pumps_min_strength,
@@ -105,15 +105,15 @@ def ai_signals_keyboard() -> ReplyKeyboardMarkup:
 def signal_filter_keyboard(current: str | None = None) -> ReplyKeyboardMarkup:
     postfix = {
         "aggressive": " (текущий)",
-        "normal": " (текущий)",
         "strict": " (текущий)",
     }
-    cur = current or "normal"
+    cur = current or "aggressive"
+    if cur == "normal":
+        cur = "aggressive"
 
     kb = [
-        [KeyboardButton(text="🔥 Больше сетапов" + (postfix["aggressive"] if cur == "aggressive" else ""))],
-        [KeyboardButton(text="🎯 Сбалансированный" + (postfix["normal"] if cur == "normal" else ""))],
-        [KeyboardButton(text="🧊 Только топ-сигналы" + (postfix["strict"] if cur == "strict" else ""))],
+        [KeyboardButton(text="🔥 Больше сетапов (FREE)" + (postfix["aggressive"] if cur == "aggressive" else ""))],
+        [KeyboardButton(text="🧊 Только топ-сигналы (PRO)" + (postfix["strict"] if cur == "strict" else ""))],
         [KeyboardButton(text="⬅️ Главное меню")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -200,10 +200,17 @@ dp.include_router(btc_router)
 dp.include_router(whales_router)
 dp.include_router(pro_router)
 waiting_for_symbol: set[int] = set()
-signal_cache: Dict[Tuple[str, str, float, float], float] = {}
-LAST_SIGNALS: Dict[str, Dict[str, Any]] = {}
-COOLDOWN_PER_SYMBOL = 60 * 60 * 2  # 2 hours
-ENTRY_DUP_THRESHOLD = 0.1  # percent
+FREE_MIN_SCORE = 85
+PRO_MIN_SCORE = 93
+COOLDOWN_FREE_SEC = 60 * 60 * 2
+COOLDOWN_PRO_SEC = 60 * 60 * 4
+MAX_SIGNALS_PER_CYCLE = 3
+MAX_BTC_PER_CYCLE = 1
+PULSE_INTERVAL_SEC = 60 * 60
+
+LAST_SENT_FREE: Dict[Tuple[str, str], float] = {}
+LAST_SENT_PRO: Dict[Tuple[str, str], float] = {}
+LAST_PULSE_SENT_AT = 0.0
 
 DB_PATH = "ai_signals.db"
 # Сканируем рынок каждые 30 секунд, чтобы рассылка была оперативной
@@ -292,12 +299,14 @@ async def ai_signals_unsubscribe(message: Message):
 @dp.message(F.text == "⚙️ Фильтр сигналов")
 async def open_filter_menu(message: Message):
     level = get_user_filter(message.chat.id)
+    if level == "normal":
+        set_user_filter(message.chat.id, "aggressive")
+        level = "aggressive"
     text = (
         "⚙️ Настройка фильтра сигналов\n\n"
         "Выбери режим, насколько жёстко фильтровать авто-сигналы:\n\n"
-        "🔥 Больше сетапов — больше сделок, но качество чуть ниже.\n"
-        "🎯 Сбалансированный — режим по умолчанию.\n"
-        "🧊 Только топ-сигналы — мало, но самые сильные сетапы.\n\n"
+        "🔥 Больше сетапов (FREE) — больше сделок, но качество чуть ниже.\n"
+        "🧊 Только топ-сигналы (PRO) — мало, но самые сильные сетапы.\n\n"
         "Режим влияет на AI-сигналы, BTC-модуль, Pump Detector и Китов."
     )
     await message.answer(text, reply_markup=signal_filter_keyboard(current=level))
@@ -307,19 +316,9 @@ async def open_filter_menu(message: Message):
 async def set_filter_aggressive(message: Message):
     set_user_filter(message.chat.id, "aggressive")
     await message.answer(
-        "🔥 Режим фильтра: БОЛЬШЕ СЕТАПОВ.\n\n"
+        "🔥 Режим фильтра: БОЛЬШЕ СЕТАПОВ (FREE).\n\n"
         "Сигналов будет больше, но они чуть агрессивнее.",
         reply_markup=signal_filter_keyboard(current="aggressive"),
-    )
-
-
-@dp.message(F.text.startswith("🎯 Сбалансированный"))
-async def set_filter_normal(message: Message):
-    set_user_filter(message.chat.id, "normal")
-    await message.answer(
-        "🎯 Режим фильтра: СБАЛАНСИРОВАННЫЙ.\n\n"
-        "Стандартный баланс между количеством и качеством сигналов.",
-        reply_markup=signal_filter_keyboard(current="normal"),
     )
 
 
@@ -327,7 +326,7 @@ async def set_filter_normal(message: Message):
 async def set_filter_strict(message: Message):
     set_user_filter(message.chat.id, "strict")
     await message.answer(
-        "🧊 Режим фильтра: ТОЛЬКО ТОП-СИГНАЛЫ.\n\n"
+        "🧊 Режим фильтра: ТОЛЬКО ТОП-СИГНАЛЫ (PRO).\n\n"
         "Будем присылать только самые сильные сетапы.",
         reply_markup=signal_filter_keyboard(current="strict"),
     )
@@ -468,65 +467,19 @@ def _format_signed_number(value: float, decimals: int = 1) -> str:
     sign = "−" if value < 0 else "+"
     return f"{sign}{abs(value):.{decimals}f}"
 
-
-def _remember_signal(signal: Dict[str, Any], ttl: int = COOLDOWN_PER_SYMBOL) -> bool:
-    key = (
-        signal["symbol"],
-        signal.get("direction", "long"),
-        round(signal["entry_zone"][0], 4),
-        round(signal["entry_zone"][1], 4),
-    )
-    now = asyncio.get_event_loop().time()
-    expires_at = now + ttl
-
-    # cleanup
-    for cached_key, exp in list(signal_cache.items()):
-        if exp <= now:
-            del signal_cache[cached_key]
-
-    if key in signal_cache:
-        return False
-
-    signal_cache[key] = expires_at
-    return True
-
-
-def _entry_diff_percent(prev_entry: Tuple[float, float], new_entry: Tuple[float, float]) -> float:
-    prev_mid = (prev_entry[0] + prev_entry[1]) / 2 if prev_entry else 0
-    new_mid = (new_entry[0] + new_entry[1]) / 2 if new_entry else 0
-    if prev_mid == 0:
-        return 0.0
-    return abs(new_mid - prev_mid) / prev_mid * 100
-
-
-def _is_new_ai_signal(signal: Dict[str, Any]) -> bool:
+def _cooldown_ready(
+    signal: Dict[str, Any], last_sent: Dict[Tuple[str, str], float], cooldown_sec: int
+) -> bool:
     now = time.time()
-    symbol = signal["symbol"]
-    direction = signal.get("direction", "long")
-    entry_zone = (
-        round(signal["entry_zone"][0], 6),
-        round(signal["entry_zone"][1], 6),
-    )
-
-    last = LAST_SIGNALS.get(symbol)
-    if last:
-        if now - last["timestamp"] < COOLDOWN_PER_SYMBOL:
-            return False
-        if last["direction"] == direction:
-            diff = _entry_diff_percent(last["entry"], entry_zone)
-            if diff < ENTRY_DUP_THRESHOLD:
-                return False
-
-    LAST_SIGNALS[symbol] = {
-        "entry": entry_zone,
-        "direction": direction,
-        "timestamp": now,
-    }
-
+    key = (signal["symbol"], signal.get("direction", "long"))
+    last = last_sent.get(key)
+    if last and now - last < cooldown_sec:
+        return False
+    last_sent[key] = now
     return True
 
 
-def _format_signal(signal: Dict[str, Any]) -> str:
+def _format_signal(signal: Dict[str, Any], tier: str) -> str:
     entry_low, entry_high = signal["entry_zone"]
     direction_text = "ЛОНГ" if signal.get("direction") == "long" else "ШОРТ"
     symbol = signal["symbol"]
@@ -567,8 +520,9 @@ def _format_signal(signal: Dict[str, Any]) -> str:
         f"• R:R: ~{rr:.2f}:1"
     )
 
+    tier_title = "🔥 AI-сигнал (FREE)" if tier == "free" else "🧊 AI-сигнал (PRO)"
     text = (
-        "🔔 AI-сигнал (intraday)\n\n"
+        f"{tier_title}\n\n"
         f"Монета: {symbol_text}\n"
         f"Тип: {direction_text}\n\n"
         "Зона входа:\n"
@@ -591,9 +545,9 @@ def _format_signal(signal: Dict[str, Any]) -> str:
     return text
 
 
-async def send_signal_to_all(signal_dict: Dict[str, Any]):
+async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
     """
-    Отправляет сигнал всем подписчикам без блокировки event loop.
+    Отправляет FREE/PRO сигнал всем подписчикам без блокировки event loop.
     """
     if bot is None:
         print("[ai_signals] Bot is not initialized; skipping send.")
@@ -603,27 +557,121 @@ async def send_signal_to_all(signal_dict: Dict[str, Any]):
     if not subscribers:
         return
 
-    if not _remember_signal(signal_dict):
-        return
+    if tier == "free":
+        if not _cooldown_ready(signal_dict, LAST_SENT_FREE, COOLDOWN_FREE_SEC):
+            return
+    else:
+        if not _cooldown_ready(signal_dict, LAST_SENT_PRO, COOLDOWN_PRO_SEC):
+            return
 
-    text = _format_signal(signal_dict)
+    text = _format_signal(signal_dict, tier)
 
-    tasks = []
-    recipients: list[int] = []
-    for chat_id in subscribers:
-        level = get_user_filter(chat_id)
-        min_score = ai_min_score(level)
-        if signal_dict.get("score", 0) < min_score:
-            continue
+    tasks = [asyncio.create_task(bot.send_message(chat_id, text)) for chat_id in subscribers]
 
-        recipients.append(chat_id)
-        tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
-
-    # Выполняем отправки параллельно и логируем ошибки
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    for chat_id, res in zip(recipients, results):
+    for chat_id, res in zip(subscribers, results):
         if isinstance(res, Exception):
             print(f"[ai_signals] Failed to send to {chat_id}: {res}")
+
+
+def _format_symbol_pair(symbol: str) -> str:
+    if symbol.endswith("USDT"):
+        return f"{symbol[:-4]}/USDT"
+    return symbol
+
+
+def _format_volume_usdt(value: float) -> str:
+    if value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.2f}B"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.2f}M"
+    if value >= 1_000:
+        return f"{value / 1_000:.2f}K"
+    return f"{value:.0f}"
+
+
+async def market_pulse_worker():
+    global LAST_PULSE_SENT_AT
+
+    while True:
+        try:
+            if bot is None:
+                await asyncio.sleep(5)
+                continue
+
+            subscribers = list_subscriptions()
+            if not subscribers:
+                await asyncio.sleep(30)
+                continue
+
+            now = time.time()
+            if now - LAST_PULSE_SENT_AT < PULSE_INTERVAL_SEC:
+                await asyncio.sleep(30)
+                continue
+
+            regime_info = await get_market_regime()
+            regime = regime_info.get("regime", "neutral")
+            regime_label = {
+                "risk_on": "RISK-ON",
+                "risk_off": "RISK-OFF",
+                "neutral": "NEUTRAL",
+            }.get(regime, "NEUTRAL")
+
+            alt_watch = await get_alt_watch_symbol()
+            if alt_watch:
+                alt_symbol = _format_symbol_pair(str(alt_watch.get("symbol", "")))
+                change_pct = float(alt_watch.get("change_pct", 0.0))
+                volume_usdt = float(alt_watch.get("volume_usdt", 0.0))
+                alt_line = (
+                    f"Монета для наблюдения: {alt_symbol} — "
+                    f"{change_pct:+.2f}% за 1ч, объём ~{_format_volume_usdt(volume_usdt)} USDT."
+                )
+            else:
+                alt_line = "Монета для наблюдения: SOL/USDT — повышенный объём, ждём подтверждения."
+
+            text = (
+                "📡 Market Pulse (каждый час)\n"
+                f"BTC режим: {regime_label}\n"
+                "Сетапов нет — фильтр строгий. Это нормально.\n"
+                f"{alt_line}"
+            )
+
+            tasks = [asyncio.create_task(bot.send_message(chat_id, text)) for chat_id in subscribers]
+            await asyncio.gather(*tasks, return_exceptions=True)
+            LAST_PULSE_SENT_AT = now
+
+        except Exception as e:
+            msg = f"pulse error: {e}"
+            print(f"[pulse_worker] {msg}")
+            mark_error("ai_signals", msg)
+
+        await asyncio.sleep(30)
+
+
+def _select_signals_for_cycle(signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    sorted_signals = sorted(signals, key=lambda item: item.get("score", 0), reverse=True)
+    has_alt = any(sig.get("symbol") != "BTCUSDT" for sig in sorted_signals)
+    max_btc = MAX_BTC_PER_CYCLE if has_alt else MAX_SIGNALS_PER_CYCLE
+
+    selected: List[Dict[str, Any]] = []
+    used_symbols: set[str] = set()
+    btc_count = 0
+
+    for signal in sorted_signals:
+        if len(selected) >= MAX_SIGNALS_PER_CYCLE:
+            break
+        symbol = signal.get("symbol")
+        if not symbol or symbol in used_symbols:
+            continue
+        if symbol == "BTCUSDT" and btc_count >= max_btc:
+            continue
+
+        selected.append(signal)
+        used_symbols.add(symbol)
+        if symbol == "BTCUSDT":
+            btc_count += 1
+
+    return selected
 
 
 async def pump_worker(bot: Bot):
@@ -682,18 +730,18 @@ async def signals_worker():
             signals = await scan_market()
             mark_ok("ai_signals", extra=f"кандидатов: {len(signals)}")
             print("SCAN OK", len(signals))
-            for signal in signals:
-                if signal.get("score", 0) < ai_min_score("aggressive"):
-                    continue
-                if not _is_new_ai_signal(signal):
+            for signal in _select_signals_for_cycle(signals):
+                score = signal.get("score", 0)
+                if score >= FREE_MIN_SCORE:
                     print(
-                        f"[ai_signals] Duplicate skipped: {signal.get('symbol')} {signal.get('direction')}"
+                        f"[ai_signals] SEND FREE {signal['symbol']} {signal['direction']} score={score}"
                     )
-                    continue
-                print(
-                    f"[ai_signals] SEND {signal['symbol']} {signal['direction']} score={signal['score']}"
-                )
-                await send_signal_to_all(signal)
+                    await send_signal_to_all(signal, "free")
+                if score >= PRO_MIN_SCORE:
+                    print(
+                        f"[ai_signals] SEND PRO {signal['symbol']} {signal['direction']} score={score}"
+                    )
+                    await send_signal_to_all(signal, "pro")
         except Exception as e:
             msg = f"Worker error: {e}"
             print(f"[ai_signals] {msg}")
@@ -837,6 +885,7 @@ async def main():
     print("Бот запущен!")
     init_db()
     signals_task = asyncio.create_task(signals_worker())
+    pulse_task = asyncio.create_task(market_pulse_worker())
     pump_task = asyncio.create_task(pump_worker(bot))
     btc_task = asyncio.create_task(btc_realtime_signal_worker(bot))
     whales_task = asyncio.create_task(whales_realtime_worker(bot))
@@ -850,6 +899,9 @@ async def main():
         signals_task.cancel()
         with suppress(asyncio.CancelledError):
             await signals_task
+        pulse_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await pulse_task
         pump_task.cancel()
         with suppress(asyncio.CancelledError):
             await pump_task
