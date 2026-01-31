@@ -1,4 +1,5 @@
 import asyncio
+import math
 from statistics import mean
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -24,6 +25,8 @@ from trading_core import (
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 
 EXCHANGE_INFO_URL = f"{BINANCE_BASE_URL}/exchangeInfo"
+TICKER_24H_URL = f"{BINANCE_BASE_URL}/ticker/24hr"
+KLINES_URL = f"{BINANCE_BASE_URL}/klines"
 BTC_SYMBOL = "BTCUSDT"
 
 
@@ -106,6 +109,26 @@ async def _get_spot_usdt_symbols() -> List[str]:
     return symbols
 
 
+async def _get_top_usdt_symbols_by_volume(limit: int = 80) -> List[str]:
+    data = await _fetch_json(TICKER_24H_URL)
+    if not data:
+        return []
+
+    usdt_rows = []
+    for row in data:
+        symbol = row.get("symbol")
+        if not symbol or not symbol.endswith("USDT"):
+            continue
+        try:
+            quote_volume = float(row.get("quoteVolume", 0.0))
+        except (TypeError, ValueError):
+            continue
+        usdt_rows.append((symbol, quote_volume))
+
+    usdt_rows.sort(key=lambda item: item[1], reverse=True)
+    return [symbol for symbol, _ in usdt_rows[:limit]]
+
+
 def _volume_ratio(volumes: Sequence[float]) -> Tuple[float, float]:
     if not volumes:
         return 0.0, 0.0
@@ -126,6 +149,67 @@ async def _gather_klines(symbol: str) -> Optional[Dict[str, List[Candle]]]:
         return None
 
     return {tf: candles[tf] for tf in required_keys}
+
+
+async def _get_hourly_snapshot(symbol: str) -> Optional[Dict[str, float]]:
+    data = await _fetch_json(KLINES_URL, params={"symbol": symbol, "interval": "1h", "limit": 2})
+    if not data or len(data) < 1:
+        return None
+
+    kline = data[-1]
+    try:
+        open_price = float(kline[1])
+        close_price = float(kline[4])
+        quote_volume = float(kline[7])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+    if open_price <= 0:
+        return None
+
+    change_pct = (close_price - open_price) / open_price * 100
+    return {"change_pct": change_pct, "volume_usdt": max(quote_volume, 0.0)}
+
+
+async def get_alt_watch_symbol(limit: int = 80, batch_size: int = 10) -> Optional[Dict[str, float]]:
+    symbols = await _get_top_usdt_symbols_by_volume(limit)
+    if not symbols:
+        return None
+
+    best_symbol: Optional[str] = None
+    best_score = -1.0
+    best_change = 0.0
+    best_volume = 0.0
+
+    for i in range(0, len(symbols), batch_size):
+        batch = symbols[i : i + batch_size]
+        tasks = [asyncio.create_task(_get_hourly_snapshot(symbol)) for symbol in batch]
+        snapshots = await asyncio.gather(*tasks)
+
+        for symbol, snapshot in zip(batch, snapshots):
+            if not snapshot:
+                continue
+            if symbol == BTC_SYMBOL:
+                continue
+            change_pct = snapshot["change_pct"]
+            volume_usdt = snapshot["volume_usdt"]
+            score = abs(change_pct) * math.log(volume_usdt + 1.0)
+            if score > best_score:
+                best_score = score
+                best_symbol = symbol
+                best_change = change_pct
+                best_volume = volume_usdt
+
+        await asyncio.sleep(0.1)
+
+    if not best_symbol:
+        return None
+
+    return {
+        "symbol": best_symbol,
+        "change_pct": best_change,
+        "volume_usdt": best_volume,
+    }
 
 
 async def _prepare_signal(
@@ -342,9 +426,8 @@ async def scan_market(batch_delay: float = 0.2, batch_size: int = 5) -> List[Dic
 
     btc_ctx = await get_btc_context()
 
-    # Если ни лонги, ни шорты сейчас не разрешены — сразу выходим
     if not btc_ctx["allow_longs"] and not btc_ctx["allow_shorts"]:
-        return []
+        btc_ctx = {**btc_ctx, "allow_longs": True, "allow_shorts": True}
 
     signals: List[Dict[str, Any]] = []
 
