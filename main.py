@@ -21,7 +21,7 @@ from btc_module import (
     btc_realtime_signal_worker,
     get_btc_main_keyboard,
 )
-from whales_module import whales_realtime_worker
+from whales_module import whales_market_flow_worker
 from pro_modules import (
     router as pro_router,
 )
@@ -31,12 +31,7 @@ from market_regime import get_market_regime
 from health import MODULES, mark_tick, mark_ok, mark_error
 from db_path import get_db_path
 from notifications_db import init_notify_table
-from pro_subscribers import (
-    init_pro_tables,
-    pro_list_subscribers,
-    pro_get_daily_count,
-    pro_increment_daily_count,
-)
+from pro_db import init_pro_tables, pro_list, pro_can_send, pro_inc_sent
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -240,14 +235,13 @@ PRO_MIN_VOLUME_RATIO = 1.3
 PRO_SYMBOL_COOLDOWN_SEC = 60 * 60 * 6
 MAX_PRO_SIGNALS_PER_DAY = 4
 MAX_PRO_SIGNALS_PER_CYCLE = 2
-MIN_PUMP_STRENGTH = 7.0
 
 LAST_SENT_FREE: Dict[Tuple[str, str], float] = {}
 LAST_PRO_SYMBOL_SENT: Dict[str, float] = {}
 LAST_PULSE_SENT_AT = 0.0
 # Сканируем рынок каждые 30 секунд, чтобы рассылка была оперативной
 AI_SCAN_INTERVAL = 20  # seconds
-PRO_AI_SCAN_INTERVAL = 20  # seconds
+PRO_AI_SCAN_INTERVAL = 60 * 10
 
 
 # ===== ХЭНДЛЕРЫ =====
@@ -328,6 +322,19 @@ async def ai_signals_unsubscribe(message: Message):
 
 @dp.message(F.text == "/testadmin")
 async def test_admin(message: Message):
+    pro_subscribers = pro_list()
+    ai_subscribers = list_subscriptions()
+    if "pro" in MODULES:
+        MODULES["pro"].extra = f"подписчиков: {len(pro_subscribers)}"
+    if "ai_signals" in MODULES:
+        MODULES["ai_signals"].extra = f"подписчиков: {len(ai_subscribers)}"
+    if "pumpdump" in MODULES:
+        MODULES["pumpdump"].extra = f"подписчиков: {len(pro_subscribers)}"
+    if "whales_flow" in MODULES:
+        MODULES["whales_flow"].extra = f"подписчиков: {len(pro_subscribers)}"
+    if "pro_ai" in MODULES:
+        MODULES["pro_ai"].extra = f"подписчиков: {len(pro_subscribers)}"
+
     lines = ["🛠 Статус модулей:\n"]
     for key, st in MODULES.items():
         lines.append(f"{st.name}:\n{st.as_text()}\n")
@@ -584,14 +591,14 @@ async def pump_worker(bot: Bot):
 
     while True:
         try:
-            subscribers = pro_list_subscribers()
-            mark_tick("pumps", extra=f"подписчиков: {len(subscribers)}")
+            subscribers = pro_list()
+            mark_tick("pumpdump", extra=f"подписчиков: {len(subscribers)}")
             if not subscribers:
                 await asyncio.sleep(15)
                 continue
 
             signals = await scan_pumps()
-            mark_ok("pumps", extra=f"найдено пампов: {len(signals)}")
+            mark_ok("pumpdump", extra=f"найдено пампов: {len(signals)}")
             now_min = int(time.time() // 60)
 
             for sig in signals:
@@ -602,12 +609,8 @@ async def pump_worker(bot: Bot):
 
                 text = format_pump_message(sig)
 
+                last_sent[symbol] = now_min
                 for chat_id in subscribers:
-                    strength = float(sig.get("strength", 0.0))
-                    if strength < MIN_PUMP_STRENGTH:
-                        continue
-
-                    last_sent[symbol] = now_min
                     try:
                         await bot.send_message(chat_id, text, parse_mode="Markdown")
                     except Exception:
@@ -616,7 +619,7 @@ async def pump_worker(bot: Bot):
         except Exception as e:
             msg = f"error: {e}"
             print(f"[pump_worker] {msg}")
-            mark_error("pumps", msg)
+            mark_error("pumpdump", msg)
             await asyncio.sleep(10)
 
         await asyncio.sleep(15)
@@ -662,15 +665,12 @@ async def _send_pro_signal(signal_dict: Dict[str, Any], subscribers: List[int]):
         return
 
     text = _format_signal(signal_dict, "pro")
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
     for chat_id in subscribers:
-        sent_count = pro_get_daily_count(chat_id, today)
-        if sent_count >= MAX_PRO_SIGNALS_PER_DAY:
+        if not pro_can_send(chat_id, MAX_PRO_SIGNALS_PER_DAY):
             continue
         try:
             await bot.send_message(chat_id, text)
-            pro_increment_daily_count(chat_id, today)
+            pro_inc_sent(chat_id)
         except Exception:
             continue
 
@@ -678,40 +678,63 @@ async def _send_pro_signal(signal_dict: Dict[str, Any], subscribers: List[int]):
 
 
 async def pro_ai_signals_worker():
+    buffer: Dict[str, Dict[str, Any]] = {}
+    buffer_timestamps: Dict[str, float] = {}
+    buffer_ttl_sec = 60 * 60 * 6
+
     while True:
         try:
-            subscribers = pro_list_subscribers()
-            mark_tick("pro_ai_signals", extra=f"подписчиков: {len(subscribers)}")
+            subscribers = pro_list()
+            mark_tick("pro_ai", extra=f"подписчиков: {len(subscribers)}")
+            mark_tick("pro", extra=f"подписчиков: {len(subscribers)}")
             if not subscribers:
                 await asyncio.sleep(20)
                 continue
 
             signals = await scan_market()
-            candidates = [
-                sig
-                for sig in signals
-                if is_pro_strict_signal(
+            now = time.time()
+            for sig in signals:
+                if not is_pro_strict_signal(
                     sig,
                     min_score=PRO_MIN_SCORE,
                     min_rr=PRO_MIN_RR,
                     min_volume_ratio=PRO_MIN_VOLUME_RATIO,
-                )
-                and _pro_symbol_cooldown_ready(sig.get("symbol", ""))
+                ):
+                    continue
+                symbol = sig.get("symbol")
+                if not symbol or not _pro_symbol_cooldown_ready(symbol):
+                    continue
+                current = buffer.get(symbol)
+                if not current or sig.get("score", 0) > current.get("score", 0):
+                    buffer[symbol] = sig
+                    buffer_timestamps[symbol] = now
+
+            stale_symbols = [
+                symbol
+                for symbol, ts in buffer_timestamps.items()
+                if now - ts > buffer_ttl_sec
             ]
-            candidates.sort(key=lambda item: item.get("score", 0), reverse=True)
+            for symbol in stale_symbols:
+                buffer.pop(symbol, None)
+                buffer_timestamps.pop(symbol, None)
+
+            candidates = sorted(buffer.values(), key=lambda item: item.get("score", 0), reverse=True)
 
             if candidates:
-                mark_ok("pro_ai_signals", extra=f"кандидатов: {len(candidates)}")
+                mark_ok("pro_ai", extra=f"кандидатов: {len(candidates)}")
             else:
-                mark_tick("pro_ai_signals", extra="кандидатов: 0")
+                mark_tick("pro_ai", extra="кандидатов: 0")
 
             for signal in candidates[:MAX_PRO_SIGNALS_PER_CYCLE]:
                 await _send_pro_signal(signal, subscribers)
+                symbol = signal.get("symbol", \"\")
+                buffer.pop(symbol, None)
+                buffer_timestamps.pop(symbol, None)
 
         except Exception as e:
             msg = f"Worker error: {e}"
             print(f"[pro_ai] {msg}")
-            mark_error("pro_ai_signals", msg)
+            mark_error("pro_ai", msg)
 
         await asyncio.sleep(PRO_AI_SCAN_INTERVAL)
 
@@ -727,7 +750,7 @@ async def main():
     pulse_task = asyncio.create_task(market_pulse_worker())
     pump_task = asyncio.create_task(pump_worker(bot))
     btc_task = asyncio.create_task(btc_realtime_signal_worker(bot))
-    whales_task = asyncio.create_task(whales_realtime_worker(bot))
+    whales_task = asyncio.create_task(whales_market_flow_worker(bot))
     pro_ai_task = asyncio.create_task(pro_ai_signals_worker())
     try:
         await dp.start_polling(bot)
