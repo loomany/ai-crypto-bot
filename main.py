@@ -727,7 +727,7 @@ async def pro_ai_signals_worker():
 
             for signal in candidates[:MAX_PRO_SIGNALS_PER_CYCLE]:
                 await _send_pro_signal(signal, subscribers)
-                symbol = signal.get("symbol", \"\")
+                symbol = signal.get("symbol", "")
                 buffer.pop(symbol, None)
                 buffer_timestamps.pop(symbol, None)
 
