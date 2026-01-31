@@ -403,7 +403,8 @@ def _cooldown_ready(
 
 def _format_signal(signal: Dict[str, Any], tier: str) -> str:
     entry_low, entry_high = signal["entry_zone"]
-    direction_text = "ЛОНГ" if signal.get("direction") == "long" else "ШОРТ"
+    is_long = signal.get("direction") == "long"
+    direction_text = "ЛОНГ" if is_long else "ШОРТ"
     symbol = signal["symbol"]
     if symbol.endswith("USDT"):
         base = symbol[:-4]
@@ -439,7 +440,7 @@ def _format_signal(signal: Dict[str, Any], tier: str) -> str:
         f"• 4H тренд: {trend_4h}\n"
         f"• RSI 1H: {rsi_1h:.1f} ({rsi_zone})\n"
         f"• Объём: {volume_ratio:.2f}x от среднего {volume_avg:.2f}\n"
-        f"• R:R: ~{rr:.2f}:1"
+        f"• R:R: {rr:.2f} : 1"
     )
 
     tier_title = "🔥 AI-сигнал (FREE)" if tier == "free" else "🧊 AI-сигнал (PRO)"
@@ -453,10 +454,16 @@ def _format_signal(signal: Dict[str, Any], tier: str) -> str:
     else:
         probability_line = f"📌 Вероятность: {prob}%"
 
+    direction_block = (
+        f"📈 Тип: {direction_text}\nВход: ниже\nSL: ниже входа\nTP: выше входа"
+        if is_long
+        else f"📉 Тип: {direction_text}\nВход: выше\nSL: выше входа\nTP: ниже входа"
+    )
+
     text = (
         f"{tier_title}\n\n"
         f"Монета: {symbol_text}\n"
-        f"Тип: {direction_text}\n\n"
+        f"{direction_block}\n\n"
         "Зона входа:\n"
         f"• {entry_low:.4f} – {entry_high:.4f}\n"
         "Стоп (SL):\n"
