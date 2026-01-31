@@ -1,6 +1,5 @@
 import asyncio
-from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict
 
 from aiogram import Router, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
@@ -10,62 +9,9 @@ from trading_core import analyze_orderflow
 from ai_patterns import analyze_ai_patterns
 from market_regime import get_market_regime
 from health import mark_tick, mark_ok, mark_error
+from notifications_db import set_notify, is_notify_enabled, list_enabled
 
 router = Router(name="pro_modules")
-
-
-# ============================================================
-# In-memory настройки PRO-модулей для каждого юзера
-# ============================================================
-
-
-@dataclass
-class ProSettings:
-    orderflow_enabled: bool = False
-    smart_money_enabled: bool = False
-    ai_patterns_enabled: bool = False
-    market_regime_enabled: bool = False
-
-
-class ProStorage:
-    def __init__(self) -> None:
-        self._settings: Dict[int, ProSettings] = {}
-
-    def get(self, user_id: int) -> ProSettings:
-        if user_id not in self._settings:
-            self._settings[user_id] = ProSettings()
-        return self._settings[user_id]
-
-    def set_orderflow(self, user_id: int, enabled: bool) -> None:
-        s = self.get(user_id)
-        s.orderflow_enabled = enabled
-
-    def set_smart_money(self, user_id: int, enabled: bool) -> None:
-        s = self.get(user_id)
-        s.smart_money_enabled = enabled
-
-    def set_ai_patterns(self, user_id: int, enabled: bool) -> None:
-        s = self.get(user_id)
-        s.ai_patterns_enabled = enabled
-
-    def set_market_regime(self, user_id: int, enabled: bool) -> None:
-        s = self.get(user_id)
-        s.market_regime_enabled = enabled
-
-    def users_for_orderflow(self) -> List[int]:
-        return [uid for uid, s in self._settings.items() if s.orderflow_enabled]
-
-    def users_for_smart_money(self) -> List[int]:
-        return [uid for uid, s in self._settings.items() if s.smart_money_enabled]
-
-    def users_for_ai_patterns(self) -> List[int]:
-        return [uid for uid, s in self._settings.items() if s.ai_patterns_enabled]
-
-    def users_for_market_regime(self) -> List[int]:
-        return [uid for uid, s in self._settings.items() if s.market_regime_enabled]
-
-
-pro_storage = ProStorage()
 
 
 # ============================================================
@@ -110,36 +56,36 @@ async def open_pro_menu(message: Message):
 
 @router.message(F.text == "📊 Orderflow PRO: уведомления")
 async def toggle_orderflow(message: Message):
-    s = pro_storage.get(message.from_user.id)
-    new_state = not s.orderflow_enabled
-    pro_storage.set_orderflow(message.from_user.id, new_state)
+    user_id = message.from_user.id
+    new_state = not is_notify_enabled(user_id, "pro_orderflow")
+    set_notify(user_id, "pro_orderflow", new_state)
     status = "включены" if new_state else "отключены"
     await message.answer(f"📊 Orderflow PRO: уведомления {status}.", reply_markup=get_pro_main_keyboard())
 
 
 @router.message(F.text == "💼 Smart Money (on-chain) уведомления")
 async def toggle_smart_money(message: Message):
-    s = pro_storage.get(message.from_user.id)
-    new_state = not s.smart_money_enabled
-    pro_storage.set_smart_money(message.from_user.id, new_state)
+    user_id = message.from_user.id
+    new_state = not is_notify_enabled(user_id, "pro_smart_money")
+    set_notify(user_id, "pro_smart_money", new_state)
     status = "включены" if new_state else "отключены"
     await message.answer(f"💼 Smart Money: уведомления {status}.", reply_markup=get_pro_main_keyboard())
 
 
 @router.message(F.text == "🧠 AI-паттерны: уведомления")
 async def toggle_ai_patterns(message: Message):
-    s = pro_storage.get(message.from_user.id)
-    new_state = not s.ai_patterns_enabled
-    pro_storage.set_ai_patterns(message.from_user.id, new_state)
+    user_id = message.from_user.id
+    new_state = not is_notify_enabled(user_id, "pro_ai_patterns")
+    set_notify(user_id, "pro_ai_patterns", new_state)
     status = "включены" if new_state else "отключены"
     await message.answer(f"🧠 AI-паттерны: уведомления {status}.", reply_markup=get_pro_main_keyboard())
 
 
 @router.message(F.text == "🌍 Market Regime уведомления")
 async def toggle_market_regime(message: Message):
-    s = pro_storage.get(message.from_user.id)
-    new_state = not s.market_regime_enabled
-    pro_storage.set_market_regime(message.from_user.id, new_state)
+    user_id = message.from_user.id
+    new_state = not is_notify_enabled(user_id, "pro_market_regime")
+    set_notify(user_id, "pro_market_regime", new_state)
     status = "включены" if new_state else "отключены"
     await message.answer(f"🌍 Market Regime: уведомления {status}.", reply_markup=get_pro_main_keyboard())
 
@@ -166,7 +112,7 @@ async def orderflow_pro_worker(bot: Bot):
 
     while True:
         try:
-            user_ids = pro_storage.users_for_orderflow()
+            user_ids = list_enabled("pro_orderflow")
             mark_tick("orderflow", extra=f"подписчиков: {len(user_ids)}")
             if not user_ids:
                 await asyncio.sleep(10)
@@ -232,7 +178,7 @@ async def smart_money_worker(bot: Bot):
 
     while True:
         try:
-            user_ids = pro_storage.users_for_smart_money()
+            user_ids = list_enabled("pro_smart_money")
             mark_tick("smart_money", extra=f"подписчиков: {len(user_ids)}")
             if not user_ids:
                 await asyncio.sleep(30)
@@ -286,7 +232,7 @@ async def ai_patterns_worker(bot: Bot):
 
     while True:
         try:
-            user_ids = pro_storage.users_for_ai_patterns()
+            user_ids = list_enabled("pro_ai_patterns")
             mark_tick("ai_patterns", extra=f"подписчиков: {len(user_ids)}")
             if not user_ids:
                 await asyncio.sleep(30)
@@ -351,7 +297,7 @@ async def market_regime_worker(bot: Bot):
 
     while True:
         try:
-            user_ids = pro_storage.users_for_market_regime()
+            user_ids = list_enabled("pro_market_regime")
             mark_tick("regime", extra=f"подписчиков: {len(user_ids)}")
             if not user_ids:
                 await asyncio.sleep(60 * 30)

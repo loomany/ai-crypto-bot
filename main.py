@@ -48,6 +48,7 @@ from signal_filter import (
     pumps_min_strength,
 )
 from db_path import get_db_path
+from notifications_db import init_notify_table
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -169,6 +170,7 @@ def init_db():
         conn.close()
 
     init_filter_table()
+    init_notify_table()
 
 
 def upsert_user(

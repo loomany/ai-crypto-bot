@@ -17,6 +17,7 @@ from aiogram.types import (
 from aiogram.fsm.context import FSMContext
 from health import mark_tick, mark_ok, mark_error
 from signal_filter import get_user_filter, whales_min_probability
+from notifications_db import set_notify, list_enabled
 
 # ============================================================
 # НАСТРОЙКИ МОДУЛЯ КИТОВ
@@ -36,33 +37,6 @@ TIMEZONE_OFFSET_HOURS = 5  # Asia/Almaty
 
 BINANCE_FAPI_BASE = "https://fapi.binance.com/fapi/v1"
 OI_HISTORY_ENDPOINT = "https://fapi.binance.com/futures/data/openInterestHist"
-
-
-# ============================================================
-# ХРАНИЛИЩЕ ДЛЯ УВЕДОМЛЕНИЙ ПО КИТАМ
-# ============================================================
-
-class WhalesStorage:
-    """
-    Простое in-memory хранилище для уведомлений по китам.
-    Codex: при желании заменить на БД (SQLite/Postgres).
-    """
-
-    def __init__(self):
-        # user_id -> bool (включены ли уведомления по китам)
-        self.whales_notifications: Dict[int, bool] = {}
-
-    def set_whales_notify(self, user_id: int, enabled: bool) -> None:
-        self.whales_notifications[user_id] = enabled
-
-    def is_whales_notify_enabled(self, user_id: int) -> bool:
-        return self.whales_notifications.get(user_id, False)
-
-    def get_all_whales_users(self) -> List[int]:
-        return [uid for uid, enabled in self.whales_notifications.items() if enabled]
-
-
-whales_storage = WhalesStorage()
 
 
 # ============================================================
@@ -162,7 +136,7 @@ async def handle_whales_notify_on(callback: CallbackQuery):
     await callback.answer()
 
     user_id = callback.from_user.id
-    whales_storage.set_whales_notify(user_id, True)
+    set_notify(user_id, "whales", True)
 
     await callback.message.answer(
         "✅ Уведомления по КИТАМ включены.\n\n"
@@ -179,7 +153,7 @@ async def handle_whales_notify_off(callback: CallbackQuery):
     await callback.answer()
 
     user_id = callback.from_user.id
-    whales_storage.set_whales_notify(user_id, False)
+    set_notify(user_id, "whales", False)
 
     await callback.message.answer(
         "❌ Уведомления по КИТАМ отключены.\n\n"
@@ -190,7 +164,7 @@ async def handle_whales_notify_off(callback: CallbackQuery):
 @router.message(F.text == "🐳 Включить уведомления по китам")
 async def whales_notify_on_message(message: Message):
     user_id = message.from_user.id
-    whales_storage.set_whales_notify(user_id, True)
+    set_notify(user_id, "whales", True)
 
     await message.answer(
         "✅ Уведомления по КИТАМ включены.\n\n"
@@ -206,7 +180,7 @@ async def whales_notify_on_message(message: Message):
 @router.message(F.text == "🐳 Отключить уведомления по китам")
 async def whales_notify_off_message(message: Message):
     user_id = message.from_user.id
-    whales_storage.set_whales_notify(user_id, False)
+    set_notify(user_id, "whales", False)
 
     await message.answer(
         "❌ Уведомления по КИТАМ отключены.\n\n"
@@ -482,7 +456,7 @@ async def whales_realtime_worker(bot):
 
     while True:
         try:
-            user_ids = whales_storage.get_all_whales_users()
+            user_ids = list_enabled("whales")
             mark_tick("whales", extra=f"подписчиков: {len(user_ids)}")
             if not user_ids:
                 await asyncio.sleep(5)
