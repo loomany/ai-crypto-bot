@@ -27,6 +27,7 @@ from pro_modules import (
 )
 from pump_detector import scan_pumps, format_pump_message
 from signals import scan_market, get_alt_watch_symbol, is_pro_strict_signal
+from symbol_cache import get_spot_usdt_symbols
 from market_regime import get_market_regime
 from health import MODULES, mark_tick, mark_ok, mark_error
 from db_path import get_db_path
@@ -235,10 +236,13 @@ PRO_MIN_VOLUME_RATIO = 1.3
 PRO_SYMBOL_COOLDOWN_SEC = 60 * 60 * 6
 MAX_PRO_SIGNALS_PER_DAY = 4
 MAX_PRO_SIGNALS_PER_CYCLE = 2
+CHUNK_SIZE = 60
+SCAN_MARKET_TIMEOUT_SEC = 20
 
 LAST_SENT_FREE: Dict[Tuple[str, str], float] = {}
 LAST_PRO_SYMBOL_SENT: Dict[str, float] = {}
 LAST_PULSE_SENT_AT = 0.0
+CURRENT_CHUNK_IDX = 0
 # Сканируем рынок каждые 60 секунд
 AI_SCAN_INTERVAL = 60  # seconds
 PRO_AI_SCAN_INTERVAL = 60 * 10
@@ -662,19 +666,33 @@ async def pump_worker(bot: Bot):
 
 
 async def signals_worker():
+    global CURRENT_CHUNK_IDX
     while True:
-        cycle_start = time.time()
         mark_tick("ai_signals", extra="сканирую рынок...")
 
         try:
+            symbols = await get_spot_usdt_symbols()
+            if not symbols:
+                mark_error("ai_signals", "no symbols to scan")
+                await asyncio.sleep(AI_SCAN_INTERVAL)
+                continue
+
+            chunks = [symbols[i : i + CHUNK_SIZE] for i in range(0, len(symbols), CHUNK_SIZE)]
+            if CURRENT_CHUNK_IDX >= len(chunks):
+                CURRENT_CHUNK_IDX = 0
+            chunk_idx = CURRENT_CHUNK_IDX
+            chunk = chunks[chunk_idx]
+            CURRENT_CHUNK_IDX = (CURRENT_CHUNK_IDX + 1) % len(chunks)
+
             signals, stats = await asyncio.wait_for(
                 scan_market(
+                    symbols=chunk,
                     use_btc_gate=False,
                     free_mode=True,
                     min_score=FREE_MIN_SCORE,
                     return_stats=True,
                 ),
-                timeout=55,
+                timeout=SCAN_MARKET_TIMEOUT_SEC,
             )
             print("SCAN OK", len(signals))
             sent_count = 0
@@ -688,17 +706,14 @@ async def signals_worker():
                 await send_signal_to_all(signal, "free")
                 sent_count += 1
             checked = stats.get("checked", 0)
-            candidates = stats.get("candidates", len(signals))
-            cycle_sec = time.time() - cycle_start
             mark_ok(
                 "ai_signals",
                 extra=(
-                    f"checked={checked} candidates={candidates} sent={sent_count} "
-                    f"cycle={cycle_sec:.1f}s"
+                    f"chunk={chunk_idx + 1}/{len(chunks)} checked={checked} sent={sent_count}"
                 ),
             )
         except asyncio.TimeoutError:
-            mark_error("ai_signals", "scan_market timeout >55s")
+            mark_error("ai_signals", f"scan exceeded {SCAN_MARKET_TIMEOUT_SEC}s")
         except Exception as e:
             msg = f"Worker error: {e}"
             print(f"[ai_signals] {msg}")
