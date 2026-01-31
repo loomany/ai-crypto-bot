@@ -239,8 +239,8 @@ MAX_PRO_SIGNALS_PER_CYCLE = 2
 LAST_SENT_FREE: Dict[Tuple[str, str], float] = {}
 LAST_PRO_SYMBOL_SENT: Dict[str, float] = {}
 LAST_PULSE_SENT_AT = 0.0
-# Сканируем рынок каждые 30 секунд, чтобы рассылка была оперативной
-AI_SCAN_INTERVAL = 20  # seconds
+# Сканируем рынок каждые 60 секунд
+AI_SCAN_INTERVAL = 60  # seconds
 PRO_AI_SCAN_INTERVAL = 60 * 10
 
 
@@ -326,17 +326,23 @@ async def test_admin(message: Message):
     ai_subscribers = list_subscriptions()
     ai_extra = MODULES.get("ai_signals").extra if "ai_signals" in MODULES else ""
     ai_extra = ai_extra.strip()
+    def _merge_extra(base: str, extra: str) -> str:
+        return f"{base}; {extra}" if extra else base
+
     if "pro" in MODULES:
         MODULES["pro"].extra = f"подписчиков: {len(pro_subscribers)}"
     if "ai_signals" in MODULES:
         base = f"подписчиков: {len(ai_subscribers)}"
-        MODULES["ai_signals"].extra = f"{base}; {ai_extra}" if ai_extra else base
+        MODULES["ai_signals"].extra = _merge_extra(base, ai_extra)
     if "pumpdump" in MODULES:
-        MODULES["pumpdump"].extra = f"подписчиков: {len(pro_subscribers)}"
+        base = f"подписчиков: {len(pro_subscribers)}"
+        MODULES["pumpdump"].extra = _merge_extra(base, MODULES["pumpdump"].extra)
     if "whales_flow" in MODULES:
-        MODULES["whales_flow"].extra = f"подписчиков: {len(pro_subscribers)}"
+        base = f"подписчиков: {len(pro_subscribers)}"
+        MODULES["whales_flow"].extra = _merge_extra(base, MODULES["whales_flow"].extra)
     if "pro_ai" in MODULES:
-        MODULES["pro_ai"].extra = f"подписчиков: {len(pro_subscribers)}"
+        base = f"подписчиков: {len(pro_subscribers)}"
+        MODULES["pro_ai"].extra = _merge_extra(base, MODULES["pro_ai"].extra)
 
     lines = ["🛠 Статус модулей:\n"]
     for key, st in MODULES.items():
@@ -439,7 +445,11 @@ def _format_signal(signal: Dict[str, Any], tier: str) -> str:
     tier_title = "🔥 AI-сигнал (FREE)" if tier == "free" else "🧊 AI-сигнал (PRO)"
     prob = int(signal.get("score", 0))
     if tier == "free":
-        probability_line = f"📌 Вероятность: {prob}% (FREE порог: {FREE_MIN_SCORE}%)"
+        probability_line = (
+            f"Вероятность (оценка модели): {prob}%\n"
+            f"FREE порог: {FREE_MIN_SCORE}%\n"
+            "⚠️ Оценка модели, не гарантия."
+        )
     else:
         probability_line = f"📌 Вероятность: {prob}%"
 
@@ -606,9 +616,10 @@ async def pump_worker(bot: Bot):
                 await asyncio.sleep(15)
                 continue
 
-            signals = await scan_pumps()
-            mark_ok("pumpdump", extra=f"найдено пампов: {len(signals)}")
+            cycle_start = time.time()
+            signals, stats = await scan_pumps(return_stats=True)
             now_min = int(time.time() // 60)
+            sent_count = 0
 
             for sig in signals:
                 symbol = sig["symbol"]
@@ -622,9 +633,18 @@ async def pump_worker(bot: Bot):
                 for chat_id in subscribers:
                     try:
                         await bot.send_message(chat_id, text, parse_mode="Markdown")
+                        sent_count += 1
                     except Exception:
                         continue
 
+            cycle_sec = time.time() - cycle_start
+            mark_ok(
+                "pumpdump",
+                extra=(
+                    f"checked={stats.get('checked', 0)} found={stats.get('found', 0)} "
+                    f"sent={sent_count} cycle={cycle_sec:.1f}s"
+                ),
+            )
         except Exception as e:
             msg = f"error: {e}"
             print(f"[pump_worker] {msg}")
@@ -637,9 +657,11 @@ async def pump_worker(bot: Bot):
 async def signals_worker():
     while True:
         try:
+            cycle_start = time.time()
             signals, stats = await scan_market(
                 use_btc_gate=False,
                 free_mode=True,
+                min_score=FREE_MIN_SCORE,
                 return_stats=True,
             )
             print("SCAN OK", len(signals))
@@ -655,9 +677,13 @@ async def signals_worker():
                 sent_count += 1
             checked = stats.get("checked", 0)
             candidates = stats.get("candidates", len(signals))
+            cycle_sec = time.time() - cycle_start
             mark_ok(
                 "ai_signals",
-                extra=f"checked={checked} candidates={candidates} sent={sent_count}",
+                extra=(
+                    f"checked={checked} candidates={candidates} sent={sent_count} "
+                    f"cycle={cycle_sec:.1f}s"
+                ),
             )
         except Exception as e:
             msg = f"Worker error: {e}"

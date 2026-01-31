@@ -1,5 +1,6 @@
-import aiohttp
 from typing import Any, Dict, List, Optional
+
+from binance_rest import fetch_json
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 
@@ -7,14 +8,7 @@ BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 # ===== HTTP-ХЕЛПЕР =====
 
 async def _fetch_json(url: str, params: dict | None = None) -> Optional[Any]:
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, timeout=10) as resp:
-                resp.raise_for_status()
-                return await resp.json()
-    except Exception as e:
-        print(f"[market_data] Error while fetching {url}: {e}")
-        return None
+    return await fetch_json(url, params)
 
 
 # ===== ТЕХАНАЛИЗ НА СЫРЫХ ДАННЫХ =====

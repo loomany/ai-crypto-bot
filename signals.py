@@ -4,7 +4,8 @@ from statistics import mean
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from binance_client import Candle, get_required_candles
-from market_data import _fetch_json
+from binance_rest import fetch_json
+from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
 from market_regime import get_market_regime
 from trading_core import (
@@ -24,14 +25,12 @@ from trading_core import (
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 
-EXCHANGE_INFO_URL = f"{BINANCE_BASE_URL}/exchangeInfo"
-TICKER_24H_URL = f"{BINANCE_BASE_URL}/ticker/24hr"
 KLINES_URL = f"{BINANCE_BASE_URL}/klines"
 BTC_SYMBOL = "BTCUSDT"
 LEVEL_NEAR_PCT_FREE = 1.2
 MIN_VOLUME_RATIO_FREE = 1.15
 MIN_RR_FREE = 1.8
-EMA50_NEAR_PCT_FREE = 0.3
+EMA50_NEAR_PCT_FREE = 1.0
 
 
 def is_pro_strict_signal(
@@ -134,42 +133,6 @@ async def get_btc_context() -> Dict[str, Any]:
     }
 
 
-async def _get_spot_usdt_symbols() -> List[str]:
-    data = await _fetch_json(EXCHANGE_INFO_URL)
-    if not data or "symbols" not in data:
-        return []
-
-    symbols: List[str] = []
-    for symbol_info in data["symbols"]:
-        if (
-            symbol_info.get("quoteAsset") == "USDT"
-            and symbol_info.get("status") == "TRADING"
-            and symbol_info.get("isSpotTradingAllowed", True)
-        ):
-            symbols.append(symbol_info["symbol"])
-    return symbols
-
-
-async def _get_top_usdt_symbols_by_volume(limit: int = 80) -> List[str]:
-    data = await _fetch_json(TICKER_24H_URL)
-    if not data:
-        return []
-
-    usdt_rows = []
-    for row in data:
-        symbol = row.get("symbol")
-        if not symbol or not symbol.endswith("USDT"):
-            continue
-        try:
-            quote_volume = float(row.get("quoteVolume", 0.0))
-        except (TypeError, ValueError):
-            continue
-        usdt_rows.append((symbol, quote_volume))
-
-    usdt_rows.sort(key=lambda item: item[1], reverse=True)
-    return [symbol for symbol, _ in usdt_rows[:limit]]
-
-
 def _volume_ratio(volumes: Sequence[float]) -> Tuple[float, float]:
     if not volumes:
         return 0.0, 0.0
@@ -193,7 +156,7 @@ async def _gather_klines(symbol: str) -> Optional[Dict[str, List[Candle]]]:
 
 
 async def _get_hourly_snapshot(symbol: str) -> Optional[Dict[str, float]]:
-    data = await _fetch_json(KLINES_URL, params={"symbol": symbol, "interval": "1h", "limit": 2})
+    data = await fetch_json(KLINES_URL, params={"symbol": symbol, "interval": "1h", "limit": 2})
     if not data or len(data) < 1:
         return None
 
@@ -213,7 +176,7 @@ async def _get_hourly_snapshot(symbol: str) -> Optional[Dict[str, float]]:
 
 
 async def get_alt_watch_symbol(limit: int = 80, batch_size: int = 10) -> Optional[Dict[str, float]]:
-    symbols = await _get_top_usdt_symbols_by_volume(limit)
+    symbols = await get_top_usdt_symbols_by_volume(limit)
     if not symbols:
         return None
 
@@ -259,6 +222,7 @@ async def _prepare_signal(
     btc_ctx: Dict[str, Any],
     *,
     free_mode: bool = False,
+    min_score: float = 80,
 ) -> Optional[Dict[str, Any]]:
     candles_1d = candles["1d"]
     candles_4h = candles["4h"]
@@ -418,7 +382,7 @@ async def _prepare_signal(
 
     raw_score = compute_score(context)
 
-    if abs(raw_score) < 80:
+    if abs(raw_score) < min_score:
         return None
 
     side = "LONG" if raw_score >= 70 else "SHORT"
@@ -477,14 +441,18 @@ async def scan_market(
     *,
     use_btc_gate: bool = True,
     free_mode: bool = False,
+    min_score: float = 80,
     return_stats: bool = False,
 ) -> List[Dict[str, Any]] | Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """
     Сканирует весь рынок Binance по спотовым USDT-парам и возвращает сигналы.
     """
-    symbols = await _get_spot_usdt_symbols()
+    symbols = await get_spot_usdt_symbols()
 
-    btc_ctx = await get_btc_context()
+    btc_ctx = await get_btc_context() if use_btc_gate else {
+        "allow_longs": True,
+        "allow_shorts": True,
+    }
     checked = len(symbols)
 
     if use_btc_gate:
@@ -506,7 +474,13 @@ async def scan_market(
             if not klines:
                 continue
 
-            signal = await _prepare_signal(symbol, klines, btc_ctx, free_mode=free_mode)
+            signal = await _prepare_signal(
+                symbol,
+                klines,
+                btc_ctx,
+                free_mode=free_mode,
+                min_score=min_score,
+            )
             if signal:
                 signals.append(signal)
 

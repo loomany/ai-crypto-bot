@@ -4,64 +4,30 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
+from binance_rest import fetch_json
 from health import mark_tick, mark_ok, mark_error
 from pro_db import pro_list
+from symbol_cache import get_futures_usdt_symbols
 
 BINANCE_FAPI_BASE = "https://fapi.binance.com"
 
-MIN_WHALE_TRADE_USD = 120_000
+MIN_WHALE_TRADE_USD = 100_000
 MIN_WHALE_FLOW_USD = 250_000
 FLOW_WINDOW_SEC = 60
 DIGEST_INTERVAL_SEC = 60
-SYMBOLS_REFRESH_SEC = 60 * 20
-BATCH_SIZE = 15
+BATCH_SIZE = 12
 BATCH_DELAY_SEC = 0.25
-
-_symbols_cache: dict[str, Any] = {"updated_at": 0.0, "symbols": []}
-
-
-async def _fetch_json(
-    session: aiohttp.ClientSession, url: str, params: Dict[str, Any] | None = None
-):
-    try:
-        async with session.get(url, params=params, timeout=10) as resp:
-            resp.raise_for_status()
-            return await resp.json()
-    except Exception as exc:
-        print(f"[whales] fetch error {url}: {exc}")
-        return None
-
-
-async def _get_futures_usdt_symbols(session: aiohttp.ClientSession) -> List[str]:
-    now = time.time()
-    cached_symbols = _symbols_cache.get("symbols", [])
-    if cached_symbols and now - float(_symbols_cache.get("updated_at", 0.0)) < SYMBOLS_REFRESH_SEC:
-        return cached_symbols
-
-    data = await _fetch_json(session, f"{BINANCE_FAPI_BASE}/fapi/v1/exchangeInfo")
-    if not data:
-        return cached_symbols
-
-    symbols = []
-    for row in data.get("symbols", []):
-        if row.get("contractType") != "PERPETUAL":
-            continue
-        symbol = row.get("symbol")
-        quote = row.get("quoteAsset")
-        if not symbol or quote != "USDT":
-            continue
-        symbols.append(symbol)
-
-    _symbols_cache["symbols"] = symbols
-    _symbols_cache["updated_at"] = now
-    return symbols
 
 
 async def _fetch_agg_trades(
     session: aiohttp.ClientSession, symbol: str, start_ms: int, end_ms: int
 ) -> Optional[List[Dict[str, Any]]]:
     params = {"symbol": symbol, "startTime": start_ms, "endTime": end_ms, "limit": 1000}
-    data = await _fetch_json(session, f"{BINANCE_FAPI_BASE}/fapi/v1/aggTrades", params)
+    data = await fetch_json(
+        f"{BINANCE_FAPI_BASE}/fapi/v1/aggTrades",
+        params=params,
+        session=session,
+    )
     if isinstance(data, list):
         return data
     return None
@@ -118,11 +84,14 @@ def _format_flow_line(symbol: str, netflow: float) -> str:
 
 async def whales_market_flow_worker(bot):
     await asyncio.sleep(5)
-    flow_buffer: Dict[str, float] = {}
+    flow_buffer: Dict[str, Dict[str, float]] = {}
     last_digest_ts = 0.0
+    last_signature: Optional[tuple] = None
+    checked_since_digest = 0
+    digest_start_ts = time.time()
 
     async with aiohttp.ClientSession() as session:
-        symbols = await _get_futures_usdt_symbols(session)
+        symbols = await get_futures_usdt_symbols(session)
         index = 0
 
         while True:
@@ -134,11 +103,12 @@ async def whales_market_flow_worker(bot):
                     continue
 
                 if not symbols or index >= len(symbols):
-                    symbols = await _get_futures_usdt_symbols(session)
+                    symbols = await get_futures_usdt_symbols(session)
                     index = 0
 
                 batch = symbols[index : index + BATCH_SIZE]
                 index += BATCH_SIZE
+                checked_since_digest += len(batch)
 
                 now = time.time()
                 start_ms = int((now - FLOW_WINDOW_SEC) * 1000)
@@ -156,20 +126,45 @@ async def whales_market_flow_worker(bot):
                     flow = _calc_flow(trades)
                     if not flow:
                         continue
-                    flow_buffer[symbol] = flow_buffer.get(symbol, 0.0) + flow["netflow"]
+                    existing = flow_buffer.get(symbol, {"buy": 0.0, "sell": 0.0, "netflow": 0.0})
+                    existing["buy"] += flow["buy"]
+                    existing["sell"] += flow["sell"]
+                    existing["netflow"] += flow["netflow"]
+                    flow_buffer[symbol] = existing
 
                 if now - last_digest_ts >= DIGEST_INTERVAL_SEC:
-                    if flow_buffer:
-                        top_in = sorted(
-                            [(sym, netflow) for sym, netflow in flow_buffer.items() if netflow >= 0],
-                            key=lambda item: item[1],
-                            reverse=True,
-                        )[:10]
-                        top_out = sorted(
-                            [(sym, netflow) for sym, netflow in flow_buffer.items() if netflow < 0],
-                            key=lambda item: item[1],
-                        )[:10]
+                    top_in = sorted(
+                        [
+                            (sym, flow["netflow"])
+                            for sym, flow in flow_buffer.items()
+                            if flow.get("netflow", 0.0) >= 0
+                        ],
+                        key=lambda item: item[1],
+                        reverse=True,
+                    )[:10]
+                    top_out = sorted(
+                        [
+                            (sym, flow["netflow"])
+                            for sym, flow in flow_buffer.items()
+                            if flow.get("netflow", 0.0) < 0
+                        ],
+                        key=lambda item: item[1],
+                    )[:10]
 
+                    btc_flow = flow_buffer.get("BTCUSDT", {"buy": 0.0, "sell": 0.0})
+                    btc_line = (
+                        "BTC netflow 60s: "
+                        f"+{_format_usd(btc_flow.get('buy', 0.0))} / "
+                        f"−{_format_usd(btc_flow.get('sell', 0.0))}"
+                    )
+
+                    signature = (
+                        tuple(sym for sym, _ in top_in),
+                        tuple(sym for sym, _ in top_out),
+                    )
+
+                    should_send = signature != last_signature or not flow_buffer
+                    if should_send:
                         lines = [
                             f"🐳 Whale Flow (последние {FLOW_WINDOW_SEC} сек)",
                             "",
@@ -182,6 +177,8 @@ async def whales_market_flow_worker(bot):
                             ", ".join(_format_flow_line(sym, flow) for sym, flow in top_out)
                             if top_out
                             else "—",
+                            "",
+                            btc_line,
                         ]
                         text = "\n".join(lines)
 
@@ -191,13 +188,23 @@ async def whales_market_flow_worker(bot):
                             except Exception:
                                 continue
 
-                        mark_ok(
-                            "whales_flow",
-                            extra=f"входы: {len(top_in)}, выходы: {len(top_out)}",
-                        )
+                        last_signature = signature
+
+                    cycle_sec = time.time() - digest_start_ts
+                    top_in_sym = top_in[0][0] if top_in else "-"
+                    top_out_sym = top_out[0][0] if top_out else "-"
+                    mark_ok(
+                        "whales_flow",
+                        extra=(
+                            f"checked={checked_since_digest} whales={len(flow_buffer)} "
+                            f"top_in={top_in_sym} top_out={top_out_sym} cycle={cycle_sec:.1f}s"
+                        ),
+                    )
 
                     flow_buffer.clear()
                     last_digest_ts = now
+                    checked_since_digest = 0
+                    digest_start_ts = time.time()
 
             except Exception as e:
                 msg = f"error: {e}"

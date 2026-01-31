@@ -1,7 +1,7 @@
 import textwrap
 from typing import Dict
 
-import aiohttp
+from binance_rest import fetch_json
 
 COIN_INFO: Dict[str, str] = {
     "BTC": (
@@ -51,13 +51,8 @@ async def _fetch_from_binance(base_symbol: str) -> str | None:
         return _coin_cache[base_symbol]
 
     params = {"symbol": base_symbol}
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(_BINANCE_INFO_URL, params=params, timeout=10) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-    except Exception:
+    data = await fetch_json(_BINANCE_INFO_URL, params=params)
+    if not data:
         return None
 
     info = data.get("data") or {}
