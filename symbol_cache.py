@@ -44,6 +44,10 @@ async def get_spot_usdt_symbols(session: aiohttp.ClientSession | None = None) ->
     return symbols
 
 
+async def get_all_usdt_symbols(session: aiohttp.ClientSession | None = None) -> List[str]:
+    return await get_spot_usdt_symbols(session=session)
+
+
 async def get_futures_usdt_symbols(session: aiohttp.ClientSession | None = None) -> List[str]:
     now = time.time()
     cached = _futures_cache.get("symbols", [])
