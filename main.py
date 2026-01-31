@@ -47,6 +47,7 @@ from signal_filter import (
     whales_min_probability,
     pumps_min_strength,
 )
+from db_path import get_db_path
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -144,10 +145,24 @@ def is_trading_time() -> bool:
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(get_db_path())
     try:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS ai_signals_subscribers (chat_id INTEGER PRIMARY KEY)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                chat_id     INTEGER PRIMARY KEY,
+                username    TEXT,
+                first_name  TEXT,
+                last_name   TEXT,
+                full_name   TEXT,
+                language    TEXT,
+                started_at  INTEGER,
+                last_seen   INTEGER
+            )
+            """
         )
         conn.commit()
     finally:
@@ -156,8 +171,67 @@ def init_db():
     init_filter_table()
 
 
+def upsert_user(
+    chat_id: int,
+    username: str | None,
+    first_name: str | None,
+    last_name: str | None,
+    full_name: str | None,
+    language: str | None,
+) -> bool:
+    now = int(time.time())
+    conn = sqlite3.connect(get_db_path())
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM users WHERE chat_id = ?", (chat_id,))
+        exists = cur.fetchone() is not None
+        if not exists:
+            cur.execute(
+                """
+                INSERT INTO users (
+                    chat_id, username, first_name, last_name,
+                    full_name, language, started_at, last_seen
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chat_id,
+                    username,
+                    first_name,
+                    last_name,
+                    full_name,
+                    language,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            return True
+
+        cur.execute(
+            """
+            UPDATE users
+            SET username = ?, first_name = ?, last_name = ?, full_name = ?,
+                language = ?, last_seen = ?
+            WHERE chat_id = ?
+            """,
+            (
+                username,
+                first_name,
+                last_name,
+                full_name,
+                language,
+                now,
+                chat_id,
+            ),
+        )
+        conn.commit()
+        return False
+    finally:
+        conn.close()
+
+
 def add_subscription(chat_id: int) -> bool:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(get_db_path())
     try:
         cur = conn.cursor()
         cur.execute(
@@ -171,7 +245,7 @@ def add_subscription(chat_id: int) -> bool:
 
 
 def remove_subscription(chat_id: int) -> bool:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(get_db_path())
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM ai_signals_subscribers WHERE chat_id = ?", (chat_id,))
@@ -182,7 +256,7 @@ def remove_subscription(chat_id: int) -> bool:
 
 
 def list_subscriptions() -> List[int]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(get_db_path())
     try:
         cur = conn.cursor()
         cur.execute("SELECT chat_id FROM ai_signals_subscribers")
@@ -194,6 +268,7 @@ def list_subscriptions() -> List[int]:
 # ===== СОЗДАЁМ БОТА =====
 
 BOT_TOKEN = load_settings()
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 bot: Bot | None = None
 dp = Dispatcher()
 dp.include_router(btc_router)
@@ -211,8 +286,6 @@ PULSE_INTERVAL_SEC = 60 * 60
 LAST_SENT_FREE: Dict[Tuple[str, str], float] = {}
 LAST_SENT_PRO: Dict[Tuple[str, str], float] = {}
 LAST_PULSE_SENT_AT = 0.0
-
-DB_PATH = "ai_signals.db"
 # Сканируем рынок каждые 30 секунд, чтобы рассылка была оперативной
 AI_SCAN_INTERVAL = 30  # seconds
 
@@ -221,6 +294,29 @@ AI_SCAN_INTERVAL = 30  # seconds
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
+    user = message.from_user
+    if user is not None:
+        is_new = upsert_user(
+            chat_id=message.chat.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            full_name=user.full_name,
+            language=user.language_code,
+        )
+        if is_new and ADMIN_CHAT_ID != 0:
+            username = f"@{user.username}" if user.username else "-"
+            full_name = user.full_name or "-"
+            language = user.language_code or "-"
+            admin_text = (
+                "🆕 Новый пользователь\n"
+                f"ID: {message.chat.id}\n"
+                f"Username: {username}\n"
+                f"Имя: {full_name}\n"
+                f"Язык: {language}"
+            )
+            await message.bot.send_message(ADMIN_CHAT_ID, admin_text)
+
     text = (
         "Привет! Я AI-крипто бот для анализа рынка Binance 🧠📈\n"
         "Я не беру доступ к твоему депозиту и не торгую за тебя.\n"
