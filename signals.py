@@ -28,6 +28,10 @@ EXCHANGE_INFO_URL = f"{BINANCE_BASE_URL}/exchangeInfo"
 TICKER_24H_URL = f"{BINANCE_BASE_URL}/ticker/24hr"
 KLINES_URL = f"{BINANCE_BASE_URL}/klines"
 BTC_SYMBOL = "BTCUSDT"
+LEVEL_NEAR_PCT_FREE = 1.2
+MIN_VOLUME_RATIO_FREE = 1.15
+MIN_RR_FREE = 1.8
+EMA50_NEAR_PCT_FREE = 0.3
 
 
 def is_pro_strict_signal(
@@ -250,7 +254,11 @@ async def get_alt_watch_symbol(limit: int = 80, batch_size: int = 10) -> Optiona
 
 
 async def _prepare_signal(
-    symbol: str, candles: Dict[str, List[Candle]], btc_ctx: Dict[str, Any]
+    symbol: str,
+    candles: Dict[str, List[Candle]],
+    btc_ctx: Dict[str, Any],
+    *,
+    free_mode: bool = False,
 ) -> Optional[Dict[str, Any]]:
     candles_1d = candles["1d"]
     candles_4h = candles["4h"]
@@ -288,11 +296,12 @@ async def _prepare_signal(
     candidate_side: Optional[str] = None
     level_touched: Optional[float] = None
 
-    if dist_low is not None and dist_low <= 0.6:
+    level_near_pct = LEVEL_NEAR_PCT_FREE if free_mode else 0.6
+    if dist_low is not None and dist_low <= level_near_pct:
         candidate_side = "LONG"
         level_touched = nearest_low
 
-    if dist_high is not None and dist_high <= 0.6:
+    if dist_high is not None and dist_high <= level_near_pct:
         if candidate_side is None or (dist_high is not None and dist_high < (dist_low or 100)):
             candidate_side = "SHORT"
             level_touched = nearest_high
@@ -372,7 +381,12 @@ async def _prepare_signal(
             ma_trend_ok = True
 
     if not ma_trend_ok:
-        return None
+        if free_mode and ema50_1h:
+            near_ema50 = abs(current_price - ema50_1h) / current_price * 100 <= EMA50_NEAR_PCT_FREE
+            if not near_ema50:
+                return None
+        else:
+            return None
 
     if not atr_ok:
         return None
@@ -410,7 +424,8 @@ async def _prepare_signal(
     side = "LONG" if raw_score >= 70 else "SHORT"
     rr = abs((tp1 - entry_to) / risk) if risk != 0 else 0.0
 
-    if rr < 2:
+    min_rr = MIN_RR_FREE if free_mode else 2.0
+    if rr < min_rr:
         return None
 
     rsi_1h_series = _compute_rsi_series(closes_1h)
@@ -424,7 +439,8 @@ async def _prepare_signal(
     volume_ratio, volume_avg = _volume_ratio([c.volume for c in candles_1h])
 
     # Требуем хотя бы 30% всплеска объёма
-    if volume_ratio < 1.3:
+    min_volume_ratio = MIN_VOLUME_RATIO_FREE if free_mode else 1.3
+    if volume_ratio < min_volume_ratio:
         return None
 
     support_level = nearest_low if nearest_low is not None else level_touched
@@ -455,15 +471,28 @@ async def _prepare_signal(
     }
 
 
-async def scan_market(batch_delay: float = 0.2, batch_size: int = 5) -> List[Dict[str, Any]]:
+async def scan_market(
+    batch_delay: float = 0.2,
+    batch_size: int = 5,
+    *,
+    use_btc_gate: bool = True,
+    free_mode: bool = False,
+    return_stats: bool = False,
+) -> List[Dict[str, Any]] | Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """
     Сканирует весь рынок Binance по спотовым USDT-парам и возвращает сигналы.
     """
     symbols = await _get_spot_usdt_symbols()
 
     btc_ctx = await get_btc_context()
+    checked = len(symbols)
 
-    if not btc_ctx["allow_longs"] and not btc_ctx["allow_shorts"]:
+    if use_btc_gate:
+        if not btc_ctx["allow_longs"] and not btc_ctx["allow_shorts"]:
+            if return_stats:
+                return [], {"checked": checked, "candidates": 0}
+            return []
+    else:
         btc_ctx = {**btc_ctx, "allow_longs": True, "allow_shorts": True}
 
     signals: List[Dict[str, Any]] = []
@@ -477,10 +506,12 @@ async def scan_market(batch_delay: float = 0.2, batch_size: int = 5) -> List[Dic
             if not klines:
                 continue
 
-            signal = await _prepare_signal(symbol, klines, btc_ctx)
+            signal = await _prepare_signal(symbol, klines, btc_ctx, free_mode=free_mode)
             if signal:
                 signals.append(signal)
 
         await asyncio.sleep(batch_delay)
 
+    if return_stats:
+        return signals, {"checked": checked, "candidates": len(signals)}
     return signals
