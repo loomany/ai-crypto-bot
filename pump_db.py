@@ -35,6 +35,38 @@ def remove_pump_subscriber(chat_id: int) -> None:
     conn.close()
 
 
+def enable_pump_subscriber(chat_id: int) -> bool:
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR IGNORE INTO pump_subscribers (chat_id) VALUES (?)",
+            (chat_id,),
+        )
+        if cur.rowcount == 1:
+            conn.commit()
+            return True
+        return False
+    finally:
+        conn.close()
+
+
+def disable_pump_subscriber(chat_id: int) -> bool:
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM pump_subscribers WHERE chat_id = ?",
+            (chat_id,),
+        )
+        if cur.rowcount == 1:
+            conn.commit()
+            return True
+        return False
+    finally:
+        conn.close()
+
+
 def get_pump_subscribers() -> list[int]:
     conn = _get_conn()
     cur = conn.cursor()

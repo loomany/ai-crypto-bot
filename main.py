@@ -35,7 +35,7 @@ from pro_modules import (
 )
 from market_data import get_coin_analysis
 from pump_detector import scan_pumps, format_pump_message
-from pump_db import add_pump_subscriber, remove_pump_subscriber, get_pump_subscribers
+from pump_db import disable_pump_subscriber, enable_pump_subscriber, get_pump_subscribers
 from signals import scan_market, get_alt_watch_symbol
 from market_regime import get_market_regime
 from health import MODULES, mark_tick, mark_ok, mark_error
@@ -444,10 +444,12 @@ async def pump_detector_entry(message: Message):
 @dp.message(F.text == "🔔 Включить авто-пампы")
 async def subscribe_pumps(message: Message):
     waiting_for_symbol.discard(message.chat.id)
-    add_pump_subscriber(message.chat.id)
+    changed = enable_pump_subscriber(message.chat.id)
     await message.answer(
         "✅ Авто-оповещения Pump Detector включены.\n"
-        "Я буду присылать пампы по монетам Binance, когда найду их.",
+        "Я буду присылать пампы по монетам Binance, когда найду их."
+        if changed
+        else "✅ Авто-оповещения Pump Detector уже включены.",
         reply_markup=pump_menu_keyboard(),
     )
 
@@ -455,9 +457,11 @@ async def subscribe_pumps(message: Message):
 @dp.message(F.text == "🚫 Отключить авто-пампы")
 async def unsubscribe_pumps(message: Message):
     waiting_for_symbol.discard(message.chat.id)
-    remove_pump_subscriber(message.chat.id)
+    changed = disable_pump_subscriber(message.chat.id)
     await message.answer(
-        "⭕ Авто-оповещения Pump Detector выключены.",
+        "⭕ Авто-оповещения Pump Detector выключены."
+        if changed
+        else "✅ Авто-оповещения Pump Detector уже отключены.",
         reply_markup=pump_menu_keyboard(),
     )
 
