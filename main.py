@@ -16,39 +16,27 @@ from aiogram.types import (
 from aiogram.filters import CommandStart
 from dotenv import load_dotenv
 
-from coin_info import get_coin_description
 from btc_module import (
     router as btc_router,
     btc_realtime_signal_worker,
     get_btc_main_keyboard,
 )
-from whales_module import (
-    router as whales_router,
-    whales_realtime_worker,
-)
+from whales_module import whales_realtime_worker
 from pro_modules import (
     router as pro_router,
-    orderflow_pro_worker,
-    smart_money_worker,
-    ai_patterns_worker,
-    market_regime_worker,
 )
-from market_data import get_coin_analysis
 from pump_detector import scan_pumps, format_pump_message
-from pump_db import disable_pump_subscriber, enable_pump_subscriber, get_pump_subscribers
-from signals import scan_market, get_alt_watch_symbol
+from signals import scan_market, get_alt_watch_symbol, is_pro_strict_signal
 from market_regime import get_market_regime
 from health import MODULES, mark_tick, mark_ok, mark_error
-from signal_filter import (
-    init_filter_table,
-    set_user_filter,
-    get_user_filter,
-    btc_min_probability,
-    whales_min_probability,
-    pumps_min_strength,
-)
 from db_path import get_db_path
 from notifications_db import init_notify_table
+from pro_subscribers import (
+    init_pro_tables,
+    pro_list_subscribers,
+    pro_get_daily_count,
+    pro_increment_daily_count,
+)
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -68,29 +56,12 @@ def load_settings() -> str:
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = [
         [
-            KeyboardButton(text="📊 Анализ монеты"),
+            KeyboardButton(text="₿ BTC (intraday)"),
             KeyboardButton(text="🎯 AI-сигналы"),
         ],
         [
-            KeyboardButton(text="₿ BTC (intraday)"),
-            KeyboardButton(text="🚀 Pump Detector"),
-        ],
-        [
-            KeyboardButton(text="🐳 Киты (ТОП-5)"),
             KeyboardButton(text="🧠 PRO-модули"),
         ],
-        [
-            KeyboardButton(text="⚙️ Фильтр сигналов"),
-        ],
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-
-
-def pump_menu_keyboard() -> ReplyKeyboardMarkup:
-    kb = [
-        [KeyboardButton(text="🔔 Включить авто-пампы")],
-        [KeyboardButton(text="🚫 Отключить авто-пампы")],
-        [KeyboardButton(text="⬅️ Назад в главное меню")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -99,23 +70,6 @@ def ai_signals_keyboard() -> ReplyKeyboardMarkup:
     kb = [
         [KeyboardButton(text="🔔 Включить авто-сигналы")],
         [KeyboardButton(text="🚫 Отключить авто-сигналы")],
-        [KeyboardButton(text="⬅️ Главное меню")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-
-
-def signal_filter_keyboard(current: str | None = None) -> ReplyKeyboardMarkup:
-    postfix = {
-        "aggressive": " (текущий)",
-        "strict": " (текущий)",
-    }
-    cur = current or "aggressive"
-    if cur == "normal":
-        cur = "aggressive"
-
-    kb = [
-        [KeyboardButton(text="🔥 Больше сетапов (FREE)" + (postfix["aggressive"] if cur == "aggressive" else ""))],
-        [KeyboardButton(text="🧊 Только топ-сигналы (PRO)" + (postfix["strict"] if cur == "strict" else ""))],
         [KeyboardButton(text="⬅️ Главное меню")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -169,8 +123,8 @@ def init_db():
     finally:
         conn.close()
 
-    init_filter_table()
     init_notify_table()
+    init_pro_tables()
 
 
 def upsert_user(
@@ -274,22 +228,26 @@ ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 bot: Bot | None = None
 dp = Dispatcher()
 dp.include_router(btc_router)
-dp.include_router(whales_router)
 dp.include_router(pro_router)
-waiting_for_symbol: set[int] = set()
 FREE_MIN_SCORE = 85
-PRO_MIN_SCORE = 93
 COOLDOWN_FREE_SEC = 60 * 60 * 2
-COOLDOWN_PRO_SEC = 60 * 60 * 4
 MAX_SIGNALS_PER_CYCLE = 3
 MAX_BTC_PER_CYCLE = 1
 PULSE_INTERVAL_SEC = 60 * 60
+PRO_MIN_SCORE = 88
+PRO_MIN_RR = 2.5
+PRO_MIN_VOLUME_RATIO = 1.3
+PRO_SYMBOL_COOLDOWN_SEC = 60 * 60 * 6
+MAX_PRO_SIGNALS_PER_DAY = 4
+MAX_PRO_SIGNALS_PER_CYCLE = 2
+MIN_PUMP_STRENGTH = 7.0
 
 LAST_SENT_FREE: Dict[Tuple[str, str], float] = {}
-LAST_SENT_PRO: Dict[Tuple[str, str], float] = {}
+LAST_PRO_SYMBOL_SENT: Dict[str, float] = {}
 LAST_PULSE_SENT_AT = 0.0
 # Сканируем рынок каждые 30 секунд, чтобы рассылка была оперативной
-AI_SCAN_INTERVAL = 30  # seconds
+AI_SCAN_INTERVAL = 20  # seconds
+PRO_AI_SCAN_INTERVAL = 20  # seconds
 
 
 # ===== ХЭНДЛЕРЫ =====
@@ -320,43 +278,19 @@ async def cmd_start(message: Message):
             await message.bot.send_message(ADMIN_CHAT_ID, admin_text)
 
     text = (
-        "Привет! Я AI-крипто бот для анализа рынка Binance 🧠📈\n"
-        "Я не беру доступ к твоему депозиту и не торгую за тебя.\n"
-        "Моя задача — давать удобный, понятный анализ монет и готовые торговые сетапы, "
-        "чтобы тебе было проще принимать решения.\n\n"
-
-        "🔬 *Как делается анализ под капотом*\n\n"
-        "Я работаю только с открытыми рыночными данными Binance:\n\n"
-        "• беру котировки и свечи по монете на нескольких таймфреймах: 1D, 4H, 1H, 15M;\n"
-        "• считаю изменение цены, чтобы понять тренд (бычий, медвежий или флет);\n"
-        "• считаю RSI, чтобы понять, перекуплена монета или перепродана;\n"
-        "• анализирую объёмы и сравниваю их со средними значениями;\n"
-        "• ищу локальные минимумы и максимумы для определения уровней поддержки/сопротивления;\n"
-        "• считаю риск/прибыль (R:R), чтобы TP были в несколько раз больше стопа;\n"
-        "• по набору правил формирую вердикт и сигналы.\n\n"
-        "Это не магия и не гарантированный профит, а системный теханализ + логика отбора, "
-        "упакованные в удобный формат.\n\n"
+        "Привет! Я AI-крипто бот для рынка Binance 🧠📈\n\n"
+        "Что умею:\n"
+        "• ₿ BTC (intraday) — быстрые сигналы по BTCUSDT\n"
+        "• 🎯 AI-сигналы — автоматические сетапы по рынку\n"
+        "• 🧠 PRO — Pump/Dump, Whale Flow и PRO AI-сигналы\n\n"
         "Нажми кнопку ниже 👇"
     )
 
     await message.answer(text, reply_markup=main_menu_keyboard(), parse_mode="Markdown")
 
 
-@dp.message(F.text == "📊 Анализ монеты")
-async def analyze_coin(message: Message):
-    waiting_for_symbol.add(message.chat.id)
-
-    await message.answer(
-        "📊 *Анализ монеты*\n\n"
-        "Введи тикер монеты (например: BTC, ETH, SOL)\n"
-        "_Можно писать: BTC или BTCUSDT_",
-        parse_mode="Markdown",
-    )
-
-
 @dp.message(F.text == "🎯 AI-сигналы")
 async def ai_signals_menu(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
     await message.answer(
         "🎯 AI-сигналы\n\nВыбери режим:\n1) 🔔 Включить авто-сигналы\n2) 🚫 Отключить авто-сигналы",
         reply_markup=ai_signals_keyboard(),
@@ -365,7 +299,6 @@ async def ai_signals_menu(message: Message):
 
 @dp.message(F.text == "🔔 Включить авто-сигналы")
 async def ai_signals_subscribe(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
     is_new = add_subscription(message.chat.id)
     if is_new:
         await message.answer(
@@ -381,7 +314,6 @@ async def ai_signals_subscribe(message: Message):
 
 @dp.message(F.text == "🚫 Отключить авто-сигналы")
 async def ai_signals_unsubscribe(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
     removed = remove_subscription(message.chat.id)
     if removed:
         await message.answer(
@@ -394,78 +326,6 @@ async def ai_signals_unsubscribe(message: Message):
         )
 
 
-@dp.message(F.text == "⚙️ Фильтр сигналов")
-async def open_filter_menu(message: Message):
-    level = get_user_filter(message.chat.id)
-    if level == "normal":
-        set_user_filter(message.chat.id, "aggressive")
-        level = "aggressive"
-    text = (
-        "⚙️ Настройка фильтра сигналов\n\n"
-        "Выбери режим, насколько жёстко фильтровать авто-сигналы:\n\n"
-        "🔥 Больше сетапов (FREE) — больше сделок, но качество чуть ниже.\n"
-        "🧊 Только топ-сигналы (PRO) — мало, но самые сильные сетапы.\n\n"
-        "Режим влияет на AI-сигналы, BTC-модуль, Pump Detector и Китов."
-    )
-    await message.answer(text, reply_markup=signal_filter_keyboard(current=level))
-
-
-@dp.message(F.text.startswith("🔥 Больше сетапов"))
-async def set_filter_aggressive(message: Message):
-    set_user_filter(message.chat.id, "aggressive")
-    await message.answer(
-        "🔥 Режим фильтра: БОЛЬШЕ СЕТАПОВ (FREE).\n\n"
-        "Сигналов будет больше, но они чуть агрессивнее.",
-        reply_markup=signal_filter_keyboard(current="aggressive"),
-    )
-
-
-@dp.message(F.text.startswith("🧊 Только топ-сигналы"))
-async def set_filter_strict(message: Message):
-    set_user_filter(message.chat.id, "strict")
-    await message.answer(
-        "🧊 Режим фильтра: ТОЛЬКО ТОП-СИГНАЛЫ (PRO).\n\n"
-        "Будем присылать только самые сильные сетапы.",
-        reply_markup=signal_filter_keyboard(current="strict"),
-    )
-
-
-@dp.message(F.text == "🚀 Pump Detector")
-async def pump_detector_entry(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
-    await message.answer(
-        "🚀 Pump Detector\n\n"
-        "Я ищу реальные пампы по всем монетам Binance (USDT).\n"
-        "Выбери режим:",
-        reply_markup=pump_menu_keyboard(),
-    )
-
-
-@dp.message(F.text == "🔔 Включить авто-пампы")
-async def subscribe_pumps(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
-    changed = enable_pump_subscriber(message.chat.id)
-    await message.answer(
-        "✅ Авто-оповещения Pump Detector включены.\n"
-        "Я буду присылать пампы по монетам Binance, когда найду их."
-        if changed
-        else "✅ Авто-оповещения Pump Detector уже включены.",
-        reply_markup=pump_menu_keyboard(),
-    )
-
-
-@dp.message(F.text == "🚫 Отключить авто-пампы")
-async def unsubscribe_pumps(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
-    changed = disable_pump_subscriber(message.chat.id)
-    await message.answer(
-        "⭕ Авто-оповещения Pump Detector выключены."
-        if changed
-        else "✅ Авто-оповещения Pump Detector уже отключены.",
-        reply_markup=pump_menu_keyboard(),
-    )
-
-
 @dp.message(F.text == "/testadmin")
 async def test_admin(message: Message):
     lines = ["🛠 Статус модулей:\n"]
@@ -475,21 +335,13 @@ async def test_admin(message: Message):
     await message.answer("\n".join(lines))
 
 
-@dp.message(F.text == "⬅️ Назад в главное меню")
-async def back_to_main_menu(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
-    await message.answer("Главное меню:", reply_markup=main_menu_keyboard())
-
-
 @dp.message(F.text == "⬅️ Главное меню")
 async def back_to_main(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
     await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard())
 
 
 @dp.message(F.text == "₿ BTC (intraday)")
 async def open_btc_menu(message: Message):
-    waiting_for_symbol.discard(message.chat.id)
     await message.answer(
         "BTC-модуль (интрадей) — только BTCUSDT:\n\n"
         "• Автоматические сигналы LONG/SHORT\n"
@@ -501,58 +353,10 @@ async def open_btc_menu(message: Message):
 
 
 
-def _trend_to_text(trend: str) -> str:
-    if trend == "bullish":
-        return "восходящий (бычий) 🚀"
-    if trend == "bearish":
-        return "нисходящий (медвежий) 🐻"
-    return "флет (боковик)"
-
-
-def _rsi_zone_text(rsi: float) -> str:
-    if rsi < 30:
-        return "сильная перепроданность"
-    if rsi < 40:
-        return "зона перепроданности"
-    if rsi <= 60:
-        return "нормальная зона"
-    if rsi <= 70:
-        return "лёгкая перекупленность"
-    return "сильная перекупленность"
-
-
-def _volume_text(desc: str) -> str:
-    if desc == "high":
-        return "выше среднего, растут 🔥"
-    if desc == "low":
-        return "ниже среднего"
-    return "около среднего"
-
-
-def _macd_text(signal: str) -> str:
-    if signal == "bullish":
-        return "бычий (подтверждает тренд)"
-    if signal == "bearish":
-        return "медвежий (ослабляет тренд)"
-    return "нейтральный"
-
-
-def fmt_price(value: float) -> str:
-    v = abs(value)
-    if v >= 100:
-        return f"{value:.0f}"
-    elif v >= 1:
-        return f"{value:.2f}"
-    elif v >= 0.01:
-        return f"{value:.4f}"
-    else:
-        return f"{value:.8f}"
-
-
 def _trend_short_text(trend: str) -> str:
-    if trend == "bullish":
+    if trend in ("bullish", "up"):
         return "бычий"
-    if trend == "bearish":
+    if trend in ("bearish", "down"):
         return "медвежий"
     return "нейтральный"
 
@@ -659,12 +463,8 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
     if not subscribers:
         return
 
-    if tier == "free":
-        if not _cooldown_ready(signal_dict, LAST_SENT_FREE, COOLDOWN_FREE_SEC):
-            return
-    else:
-        if not _cooldown_ready(signal_dict, LAST_SENT_PRO, COOLDOWN_PRO_SEC):
-            return
+    if not _cooldown_ready(signal_dict, LAST_SENT_FREE, COOLDOWN_FREE_SEC):
+        return
 
     text = _format_signal(signal_dict, tier)
 
@@ -784,7 +584,7 @@ async def pump_worker(bot: Bot):
 
     while True:
         try:
-            subscribers = get_pump_subscribers()
+            subscribers = pro_list_subscribers()
             mark_tick("pumps", extra=f"подписчиков: {len(subscribers)}")
             if not subscribers:
                 await asyncio.sleep(15)
@@ -802,13 +602,9 @@ async def pump_worker(bot: Bot):
 
                 text = format_pump_message(sig)
 
-                # ФИЛЬТР ПО СИЛЕ ПАМПА
-                strength = float(sig.get("strength", 0.0))
-
                 for chat_id in subscribers:
-                    level = get_user_filter(chat_id)
-                    min_strength = pumps_min_strength(level)
-                    if strength < min_strength:
+                    strength = float(sig.get("strength", 0.0))
+                    if strength < MIN_PUMP_STRENGTH:
                         continue
 
                     last_sent[symbol] = now_min
@@ -823,7 +619,7 @@ async def pump_worker(bot: Bot):
             mark_error("pumps", msg)
             await asyncio.sleep(10)
 
-        await asyncio.sleep(10)
+        await asyncio.sleep(15)
 
 
 async def signals_worker():
@@ -839,11 +635,6 @@ async def signals_worker():
                         f"[ai_signals] SEND FREE {signal['symbol']} {signal['direction']} score={score}"
                     )
                     await send_signal_to_all(signal, "free")
-                if score >= PRO_MIN_SCORE:
-                    print(
-                        f"[ai_signals] SEND PRO {signal['symbol']} {signal['direction']} score={score}"
-                    )
-                    await send_signal_to_all(signal, "pro")
         except Exception as e:
             msg = f"Worker error: {e}"
             print(f"[ai_signals] {msg}")
@@ -852,131 +643,77 @@ async def signals_worker():
         await asyncio.sleep(AI_SCAN_INTERVAL)
 
 
-@dp.message(lambda message: message.chat.id in waiting_for_symbol)
-async def process_symbol(message: Message):
-    chat_id = message.chat.id
+def _pro_symbol_cooldown_ready(symbol: str) -> bool:
+    now = time.time()
+    last = LAST_PRO_SYMBOL_SENT.get(symbol)
+    if last and now - last < PRO_SYMBOL_COOLDOWN_SEC:
+        return False
+    return True
 
-    symbol = (message.text or "").strip().upper()
-    if not symbol:
-        await message.answer("Я ожидал тикер монеты. Попробуй ещё раз нажать «📊 Анализ монеты».")
+
+def _mark_pro_symbol_sent(symbol: str) -> None:
+    if symbol:
+        LAST_PRO_SYMBOL_SENT[symbol] = time.time()
+
+
+async def _send_pro_signal(signal_dict: Dict[str, Any], subscribers: List[int]):
+    if bot is None:
+        print("[pro_ai] Bot is not initialized; skipping send.")
         return
 
-    if not symbol.endswith("USDT"):
-        symbol_pair = symbol + "USDT"
-    else:
-        symbol_pair = symbol
+    text = _format_signal(signal_dict, "pro")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    if symbol_pair.endswith("USDT"):
-        base = symbol_pair[:-4]
-        quote = "USDT"
-    else:
-        base = symbol_pair
-        quote = ""
+    for chat_id in subscribers:
+        sent_count = pro_get_daily_count(chat_id, today)
+        if sent_count >= MAX_PRO_SIGNALS_PER_DAY:
+            continue
+        try:
+            await bot.send_message(chat_id, text)
+            pro_increment_daily_count(chat_id, today)
+        except Exception:
+            continue
 
-    symbol_human = f"{base} / {quote}" if quote else base
+    _mark_pro_symbol_sent(signal_dict.get("symbol", ""))
 
-    await message.answer("⏳ Делаю анализ по Binance, пару секунд...")
 
-    analysis = await get_coin_analysis(symbol_pair)
+async def pro_ai_signals_worker():
+    while True:
+        try:
+            subscribers = pro_list_subscribers()
+            mark_tick("pro_ai_signals", extra=f"подписчиков: {len(subscribers)}")
+            if not subscribers:
+                await asyncio.sleep(20)
+                continue
 
-    if not analysis:
-        await message.answer("❌ Не удалось получить данные. Проверь тикер (например: BTC, ETH, SOL).")
-        return
+            signals = await scan_market()
+            candidates = [
+                sig
+                for sig in signals
+                if is_pro_strict_signal(
+                    sig,
+                    min_score=PRO_MIN_SCORE,
+                    min_rr=PRO_MIN_RR,
+                    min_volume_ratio=PRO_MIN_VOLUME_RATIO,
+                )
+                and _pro_symbol_cooldown_ready(sig.get("symbol", ""))
+            ]
+            candidates.sort(key=lambda item: item.get("score", 0), reverse=True)
 
-    price = analysis["price"]
-    change = analysis["change_24h"]
-    emoji_change = "📈" if change >= 0 else "📉"
+            if candidates:
+                mark_ok("pro_ai_signals", extra=f"кандидатов: {len(candidates)}")
+            else:
+                mark_tick("pro_ai_signals", extra="кандидатов: 0")
 
-    tf = analysis["tf"]
-    levels = analysis["levels"]
-    risk = analysis["risk"]
+            for signal in candidates[:MAX_PRO_SIGNALS_PER_CYCLE]:
+                await _send_pro_signal(signal, subscribers)
 
-    tf4 = tf.get("4h", {})
-    tf1 = tf.get("1h", {})
-    tf15 = tf.get("15m", {})
+        except Exception as e:
+            msg = f"Worker error: {e}"
+            print(f"[pro_ai] {msg}")
+            mark_error("pro_ai_signals", msg)
 
-    # 4h
-    trend_4h = _trend_to_text(tf4.get("trend", "neutral"))
-    rsi_4h = tf4.get("rsi", 50.0)
-    rsi_4h_txt = _rsi_zone_text(rsi_4h)
-
-    # 1h
-    trend_1h = _trend_to_text(tf1.get("trend", "neutral"))
-    rsi_1h = tf1.get("rsi", 50.0)
-    rsi_1h_txt = _rsi_zone_text(rsi_1h)
-    vol_1h_txt = _volume_text(tf1.get("volume_desc", "normal"))
-    macd_1h_txt = _macd_text(tf1.get("macd", "neutral"))
-
-    # 15m
-    rsi_15 = tf15.get("rsi", 50.0)
-    rsi_15_txt = _rsi_zone_text(rsi_15)
-    trend_15 = _trend_to_text(tf15.get("trend", "neutral"))
-
-    support = levels["support"]
-    resistance = levels["resistance"]
-    entry_low = levels["entry_low"]
-    entry_high = levels["entry_high"]
-    tp1 = levels["tp1"]
-    tp2 = levels["tp2"]
-    sl = levels["sl"]
-
-    # Вердикт по-человечески (очень упрощённо)
-    verdict_lines = []
-    if tf4.get("trend") == "bullish":
-        verdict_lines.append("Глобально монета в устойчивом восходящем тренде.")
-    elif tf4.get("trend") == "bearish":
-        verdict_lines.append("Глобально монета под давлением, тренд скорее нисходящий.")
-    else:
-        verdict_lines.append("Глобально тренд больше похож на боковой.")
-
-    if rsi_15 >= 65:
-        verdict_lines.append("На мелком таймфрейме есть признаки перегретости — возможен локальный откат.")
-    elif rsi_15 <= 35:
-        verdict_lines.append("Локально монета перепродана — возможен отскок.")
-    else:
-        verdict_lines.append("Локально ситуация по RSI близка к нормальной зоне.")
-
-    verdict_text = " ".join(verdict_lines)
-
-    risk_text = {
-        "low": "низкий",
-        "medium": "средний",
-        "high": "повышенный",
-    }.get(risk, "средний")
-
-    analysis_text = (
-        f"📊 Анализ {symbol_human}\n\n"
-        f"💰 Цена: {fmt_price(price)} USDT\n"
-        f"{emoji_change} Изм. 24ч: {change:+.2f}%\n\n"
-        f"🔭 Глобально (4ч):\n"
-        f"• Тренд: {trend_4h}\n"
-        f"• RSI: {rsi_4h:.1f} — {rsi_4h_txt}\n"
-        f"• Уровни:\n"
-        f"  • Поддержка: {fmt_price(support)}\n"
-        f"  • Сопротивление: {fmt_price(resistance)}\n\n"
-        f"⏱ Основной тренд (1ч):\n"
-        f"• Тренд: {trend_1h}\n"
-        f"• RSI: {rsi_1h:.1f} — {rsi_1h_txt}\n"
-        f"• Объёмы: {vol_1h_txt}\n"
-        f"• MACD: {macd_1h_txt}\n\n"
-        f"🕒 Локально (15м):\n"
-        f"• Тренд: {trend_15}\n"
-        f"• RSI: {rsi_15:.1f} — {rsi_15_txt}\n"
-        f"• Возможна коррекция к зоне {fmt_price(entry_low)}–{fmt_price(entry_high)}\n\n"
-        f"🧠 Вердикт:\n"
-        f"{verdict_text}\n\n"
-        f"🎯 Пример уровней для сделки (для обучения, не финсовет):\n"
-        f"• TP1: {fmt_price(tp1)}\n"
-        f"• TP2: {fmt_price(tp2)}\n"
-        f"• SL: {fmt_price(sl)}\n\n"
-        f"⚠️ Риск сделки: {risk_text}.\n"
-        "Источник данных: Binance\n\n"
-    )
-
-    coin_desc = await get_coin_description(symbol_pair)
-    analysis_text += f"ℹ️ О монете:\n{coin_desc}"
-
-    await message.answer(analysis_text)
+        await asyncio.sleep(PRO_AI_SCAN_INTERVAL)
 
 
 # ===== ТОЧКА ВХОДА =====
@@ -991,10 +728,7 @@ async def main():
     pump_task = asyncio.create_task(pump_worker(bot))
     btc_task = asyncio.create_task(btc_realtime_signal_worker(bot))
     whales_task = asyncio.create_task(whales_realtime_worker(bot))
-    orderflow_task = asyncio.create_task(orderflow_pro_worker(bot))
-    smart_money_task = asyncio.create_task(smart_money_worker(bot))
-    ai_patterns_task = asyncio.create_task(ai_patterns_worker(bot))
-    regime_task = asyncio.create_task(market_regime_worker(bot))
+    pro_ai_task = asyncio.create_task(pro_ai_signals_worker())
     try:
         await dp.start_polling(bot)
     finally:
@@ -1013,21 +747,9 @@ async def main():
         whales_task.cancel()
         with suppress(asyncio.CancelledError):
             await whales_task
-        orderflow_task.cancel()
+        pro_ai_task.cancel()
         with suppress(asyncio.CancelledError):
-            await orderflow_task
-
-        smart_money_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await smart_money_task
-
-        ai_patterns_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await ai_patterns_task
-
-        regime_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await regime_task
+            await pro_ai_task
 
 
 if __name__ == "__main__":

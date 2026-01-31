@@ -1,214 +1,27 @@
 import asyncio
-import datetime as dt
 import time
-from dataclasses import dataclass
-from typing import Optional, Dict, List, Any
+from typing import Any, Dict, List, Optional
 
 import aiohttp
-from aiogram import Router, F
-from aiogram.types import (
-    Message,
-    CallbackQuery,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-)
-from aiogram.fsm.context import FSMContext
+
 from health import mark_tick, mark_ok, mark_error
-from signal_filter import get_user_filter, whales_min_probability
-from notifications_db import disable_notify, enable_notify, list_enabled, set_notify
+from pro_subscribers import pro_list_subscribers
 
-# ============================================================
-# НАСТРОЙКИ МОДУЛЯ КИТОВ
-# ============================================================
+BINANCE_FAPI_BASE = "https://fapi.binance.com"
 
-router = Router(name="whales_module")
+MIN_WHALE_TRADE_USD = 120_000
+MIN_WHALE_FLOW_USD = 250_000
+FLOW_WINDOW_SEC = 60
+DIGEST_INTERVAL_SEC = 60
+SYMBOLS_REFRESH_SEC = 60 * 10
+SYMBOL_COOLDOWN_SEC = 60 * 20
+BATCH_SIZE = 10
+BATCH_DELAY_SEC = 0.2
 
-# ТОП-5 монет, за которыми следим
-WHALES_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
-
-# Пороговые значения для крупного капитала (можно тюнить)
-MIN_WHALE_TRADE_USD = 100_000      # минимальный размер сделки, чтобы считать китовой
-STRONG_WHALE_TRADE_USD = 300_000   # сильная активность
-MEGA_WHALE_TRADE_USD = 1_000_000   # мега-кит
-
-TIMEZONE_OFFSET_HOURS = 5  # Asia/Almaty
-
-BINANCE_FAPI_BASE = "https://fapi.binance.com/fapi/v1"
-OI_HISTORY_ENDPOINT = "https://fapi.binance.com/futures/data/openInterestHist"
+_symbols_cache: dict[str, Any] = {"updated_at": 0.0, "symbols": []}
 
 
-# ============================================================
-# МОДЕЛЬ КИТОВОГО СИГНАЛА (dataclass)
-# ============================================================
-
-@dataclass
-class WhaleSignal:
-    symbol: str
-    timestamp: dt.datetime
-    side: str  # "BUY" или "SELL"
-    whale_buy_usd: float
-    whale_sell_usd: float
-    orderflow_imbalance_pct: float
-    cvd_direction: str  # "up" / "down" / "flat"
-    oi_change_pct: float
-    funding: float
-    explanation: str
-    probability: float  # 0–100
-
-
-# ============================================================
-# КЛАВИАТУРА ДЛЯ УПРАВЛЕНИЯ КИТАМИ
-# ============================================================
-
-def get_whales_keyboard() -> InlineKeyboardMarkup:
-    """
-    Меню управления уведомлениями по китам для ТОП-5 монет.
-    """
-    kb = [
-        [
-            InlineKeyboardButton(
-                text="🐳 Включить уведомления по китам", callback_data="whales_notify_on"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="🐳 Отключить уведомления по китам", callback_data="whales_notify_off"
-            )
-        ],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=kb)
-
-
-def get_whales_reply_keyboard() -> ReplyKeyboardMarkup:
-    """
-    Нижняя панель для модуля китов:
-    - Включить уведомления
-    - Отключить уведомления
-    - Назад в главное меню
-    """
-    kb = [
-        [KeyboardButton(text="🐳 Включить уведомления по китам")],
-        [KeyboardButton(text="🐳 Отключить уведомления по китам")],
-        [KeyboardButton(text="⬅️ Главное меню")],  # обработчик уже есть в main.py
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-
-
-# ============================================================
-# КОМАНДА /whales — вход в меню китов
-# ============================================================
-
-
-def _whales_menu_text() -> str:
-    return (
-        "🐳 Модуль КИТОВ (ордерфлоу, крупные сделки, OI, CVD)\n\n"
-        "Монеты: BTC, ETH, SOL, BNB, XRP\n"
-        "Бот будет присылать сигналы, когда крупные игроки массово ВХОДЯТ или ВЫХОДЯТ из этих монет.\n\n"
-        "Это помогает:\n"
-        "• Видеть, куда заходит крупный капитал\n"
-        "• Раньше замечать начало тренда или разворот\n"
-        "• Не заходить против китов\n\n"
-        "Выбери действие:"
-    )
-
-
-@router.message(F.text == "/whales")
-async def whales_menu_command(message: Message, state: FSMContext):
-    """
-    Команда /whales — управление сигналами по крупным китам (ТОП-5 монет).
-    """
-    await message.answer(_whales_menu_text(), reply_markup=get_whales_reply_keyboard())
-
-
-@router.message(F.text.startswith("🐳 Киты"))
-async def whales_menu_from_main_button(message: Message, state: FSMContext):
-    await whales_menu_command(message, state)
-
-
-# ============================================================
-# ХЕНДЛЕРЫ ВКЛ/ВЫКЛ УВЕДОМЛЕНИЙ ПО КИТАМ
-# ============================================================
-
-@router.callback_query(F.data == "whales_notify_on")
-async def handle_whales_notify_on(callback: CallbackQuery):
-    await callback.answer()
-
-    user_id = callback.from_user.id
-    changed = enable_notify(user_id, "whales")
-
-    await callback.message.answer(
-        (
-            "✅ Уведомления по КИТАМ включены.\n\n"
-            "Теперь ты будешь получать сигналы, когда крупные игроки:\n"
-            "• Массово ПОКУПАЮТ или ПРОДАЮТ BTC, ETH, SOL, BNB, XRP\n"
-            "• Сильно меняют Open Interest\n"
-            "• Формируют мощный перекос ордерфлоу.\n\n"
-            "Используй это как фильтр: не лезь против китов."
-            if changed
-            else "✅ Уведомления по КИТАМ уже включены."
-        )
-    )
-
-
-@router.callback_query(F.data == "whales_notify_off")
-async def handle_whales_notify_off(callback: CallbackQuery):
-    await callback.answer()
-
-    user_id = callback.from_user.id
-    changed = disable_notify(user_id, "whales")
-
-    await callback.message.answer(
-        (
-            "❌ Уведомления по КИТАМ отключены.\n\n"
-            "Ты всегда можешь снова включить их командой /whales."
-            if changed
-            else "✅ Уведомления по КИТАМ уже отключены."
-        )
-    )
-
-
-@router.message(F.text == "🐳 Включить уведомления по китам")
-async def whales_notify_on_message(message: Message):
-    user_id = message.from_user.id
-    changed = enable_notify(user_id, "whales")
-
-    await message.answer(
-        (
-            "✅ Уведомления по КИТАМ включены.\n\n"
-            "Теперь ты будешь получать сигналы, когда крупные игроки:\n"
-            "• Массово ПОКУПАЮТ или ПРОДАЮТ BTC, ETH, SOL, BNB, XRP\n"
-            "• Сильно меняют Open Interest\n"
-            "• Формируют мощный перекос ордерфлоу.\n\n"
-            "Используй это как фильтр: не лезь против китов."
-            if changed
-            else "✅ Уведомления по КИТАМ уже включены."
-        ),
-        reply_markup=get_whales_reply_keyboard(),
-    )
-
-
-@router.message(F.text == "🐳 Отключить уведомления по китам")
-async def whales_notify_off_message(message: Message):
-    user_id = message.from_user.id
-    changed = disable_notify(user_id, "whales")
-
-    await message.answer(
-        (
-            "❌ Уведомления по КИТАМ отключены.\n\n"
-            "Ты всегда можешь снова включить их командой /whales или кнопкой в меню."
-            if changed
-            else "✅ Уведомления по КИТАМ уже отключены."
-        ),
-        reply_markup=get_whales_reply_keyboard(),
-    )
-
-# ============================================================
-# УТИЛИТЫ ДЛЯ РАБОТЫ С BINANCE FUTURES
-# ============================================================
-
-async def _fetch_json(session: aiohttp.ClientSession, url: str, params: Dict[str, Any]) -> Optional[Any]:
+async def _fetch_json(session: aiohttp.ClientSession, url: str, params: Dict[str, Any] | None = None):
     try:
         async with session.get(url, params=params, timeout=10) as resp:
             resp.raise_for_status()
@@ -218,298 +31,190 @@ async def _fetch_json(session: aiohttp.ClientSession, url: str, params: Dict[str
         return None
 
 
-async def _fetch_agg_trades(session: aiohttp.ClientSession, symbol: str, start_time_ms: int, end_time_ms: int):
-    params = {
-        "symbol": symbol,
-        "startTime": start_time_ms,
-        "endTime": end_time_ms,
-        "limit": 1000,
-    }
-    return await _fetch_json(session, f"{BINANCE_FAPI_BASE}/aggTrades", params)
+async def _get_futures_usdt_symbols(session: aiohttp.ClientSession) -> List[str]:
+    now = time.time()
+    cached_symbols = _symbols_cache.get("symbols", [])
+    if cached_symbols and now - float(_symbols_cache.get("updated_at", 0.0)) < SYMBOLS_REFRESH_SEC:
+        return cached_symbols
+
+    data = await _fetch_json(session, f"{BINANCE_FAPI_BASE}/fapi/v1/ticker/24hr")
+    if not data:
+        return cached_symbols
+
+    rows = []
+    for row in data:
+        symbol = row.get("symbol")
+        if not symbol or not symbol.endswith("USDT"):
+            continue
+        try:
+            quote_volume = float(row.get("quoteVolume", 0.0))
+        except (TypeError, ValueError):
+            continue
+        rows.append((symbol, quote_volume))
+
+    rows.sort(key=lambda item: item[1], reverse=True)
+    symbols = [symbol for symbol, _ in rows]
+    _symbols_cache["symbols"] = symbols
+    _symbols_cache["updated_at"] = now
+    return symbols
 
 
-async def _fetch_klines(session: aiohttp.ClientSession, symbol: str, limit: int = 5):
-    params = {
-        "symbol": symbol,
-        "interval": "1m",
-        "limit": limit,
-    }
-    return await _fetch_json(session, f"{BINANCE_FAPI_BASE}/klines", params)
+def _format_usd(value: float) -> str:
+    value = abs(value)
+    if value >= 1_000_000_000:
+        return f"${value / 1_000_000_000:.2f}B"
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.2f}M"
+    if value >= 1_000:
+        return f"${value / 1_000:.2f}K"
+    return f"${value:.0f}"
 
 
-async def _fetch_oi_history(session: aiohttp.ClientSession, symbol: str):
-    params = {
-        "symbol": symbol,
-        "period": "5m",
-        "limit": 3,
-    }
-    return await _fetch_json(session, OI_HISTORY_ENDPOINT, params)
+def _format_symbol(symbol: str) -> str:
+    return symbol.replace("USDT", "")
 
 
-async def _fetch_funding(session: aiohttp.ClientSession, symbol: str) -> float:
-    params = {"symbol": symbol}
-    data = await _fetch_json(session, f"{BINANCE_FAPI_BASE}/premiumIndex", params)
-    try:
-        return float(data.get("lastFundingRate", 0.0)) if data else 0.0
-    except Exception:
-        return 0.0
+def _format_flow_line(symbol: str, netflow: float) -> str:
+    sign = "+" if netflow >= 0 else "−"
+    return f"{_format_symbol(symbol)} {sign}{_format_usd(netflow)}"
 
 
-# ============================================================
-# ЯДРО: АНАЛИЗ КРУПНЫХ КИТОВ
-# ============================================================
+async def _fetch_agg_trades(
+    session: aiohttp.ClientSession, symbol: str, start_ms: int, end_ms: int
+) -> Optional[List[Dict[str, Any]]]:
+    params = {"symbol": symbol, "startTime": start_ms, "endTime": end_ms, "limit": 1000}
+    data = await _fetch_json(session, f"{BINANCE_FAPI_BASE}/fapi/v1/aggTrades", params)
+    if isinstance(data, list):
+        return data
+    return None
 
-async def analyze_whales(symbol: str) -> Optional[WhaleSignal]:
-    """
-    Анализ активности китов по конкретному символу (BTCUSDT/ETHUSDT/...).
-    """
 
-    now_ms = int(time.time() * 1000)
-    start_ms = now_ms - 30_000
-
-    async with aiohttp.ClientSession() as session:
-        trades_task = asyncio.create_task(_fetch_agg_trades(session, symbol, start_ms, now_ms))
-        klines_task = asyncio.create_task(_fetch_klines(session, symbol, limit=5))
-        oi_task = asyncio.create_task(_fetch_oi_history(session, symbol))
-        funding_task = asyncio.create_task(_fetch_funding(session, symbol))
-
-        trades = await trades_task
-        klines = await klines_task
-        oi_hist = await oi_task
-        funding = await funding_task
-
-    if not trades:
-        return None
-
-    whale_buy_usd = 0.0
-    whale_sell_usd = 0.0
+def _calc_flow(trades: List[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+    whale_buy = 0.0
+    whale_sell = 0.0
 
     for tr in trades:
         try:
             price = float(tr.get("p", 0.0))
             qty = float(tr.get("q", 0.0))
             usd_value = price * qty
-            if usd_value < MIN_WHALE_TRADE_USD:
-                continue
-            is_buyer_maker = bool(tr.get("m"))
-            if is_buyer_maker:
-                whale_sell_usd += usd_value
-            else:
-                whale_buy_usd += usd_value
-        except Exception:
+        except (TypeError, ValueError):
             continue
 
-    if whale_buy_usd == 0 and whale_sell_usd == 0:
+        if usd_value < MIN_WHALE_TRADE_USD:
+            continue
+
+        is_buyer_maker = bool(tr.get("m"))
+        if is_buyer_maker:
+            whale_sell += usd_value
+        else:
+            whale_buy += usd_value
+
+    total_flow = whale_buy + whale_sell
+    if total_flow < MIN_WHALE_FLOW_USD:
         return None
 
-    taker_buy_quote = 0.0
-    taker_sell_quote = 0.0
-    cvd_direction = "flat"
+    netflow = whale_buy - whale_sell
+    return {"buy": whale_buy, "sell": whale_sell, "netflow": netflow}
 
-    if klines:
-        total_quote = 0.0
-        cvd_value = 0.0
-        for k in klines:
-            try:
-                taker_buy = float(k[10])
-                quote_vol = float(k[7])
-            except Exception:
-                continue
-            sell_quote = max(quote_vol - taker_buy, 0.0)
-            taker_buy_quote += taker_buy
-            taker_sell_quote += sell_quote
-            cvd_value += taker_buy - sell_quote
-            total_quote += quote_vol
-
-        threshold = (total_quote * 0.02) if total_quote else 0.0
-        if cvd_value > threshold:
-            cvd_direction = "up"
-        elif cvd_value < -threshold:
-            cvd_direction = "down"
-
-    orderflow_imbalance_pct = 0.0
-    total_flow = taker_buy_quote + taker_sell_quote
-    if total_flow > 0:
-        orderflow_imbalance_pct = (taker_buy_quote - taker_sell_quote) / total_flow * 100
-
-    oi_change_pct = 0.0
-    if oi_hist and len(oi_hist) >= 2:
-        try:
-            first_oi = float(oi_hist[0]["sumOpenInterest"])
-            last_oi = float(oi_hist[-1]["sumOpenInterest"])
-            if first_oi > 0:
-                oi_change_pct = (last_oi - first_oi) / first_oi * 100
-        except Exception:
-            oi_change_pct = 0.0
-
-    bullish = (
-        whale_buy_usd >= STRONG_WHALE_TRADE_USD
-        and whale_buy_usd > whale_sell_usd
-        and orderflow_imbalance_pct >= 20
-        and cvd_direction == "up"
-        and oi_change_pct >= 3
-    )
-    bearish = (
-        whale_sell_usd >= STRONG_WHALE_TRADE_USD
-        and whale_sell_usd > whale_buy_usd
-        and orderflow_imbalance_pct <= -20
-        and cvd_direction == "down"
-        and oi_change_pct <= -4
-    )
-
-    if not bullish and not bearish:
-        return None
-
-    side = "BUY" if bullish else "SELL"
-
-    probability = 80.0
-    if max(whale_buy_usd, whale_sell_usd) >= MEGA_WHALE_TRADE_USD:
-        probability += 5
-    probability = min(probability, 95.0)
-
-    explanation_parts = [
-        f"Крупные сделки: BUY {whale_buy_usd:,.0f} $ vs SELL {whale_sell_usd:,.0f} $",
-        f"Ордерфлоу дисбаланс: {orderflow_imbalance_pct:+.1f}%",
-        f"CVD направление: {cvd_direction}",
-        f"OI изменение за ~15м: {oi_change_pct:+.2f}%",
-        f"Funding rate: {funding:.6f}",
-    ]
-
-    signal = WhaleSignal(
-        symbol=symbol,
-        timestamp=dt.datetime.utcnow(),
-        side=side,
-        whale_buy_usd=whale_buy_usd,
-        whale_sell_usd=whale_sell_usd,
-        orderflow_imbalance_pct=orderflow_imbalance_pct,
-        cvd_direction=cvd_direction,
-        oi_change_pct=oi_change_pct,
-        funding=funding,
-        explanation="; ".join(explanation_parts),
-        probability=probability,
-    )
-
-    return signal
-
-
-# ============================================================
-# ФОРМАТИРОВАНИЕ СООБЩЕНИЯ ОТ КИТОВ
-# ============================================================
-
-def format_whale_alert(signal: WhaleSignal) -> str:
-    """
-    Красивый текст уведомления о китовом сигнале.
-    """
-
-    local_ts = signal.timestamp + dt.timedelta(hours=TIMEZONE_OFFSET_HOURS)
-    ts_str = local_ts.strftime("%Y-%m-%d %H:%M:%S")
-
-    emoji = "🟢" if signal.side == "BUY" else "🔴"
-    action_str = "ПОКУПАЮТ" if signal.side == "BUY" else "ПРОДАЮТ"
-
-    lines = [
-        f"{emoji} WHALES ALERT — {signal.symbol}",
-        "",
-        f"Время (локальное): {ts_str}",
-        f"Сторона: Крупные игроки {action_str}",
-        f"Оценка вероятности сценария: {signal.probability:.0f}%",
-        "",
-        f"Крупные покупки (BUY):  {signal.whale_buy_usd:,.0f} $",
-        f"Крупные продажи (SELL): {signal.whale_sell_usd:,.0f} $",
-        f"Дисбаланс ордерфлоу: {signal.orderflow_imbalance_pct:+.1f}%",
-        f"CVD направление: {signal.cvd_direction}",
-        f"Изменение Open Interest (OI): {signal.oi_change_pct:+.2f}%",
-        f"Funding rate: {signal.funding:.6f}",
-        "",
-        "Что это значит для тебя:",
-    ]
-
-    # Объяснение «по-человечески»
-    if signal.side == "BUY":
-        lines.append("• Крупный капитал накапливает позицию в этой монете.")
-        lines.append("• Вероятность продолжения движения ВВЕРХ повышена.")
-        lines.append("• Можно рассматривать вход в LONG или удержание текущих лонгов,")
-        lines.append("  но с учётом твоего риска и стоп-лосса.")
-    else:
-        lines.append("• Киты массово разгружаются / фиксируют прибыль.")
-        lines.append("• Растёт риск движения ВНИЗ или начала дампа.")
-        lines.append("• Можно рассматривать фиксацию LONG или поиск точки для SHORT,")
-        lines.append("  если твоя стратегия это предполагает.")
-
-    lines.append("")
-    lines.append("Почему бот так решил:")
-    lines.append(signal.explanation)
-    lines.append("")
-    lines.append(
-        "⚠️ Это не инвестиционная рекомендация.\n"
-        "Ты сам принимаешь решения по входу/выходу и несёшь ответственность за риск."
-    )
-
-    return "\n".join(lines)
-
-
-# ============================================================
-# ФОНОВЫЙ ВОРКЕР ДЛЯ КИТОВ (ТОП-5 МОНЕТ)
-# ============================================================
 
 async def whales_realtime_worker(bot):
-    """
-    Фоновая задача:
-      - каждые несколько секунд обходить ТОП-5 монет
-      - анализировать китовую активность
-      - при появлении сильного сигнала (BUY/SELL) отправлять уведомления
-        всем пользователям, у кого включены уведомления по китам.
+    await asyncio.sleep(5)
+    last_sent: Dict[str, float] = {}
+    flow_buffer: Dict[str, float] = {}
+    last_digest_ts = 0.0
 
-    Codex:
-      - вызывать эту функцию из main.py:
-        asyncio.create_task(whales_realtime_worker(bot))
-    """
+    async with aiohttp.ClientSession() as session:
+        symbols = await _get_futures_usdt_symbols(session)
+        index = 0
 
-    await asyncio.sleep(5)  # пауза после старта бота
-
-    # Можно добавить защиту от спама: кэш последних сигналов.
-    last_signals: Dict[str, str] = {}  # symbol -> side ("BUY"/"SELL")
-
-    while True:
-        try:
-            user_ids = list_enabled("whales")
-            mark_tick("whales", extra=f"подписчиков: {len(user_ids)}")
-            if not user_ids:
-                await asyncio.sleep(5)
-                continue
-
-            for symbol in WHALES_SYMBOLS:
-                signal = await analyze_whales(symbol)
-                if signal is None:
+        while True:
+            try:
+                subscribers = pro_list_subscribers()
+                mark_tick("whales_flow", extra=f"подписчиков: {len(subscribers)}")
+                if not subscribers:
+                    await asyncio.sleep(3)
                     continue
 
-                mark_ok("whales", extra=f"{symbol}: side={signal.side}, prob={signal.probability:.0f}")
+                if not symbols or index >= len(symbols):
+                    symbols = await _get_futures_usdt_symbols(session)
+                    index = 0
 
-                # защита от однотипного спама:
-                last_side = last_signals.get(symbol)
-                if last_side == signal.side:
-                    # уже отправляли такой же сигнал недавно – можно пропустить или
-                    # сделать более сложную проверку по timestamp/вероятности.
-                    continue
+                batch = symbols[index : index + BATCH_SIZE]
+                index += BATCH_SIZE
 
-                last_signals[symbol] = signal.side
+                now = time.time()
+                start_ms = int((now - FLOW_WINDOW_SEC) * 1000)
+                end_ms = int(now * 1000)
 
-                text = format_whale_alert(signal)
-                for uid in user_ids:
-                    try:
-                        level = get_user_filter(uid)
-                        min_prob = whales_min_probability(level)
-                        if int(signal.probability or 0) < min_prob:
-                            continue
-                        await bot.send_message(chat_id=uid, text=text)
-                    except Exception:
+                tasks = [
+                    asyncio.create_task(_fetch_agg_trades(session, symbol, start_ms, end_ms))
+                    for symbol in batch
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for symbol, trades in zip(batch, results):
+                    if isinstance(trades, Exception) or not trades:
                         continue
+                    flow = _calc_flow(trades)
+                    if not flow:
+                        continue
+                    flow_buffer[symbol] = flow["netflow"]
 
-        except Exception as e:
-            msg = f"error: {e}"
-            print(f"[whales_realtime_worker] {msg}")
-            mark_error("whales", msg)
+                if now - last_digest_ts >= DIGEST_INTERVAL_SEC and flow_buffer:
+                    top_in = []
+                    top_out = []
+                    for symbol, netflow in flow_buffer.items():
+                        last_ts = last_sent.get(symbol, 0.0)
+                        if now - last_ts < SYMBOL_COOLDOWN_SEC:
+                            continue
+                        if netflow >= 0:
+                            top_in.append((symbol, netflow))
+                        else:
+                            top_out.append((symbol, netflow))
 
-        # Пауза между проходами по монетам.
-        # Codex может тюнить (2–10 секунд).
-        await asyncio.sleep(3)
+                    top_in.sort(key=lambda item: item[1], reverse=True)
+                    top_out.sort(key=lambda item: item[1])
+
+                    top_in = top_in[:10]
+                    top_out = top_out[:10]
+
+                    if top_in or top_out:
+                        lines = [
+                            f"🐳 Whale Flow (последние {FLOW_WINDOW_SEC} сек)",
+                            "",
+                            "Входят:",
+                            ", ".join(_format_flow_line(sym, flow) for sym, flow in top_in)
+                            if top_in
+                            else "—",
+                            "",
+                            "Выходят:",
+                            ", ".join(_format_flow_line(sym, flow) for sym, flow in top_out)
+                            if top_out
+                            else "—",
+                        ]
+                        text = "\n".join(lines)
+
+                        for sym, _ in top_in + top_out:
+                            last_sent[sym] = now
+
+                        for chat_id in subscribers:
+                            try:
+                                await bot.send_message(chat_id=chat_id, text=text)
+                            except Exception:
+                                continue
+
+                        mark_ok(
+                            "whales_flow",
+                            extra=f"входы: {len(top_in)}, выходы: {len(top_out)}",
+                        )
+
+                    flow_buffer.clear()
+                    last_digest_ts = now
+
+            except Exception as e:
+                msg = f"error: {e}"
+                print(f"[whales_realtime_worker] {msg}")
+                mark_error("whales_flow", msg)
+
+            await asyncio.sleep(BATCH_DELAY_SEC)
