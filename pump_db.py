@@ -1,11 +1,10 @@
 import sqlite3
-from pathlib import Path
 
-DB_PATH = Path("bot.db")
+from db_path import get_db_path
 
 
 def _get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(get_db_path())
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS pump_subscribers (

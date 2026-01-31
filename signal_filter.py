@@ -1,7 +1,7 @@
 import sqlite3
 from typing import Literal
 
-DB_PATH = "ai_signals.db"
+from db_path import get_db_path
 
 FilterLevel = Literal["aggressive", "normal", "strict"]
 
@@ -9,7 +9,7 @@ DEFAULT_LEVEL: FilterLevel = "aggressive"
 
 
 def _get_conn():
-    return sqlite3.connect(DB_PATH)
+    return sqlite3.connect(get_db_path())
 
 
 def init_filter_table():
