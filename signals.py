@@ -460,6 +460,7 @@ async def scan_market(
     batch_delay: float = 0.2,
     batch_size: int = 5,
     *,
+    symbols: List[str] | None = None,
     use_btc_gate: bool = True,
     free_mode: bool = False,
     min_score: float = 80,
@@ -468,7 +469,8 @@ async def scan_market(
     """
     Сканирует весь рынок Binance по спотовым USDT-парам и возвращает сигналы.
     """
-    symbols = await get_spot_usdt_symbols()
+    if symbols is None:
+        symbols = await get_spot_usdt_symbols()
 
     btc_ctx = await get_btc_context() if use_btc_gate else {
         "allow_longs": True,
