@@ -1,6 +1,7 @@
 from aiogram import Router, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
-from pro_subscribers import pro_add_subscription, pro_remove_subscription
+
+from pro_db import pro_add, pro_remove
 
 router = Router(name="pro_modules")
 
@@ -10,7 +11,7 @@ router = Router(name="pro_modules")
 # ============================================================
 
 
-def get_pro_main_keyboard() -> ReplyKeyboardMarkup:
+def get_pro_keyboard() -> ReplyKeyboardMarkup:
     kb = [
         [KeyboardButton(text="✅ Включить PRO-уведомления")],
         [KeyboardButton(text="❌ Отключить PRO-уведомления")],
@@ -21,10 +22,10 @@ def get_pro_main_keyboard() -> ReplyKeyboardMarkup:
 
 def pro_menu_text() -> str:
     return (
-        "🧠 PRO включает:\n\n"
+        "🧠 Что входит в PRO:\n\n"
         "🚀 Pump/Dump Scanner (быстрые импульсы/сливы)\n"
-        "🐳 Whale Flow Scanner (куда заходит крупный капитал по Binance)\n"
-        "🎯 PRO AI-сигналы (2–4 сильных сетапа в день “по книжке”)\n\n"
+        "🐳 Whale Flow Scanner (дайджест по всем USDT-M фьючам)\n"
+        "🎯 PRO AI-сигналы (2–4 сильных сетапа в день по score)\n\n"
         "Выбери действие ниже 👇"
     )
 
@@ -36,26 +37,26 @@ def pro_menu_text() -> str:
 
 @router.message(F.text == "🧠 PRO-модули")
 async def open_pro_menu(message: Message):
-    await message.answer(pro_menu_text(), reply_markup=get_pro_main_keyboard())
+    await message.answer(pro_menu_text(), reply_markup=get_pro_keyboard())
 
 
 @router.message(F.text == "✅ Включить PRO-уведомления")
 async def enable_pro_notifications(message: Message):
-    changed = pro_add_subscription(message.chat.id)
+    changed = pro_add(message.chat.id)
     await message.answer(
         "✅ PRO-уведомления включены. Теперь ты получаешь Pump/Dump, Whale Flow и PRO AI-сигналы."
         if changed
         else "✅ PRO-уведомления уже активны.",
-        reply_markup=get_pro_main_keyboard(),
+        reply_markup=get_pro_keyboard(),
     )
 
 
 @router.message(F.text == "❌ Отключить PRO-уведомления")
 async def disable_pro_notifications(message: Message):
-    changed = pro_remove_subscription(message.chat.id)
+    changed = pro_remove(message.chat.id)
     await message.answer(
         "❌ PRO-уведомления отключены."
         if changed
         else "✅ PRO-уведомления уже были отключены.",
-        reply_markup=get_pro_main_keyboard(),
+        reply_markup=get_pro_keyboard(),
     )

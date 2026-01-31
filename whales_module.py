@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 from health import mark_tick, mark_ok, mark_error
-from pro_subscribers import pro_list_subscribers
+from pro_db import pro_list
 
 BINANCE_FAPI_BASE = "https://fapi.binance.com"
 
@@ -13,15 +13,16 @@ MIN_WHALE_TRADE_USD = 120_000
 MIN_WHALE_FLOW_USD = 250_000
 FLOW_WINDOW_SEC = 60
 DIGEST_INTERVAL_SEC = 60
-SYMBOLS_REFRESH_SEC = 60 * 10
-SYMBOL_COOLDOWN_SEC = 60 * 20
-BATCH_SIZE = 10
-BATCH_DELAY_SEC = 0.2
+SYMBOLS_REFRESH_SEC = 60 * 20
+BATCH_SIZE = 15
+BATCH_DELAY_SEC = 0.25
 
 _symbols_cache: dict[str, Any] = {"updated_at": 0.0, "symbols": []}
 
 
-async def _fetch_json(session: aiohttp.ClientSession, url: str, params: Dict[str, Any] | None = None):
+async def _fetch_json(
+    session: aiohttp.ClientSession, url: str, params: Dict[str, Any] | None = None
+):
     try:
         async with session.get(url, params=params, timeout=10) as resp:
             resp.raise_for_status()
@@ -37,46 +38,23 @@ async def _get_futures_usdt_symbols(session: aiohttp.ClientSession) -> List[str]
     if cached_symbols and now - float(_symbols_cache.get("updated_at", 0.0)) < SYMBOLS_REFRESH_SEC:
         return cached_symbols
 
-    data = await _fetch_json(session, f"{BINANCE_FAPI_BASE}/fapi/v1/ticker/24hr")
+    data = await _fetch_json(session, f"{BINANCE_FAPI_BASE}/fapi/v1/exchangeInfo")
     if not data:
         return cached_symbols
 
-    rows = []
-    for row in data:
+    symbols = []
+    for row in data.get("symbols", []):
+        if row.get("contractType") != "PERPETUAL":
+            continue
         symbol = row.get("symbol")
-        if not symbol or not symbol.endswith("USDT"):
+        quote = row.get("quoteAsset")
+        if not symbol or quote != "USDT":
             continue
-        try:
-            quote_volume = float(row.get("quoteVolume", 0.0))
-        except (TypeError, ValueError):
-            continue
-        rows.append((symbol, quote_volume))
+        symbols.append(symbol)
 
-    rows.sort(key=lambda item: item[1], reverse=True)
-    symbols = [symbol for symbol, _ in rows]
     _symbols_cache["symbols"] = symbols
     _symbols_cache["updated_at"] = now
     return symbols
-
-
-def _format_usd(value: float) -> str:
-    value = abs(value)
-    if value >= 1_000_000_000:
-        return f"${value / 1_000_000_000:.2f}B"
-    if value >= 1_000_000:
-        return f"${value / 1_000_000:.2f}M"
-    if value >= 1_000:
-        return f"${value / 1_000:.2f}K"
-    return f"${value:.0f}"
-
-
-def _format_symbol(symbol: str) -> str:
-    return symbol.replace("USDT", "")
-
-
-def _format_flow_line(symbol: str, netflow: float) -> str:
-    sign = "+" if netflow >= 0 else "−"
-    return f"{_format_symbol(symbol)} {sign}{_format_usd(netflow)}"
 
 
 async def _fetch_agg_trades(
@@ -118,9 +96,28 @@ def _calc_flow(trades: List[Dict[str, Any]]) -> Optional[Dict[str, float]]:
     return {"buy": whale_buy, "sell": whale_sell, "netflow": netflow}
 
 
-async def whales_realtime_worker(bot):
+def _format_usd(value: float) -> str:
+    value = abs(value)
+    if value >= 1_000_000_000:
+        return f"${value / 1_000_000_000:.2f}B"
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.2f}M"
+    if value >= 1_000:
+        return f"${value / 1_000:.2f}K"
+    return f"${value:.0f}"
+
+
+def _format_symbol(symbol: str) -> str:
+    return symbol.replace("USDT", "")
+
+
+def _format_flow_line(symbol: str, netflow: float) -> str:
+    sign = "+" if netflow >= 0 else "−"
+    return f"{_format_symbol(symbol)} {sign}{_format_usd(netflow)}"
+
+
+async def whales_market_flow_worker(bot):
     await asyncio.sleep(5)
-    last_sent: Dict[str, float] = {}
     flow_buffer: Dict[str, float] = {}
     last_digest_ts = 0.0
 
@@ -130,7 +127,7 @@ async def whales_realtime_worker(bot):
 
         while True:
             try:
-                subscribers = pro_list_subscribers()
+                subscribers = pro_list()
                 mark_tick("whales_flow", extra=f"подписчиков: {len(subscribers)}")
                 if not subscribers:
                     await asyncio.sleep(3)
@@ -159,27 +156,20 @@ async def whales_realtime_worker(bot):
                     flow = _calc_flow(trades)
                     if not flow:
                         continue
-                    flow_buffer[symbol] = flow["netflow"]
+                    flow_buffer[symbol] = flow_buffer.get(symbol, 0.0) + flow["netflow"]
 
-                if now - last_digest_ts >= DIGEST_INTERVAL_SEC and flow_buffer:
-                    top_in = []
-                    top_out = []
-                    for symbol, netflow in flow_buffer.items():
-                        last_ts = last_sent.get(symbol, 0.0)
-                        if now - last_ts < SYMBOL_COOLDOWN_SEC:
-                            continue
-                        if netflow >= 0:
-                            top_in.append((symbol, netflow))
-                        else:
-                            top_out.append((symbol, netflow))
+                if now - last_digest_ts >= DIGEST_INTERVAL_SEC:
+                    if flow_buffer:
+                        top_in = sorted(
+                            [(sym, netflow) for sym, netflow in flow_buffer.items() if netflow >= 0],
+                            key=lambda item: item[1],
+                            reverse=True,
+                        )[:10]
+                        top_out = sorted(
+                            [(sym, netflow) for sym, netflow in flow_buffer.items() if netflow < 0],
+                            key=lambda item: item[1],
+                        )[:10]
 
-                    top_in.sort(key=lambda item: item[1], reverse=True)
-                    top_out.sort(key=lambda item: item[1])
-
-                    top_in = top_in[:10]
-                    top_out = top_out[:10]
-
-                    if top_in or top_out:
                         lines = [
                             f"🐳 Whale Flow (последние {FLOW_WINDOW_SEC} сек)",
                             "",
@@ -194,9 +184,6 @@ async def whales_realtime_worker(bot):
                             else "—",
                         ]
                         text = "\n".join(lines)
-
-                        for sym, _ in top_in + top_out:
-                            last_sent[sym] = now
 
                         for chat_id in subscribers:
                             try:
@@ -214,7 +201,7 @@ async def whales_realtime_worker(bot):
 
             except Exception as e:
                 msg = f"error: {e}"
-                print(f"[whales_realtime_worker] {msg}")
+                print(f"[whales_market_flow_worker] {msg}")
                 mark_error("whales_flow", msg)
 
             await asyncio.sleep(BATCH_DELAY_SEC)
