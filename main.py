@@ -224,8 +224,8 @@ bot: Bot | None = None
 dp = Dispatcher()
 dp.include_router(btc_router)
 dp.include_router(pro_router)
-FREE_MIN_SCORE = 85
-COOLDOWN_FREE_SEC = 60 * 60 * 2
+FREE_MIN_SCORE = 70
+COOLDOWN_FREE_SEC = 60 * 45
 MAX_SIGNALS_PER_CYCLE = 3
 MAX_BTC_PER_CYCLE = 1
 PULSE_INTERVAL_SEC = 60 * 60
@@ -324,10 +324,13 @@ async def ai_signals_unsubscribe(message: Message):
 async def test_admin(message: Message):
     pro_subscribers = pro_list()
     ai_subscribers = list_subscriptions()
+    ai_extra = MODULES.get("ai_signals").extra if "ai_signals" in MODULES else ""
+    ai_extra = ai_extra.strip()
     if "pro" in MODULES:
         MODULES["pro"].extra = f"подписчиков: {len(pro_subscribers)}"
     if "ai_signals" in MODULES:
-        MODULES["ai_signals"].extra = f"подписчиков: {len(ai_subscribers)}"
+        base = f"подписчиков: {len(ai_subscribers)}"
+        MODULES["ai_signals"].extra = f"{base}; {ai_extra}" if ai_extra else base
     if "pumpdump" in MODULES:
         MODULES["pumpdump"].extra = f"подписчиков: {len(pro_subscribers)}"
     if "whales_flow" in MODULES:
@@ -434,6 +437,12 @@ def _format_signal(signal: Dict[str, Any], tier: str) -> str:
     )
 
     tier_title = "🔥 AI-сигнал (FREE)" if tier == "free" else "🧊 AI-сигнал (PRO)"
+    prob = int(signal.get("score", 0))
+    if tier == "free":
+        probability_line = f"📌 Вероятность: {prob}% (FREE порог: {FREE_MIN_SCORE}%)"
+    else:
+        probability_line = f"📌 Вероятность: {prob}%"
+
     text = (
         f"{tier_title}\n\n"
         f"Монета: {symbol_text}\n"
@@ -449,7 +458,7 @@ def _format_signal(signal: Dict[str, Any], tier: str) -> str:
         f"• До TP1: {_format_signed_number(tp1_usdt)} USDT\n"
         f"• До TP2: {_format_signed_number(tp2_usdt)} USDT\n"
         f"• До SL: {_format_signed_number(sl_usdt)} USDT\n\n"
-        f"Оценка сигнала: {signal['score']}/100\n\n"
+        f"{probability_line}\n\n"
         f"{short_block}\n\n"
         "⚠️ Бот не знает твоего депозита и не даёт размер позиции.\n"
         "Решение по объёму входа принимаешь сам.\n"
@@ -628,16 +637,28 @@ async def pump_worker(bot: Bot):
 async def signals_worker():
     while True:
         try:
-            signals = await scan_market()
-            mark_ok("ai_signals", extra=f"кандидатов: {len(signals)}")
+            signals, stats = await scan_market(
+                use_btc_gate=False,
+                free_mode=True,
+                return_stats=True,
+            )
             print("SCAN OK", len(signals))
+            sent_count = 0
             for signal in _select_signals_for_cycle(signals):
                 score = signal.get("score", 0)
-                if score >= FREE_MIN_SCORE:
-                    print(
-                        f"[ai_signals] SEND FREE {signal['symbol']} {signal['direction']} score={score}"
-                    )
-                    await send_signal_to_all(signal, "free")
+                if score < FREE_MIN_SCORE:
+                    continue
+                print(
+                    f"[ai_signals] SEND FREE {signal['symbol']} {signal['direction']} score={score}"
+                )
+                await send_signal_to_all(signal, "free")
+                sent_count += 1
+            checked = stats.get("checked", 0)
+            candidates = stats.get("candidates", len(signals))
+            mark_ok(
+                "ai_signals",
+                extra=f"checked={checked} candidates={candidates} sent={sent_count}",
+            )
         except Exception as e:
             msg = f"Worker error: {e}"
             print(f"[ai_signals] {msg}")
