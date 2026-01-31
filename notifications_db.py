@@ -41,6 +41,59 @@ def set_notify(chat_id: int, feature: str, enabled: bool) -> None:
         conn.close()
 
 
+def enable_notify(chat_id: int, feature: str) -> bool:
+    now = int(time.time())
+    conn = sqlite3.connect(get_db_path())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO notify_settings (chat_id, feature, enabled, updated_at)
+            VALUES (?, ?, 1, ?)
+            """,
+            (chat_id, feature, now),
+        )
+        if cur.rowcount == 1:
+            conn.commit()
+            return True
+
+        cur.execute(
+            """
+            UPDATE notify_settings
+            SET enabled = 1, updated_at = ?
+            WHERE chat_id = ? AND feature = ? AND enabled = 0
+            """,
+            (now, chat_id, feature),
+        )
+        if cur.rowcount == 1:
+            conn.commit()
+            return True
+        return False
+    finally:
+        conn.close()
+
+
+def disable_notify(chat_id: int, feature: str) -> bool:
+    now = int(time.time())
+    conn = sqlite3.connect(get_db_path())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE notify_settings
+            SET enabled = 0, updated_at = ?
+            WHERE chat_id = ? AND feature = ? AND enabled = 1
+            """,
+            (now, chat_id, feature),
+        )
+        if cur.rowcount == 1:
+            conn.commit()
+            return True
+        return False
+    finally:
+        conn.close()
+
+
 def is_notify_enabled(chat_id: int, feature: str) -> bool:
     conn = sqlite3.connect(get_db_path())
     try:

@@ -34,7 +34,7 @@ from trading_core import (
 )
 from health import mark_tick, mark_ok, mark_error
 from signal_filter import get_user_filter, btc_min_probability
-from notifications_db import set_notify, list_enabled
+from notifications_db import disable_notify, enable_notify, list_enabled, set_notify
 
 # ============================================================
 # Константы и базовые настройки
@@ -112,12 +112,14 @@ async def btc_menu_command(message: Message, state: FSMContext):
 @router.message(F.text == "🔔 Включить уведомления по BTC")
 async def handle_btc_notify_on_message(message: Message):
     user_id = message.from_user.id
-    set_notify(user_id, "btc", True)
+    changed = enable_notify(user_id, "btc")
 
     await message.answer(
         "✅ Уведомления по BTC включены.\n\n"
         "Бот будет автоматически присылать сигналы LONG/SHORT по BTCUSDT, "
-        "как только появляется новый сильный сетап (интрадей, внутри 24 часов).",
+        "как только появляется новый сильный сетап (интрадей, внутри 24 часов)."
+        if changed
+        else "✅ Уведомления по BTC уже включены.",
         reply_markup=get_btc_main_keyboard(),
     )
 
@@ -125,10 +127,10 @@ async def handle_btc_notify_on_message(message: Message):
 @router.message(F.text == "🚫 Отключить уведомления по BTC")
 async def handle_btc_notify_off_message(message: Message):
     user_id = message.from_user.id
-    set_notify(user_id, "btc", False)
+    changed = disable_notify(user_id, "btc")
 
     await message.answer(
-        "❌ Уведомления по BTC отключены.",
+        "❌ Уведомления по BTC отключены." if changed else "✅ Уведомления по BTC уже отключены.",
         reply_markup=get_btc_main_keyboard(),
     )
 
