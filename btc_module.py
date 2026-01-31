@@ -34,6 +34,7 @@ from trading_core import (
 )
 from health import mark_tick, mark_ok, mark_error
 from signal_filter import get_user_filter, btc_min_probability
+from notifications_db import set_notify, list_enabled
 
 # ============================================================
 # Константы и базовые настройки
@@ -43,38 +44,6 @@ BTC_SYMBOL = "BTCUSDT"
 TIMEZONE_OFFSET_HOURS = 5  # например, Asia/Almaty (UTC+5)
 
 router = Router(name="btc_module")
-
-
-# ============================================================
-# Временное in-memory хранилище (Codex → заменить на БД)
-# ============================================================
-
-class InMemoryStorage:
-    """
-    Временное хранилище.
-    Codex: заменить на SQLite/Postgres и нормальные таблицы.
-    """
-
-    def __init__(self):
-        # user_id -> bool (включены ли уведомления по BTC)
-        self.notifications: dict[int, bool] = {}
-        # лог сигналов
-        self.signals_log: list["BTCSingal"] = []
-
-    def set_notifications(self, user_id: int, enabled: bool) -> None:
-        self.notifications[user_id] = enabled
-
-    def is_notifications_enabled(self, user_id: int) -> bool:
-        return self.notifications.get(user_id, False)
-
-    def get_all_users_with_notifications(self) -> List[int]:
-        return [uid for uid, enabled in self.notifications.items() if enabled]
-
-    def add_signal(self, signal: "BTCSingal") -> None:
-        self.signals_log.append(signal)
-
-
-storage = InMemoryStorage()
 
 
 # ============================================================
@@ -143,7 +112,7 @@ async def btc_menu_command(message: Message, state: FSMContext):
 @router.message(F.text == "🔔 Включить уведомления по BTC")
 async def handle_btc_notify_on_message(message: Message):
     user_id = message.from_user.id
-    storage.set_notifications(user_id, True)
+    set_notify(user_id, "btc", True)
 
     await message.answer(
         "✅ Уведомления по BTC включены.\n\n"
@@ -156,7 +125,7 @@ async def handle_btc_notify_on_message(message: Message):
 @router.message(F.text == "🚫 Отключить уведомления по BTC")
 async def handle_btc_notify_off_message(message: Message):
     user_id = message.from_user.id
-    storage.set_notifications(user_id, False)
+    set_notify(user_id, "btc", False)
 
     await message.answer(
         "❌ Уведомления по BTC отключены.",
@@ -230,7 +199,7 @@ async def btc_realtime_signal_worker(bot):
                         last_signal_time = now
 
                         text = format_signal_message(signal, desired_side=signal.side)
-                        user_ids = storage.get_all_users_with_notifications()
+                        user_ids = list_enabled("btc")
 
                         for user_id in user_ids:
                             try:
@@ -241,8 +210,6 @@ async def btc_realtime_signal_worker(bot):
                                 await bot.send_message(chat_id=user_id, text=text)
                             except Exception:
                                 continue
-
-                        storage.add_signal(signal)
 
         except Exception as e:
             msg = f"error: {e}"
