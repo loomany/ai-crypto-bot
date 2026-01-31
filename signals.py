@@ -224,6 +224,13 @@ async def _prepare_signal(
     free_mode: bool = False,
     min_score: float = 80,
 ) -> Optional[Dict[str, Any]]:
+    def detect_side(entry: float, sl: float, tp1: float) -> Optional[str]:
+        if tp1 > entry and sl < entry:
+            return "LONG"
+        if tp1 < entry and sl > entry:
+            return "SHORT"
+        return None
+
     candles_1d = candles["1d"]
     candles_4h = candles["4h"]
     candles_1h = candles["1h"]
@@ -385,11 +392,25 @@ async def _prepare_signal(
     if abs(raw_score) < min_score:
         return None
 
-    side = "LONG" if raw_score >= 70 else "SHORT"
-    rr = abs((tp1 - entry_to) / risk) if risk != 0 else 0.0
+    entry_ref = (entry_from + entry_to) / 2
+    side = detect_side(entry_ref, sl, tp1)
+    if side is None:
+        print(f"[ai_signals] Invalid side for {symbol}: entry={entry_ref} sl={sl} tp1={tp1}")
+        return None
+
+    risk = abs(entry_ref - sl)
+    reward = abs(tp1 - entry_ref)
+    rr = reward / risk if risk > 0 else 0.0
 
     min_rr = MIN_RR_FREE if free_mode else 2.0
     if rr < min_rr:
+        return None
+
+    if side not in ("LONG", "SHORT") or rr < 1.5 or risk <= 0 or reward <= 0:
+        print(
+            "[ai_signals] Pre-send check failed "
+            f"{symbol}: side={side} rr={rr:.2f} risk={risk:.6f} reward={reward:.6f}"
+        )
         return None
 
     rsi_1h_series = _compute_rsi_series(closes_1h)
