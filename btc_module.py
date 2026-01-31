@@ -33,8 +33,7 @@ from trading_core import (
     compute_score,
 )
 from health import mark_tick, mark_ok, mark_error
-from signal_filter import get_user_filter, btc_min_probability
-from notifications_db import disable_notify, enable_notify, list_enabled, set_notify
+from notifications_db import disable_notify, enable_notify, list_enabled
 
 # ============================================================
 # Константы и базовые настройки
@@ -42,6 +41,7 @@ from notifications_db import disable_notify, enable_notify, list_enabled, set_no
 
 BTC_SYMBOL = "BTCUSDT"
 TIMEZONE_OFFSET_HOURS = 5  # например, Asia/Almaty (UTC+5)
+BTC_MIN_PROBABILITY = 70
 
 router = Router(name="btc_module")
 
@@ -205,9 +205,7 @@ async def btc_realtime_signal_worker(bot):
 
                         for user_id in user_ids:
                             try:
-                                level = get_user_filter(user_id)
-                                min_prob = btc_min_probability(level)
-                                if int(signal.probability or 0) < min_prob:
+                                if int(signal.probability or 0) < BTC_MIN_PROBABILITY:
                                     continue
                                 await bot.send_message(chat_id=user_id, text=text)
                             except Exception:

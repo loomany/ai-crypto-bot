@@ -34,13 +34,10 @@ class ModuleStatus:
 
 MODULES: Dict[str, ModuleStatus] = {
     "ai_signals": ModuleStatus("🎯 AI-сигналы"),
-    "pumps": ModuleStatus("🚀 Pump Detector"),
+    "pumps": ModuleStatus("🚀 Pump/Dump Scanner"),
     "btc": ModuleStatus("₿ BTC (intraday)"),
-    "whales": ModuleStatus("🐳 Киты (ТОП-5)"),
-    "orderflow": ModuleStatus("📊 Orderflow PRO"),
-    "smart_money": ModuleStatus("💼 Smart Money (on-chain)"),
-    "ai_patterns": ModuleStatus("🧠 AI-паттерны"),
-    "regime": ModuleStatus("🌍 Market Regime"),
+    "whales_flow": ModuleStatus("🐳 Whale Flow Scanner"),
+    "pro_ai_signals": ModuleStatus("🎯 PRO AI-сигналы"),
 }
 
 

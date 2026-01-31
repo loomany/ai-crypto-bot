@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import List, Dict, Any
 
@@ -157,7 +158,7 @@ def _calc_signal_from_klines(symbol: str, klines: list[list[str]]) -> Dict[str, 
     return signal
 
 
-async def scan_pumps() -> List[Dict[str, Any]]:
+async def scan_pumps(batch_size: int = 10, batch_delay: float = 0.2) -> List[Dict[str, Any]]:
     """
     Сканирует все USDT-пары и возвращает список обнаруженных пампов или дампов.
     """
@@ -166,15 +167,22 @@ async def scan_pumps() -> List[Dict[str, Any]]:
     async with aiohttp.ClientSession() as session:
         symbols = await get_usdt_symbols(session)
 
-        for symbol in symbols:
-            try:
-                klines = await get_klines_1m(session, symbol, limit=25)
-            except Exception:
-                continue
+        for i in range(0, len(symbols), batch_size):
+            batch = symbols[i : i + batch_size]
+            tasks = [
+                asyncio.create_task(get_klines_1m(session, symbol, limit=25))
+                for symbol in batch
+            ]
+            klines_list = await asyncio.gather(*tasks, return_exceptions=True)
 
-            sig = _calc_signal_from_klines(symbol, klines)
-            if sig:
-                results.append(sig)
+            for symbol, klines in zip(batch, klines_list):
+                if isinstance(klines, Exception):
+                    continue
+                sig = _calc_signal_from_klines(symbol, klines)
+                if sig:
+                    results.append(sig)
+
+            await asyncio.sleep(batch_delay)
 
     return results
 
@@ -287,7 +295,11 @@ def format_pump_message(signal: Dict[str, Any]) -> str:
     ch5 = signal["change_5m"]
     volume_mul = signal["volume_mul"]
 
-    header = "🚀 PUMP DETECTED!" if signal["type"] == "pump" else "📉 DUMP DETECTED!"
+    header = (
+        "🚀 Pump/Dump Scanner: PUMP!"
+        if signal["type"] == "pump"
+        else "📉 Pump/Dump Scanner: DUMP!"
+    )
 
     text = (
         f"{header}\n\n"
