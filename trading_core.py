@@ -2,9 +2,8 @@ import time
 from statistics import mean
 from typing import Dict, Iterable, List, Optional, Tuple
 
-import aiohttp
-
 from binance_client import Candle
+from binance_rest import fetch_json
 
 # ==============================
 # Binance Futures (Orderflow)
@@ -26,16 +25,11 @@ async def _fetch_futures_json(url: str, params: Dict) -> Optional[Dict]:
     """
     Универсальный helper для запросов к Binance Futures.
     """
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, timeout=10) as resp:
-                resp.raise_for_status()
-                return await resp.json()
-    except Exception as e:
-        # Если что-то упало — просто пишем в лог и возвращаем None,
-        # чтобы не ломать весь бот.
-        print(f"[analyze_orderflow] fetch error {url}: {e}")
+    data = await fetch_json(url, params)
+    if not data:
+        print(f"[analyze_orderflow] fetch error {url}")
         return None
+    return data
 
 
 def _pivot_highs_lows(candles: List[Candle], left: int = 2, right: int = 2) -> tuple[list[Tuple[int, float]], list[Tuple[int, float]]]:

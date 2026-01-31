@@ -1,10 +1,12 @@
 import asyncio
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 import aiohttp
 
 from binance_client import fetch_klines
+from binance_rest import fetch_json
+from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 
 BINANCE_API = "https://api.binance.com"
 PUMP_1M_THRESHOLD = 2.5
@@ -12,41 +14,27 @@ PUMP_5M_THRESHOLD = 5.0
 DUMP_1M_THRESHOLD = 2.5
 DUMP_5M_THRESHOLD = 5.0
 PUMP_VOLUME_THRESHOLD = 2.0
-COOLDOWN_SEC = 60 * 30
-DUP_CHANGE_THRESHOLD = 0.5
+COOLDOWN_SEC = 60
+DUP_CHANGE_THRESHOLD = 0.15
 MIN_PRICE_USDT = 0.0005
 MIN_VOLUME_5M_USDT = 10_000
+PRIORITY_LIMIT = 250
+BATCH_SIZE = 20
+BATCH_DELAY_SEC = 0.2
+MAX_CYCLE_SEC = 60
 _last_signals: dict[str, Dict[str, Any]] = {}
-
-
-async def fetch_json(session: aiohttp.ClientSession, url: str, params: dict | None = None):
-    async with session.get(url, params=params, timeout=10) as resp:
-        resp.raise_for_status()
-        return await resp.json()
 
 
 async def get_usdt_symbols(session: aiohttp.ClientSession) -> list[str]:
     """
     Получаем ВСЕ спотовые пары к USDT, которые сейчас торгуются.
     """
-    data = await fetch_json(session, f"{BINANCE_API}/api/v3/exchangeInfo")
-    symbols = []
-    for s in data["symbols"]:
-        if (
-            s.get("status") == "TRADING"
-            and s.get("quoteAsset") == "USDT"
-            and s.get("isSpotTradingAllowed", True)
-        ):
-            sym = s["symbol"]
-            if any(x in sym for x in ("UPUSDT", "DOWNUSDT", "3LUSDT", "3SUSDT")):
-                continue
-            symbols.append(sym)
-    return symbols
+    return await get_spot_usdt_symbols(session)
 
 
 async def get_klines_1m(session: aiohttp.ClientSession, symbol: str, limit: int = 25):
     params = {"symbol": symbol, "interval": "1m", "limit": limit}
-    return await fetch_json(session, f"{BINANCE_API}/api/v3/klines", params=params)
+    return await fetch_json(f"{BINANCE_API}/api/v3/klines", params=params, session=session)
 
 
 def _format_signed(value: float, decimals: int = 2) -> str:
@@ -158,17 +146,32 @@ def _calc_signal_from_klines(symbol: str, klines: list[list[str]]) -> Dict[str, 
     return signal
 
 
-async def scan_pumps(batch_size: int = 10, batch_delay: float = 0.2) -> List[Dict[str, Any]]:
+async def scan_pumps(
+    batch_size: int = BATCH_SIZE,
+    batch_delay: float = BATCH_DELAY_SEC,
+    priority_limit: int = PRIORITY_LIMIT,
+    max_cycle_sec: int = MAX_CYCLE_SEC,
+    *,
+    return_stats: bool = False,
+) -> List[Dict[str, Any]] | Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """
     Сканирует все USDT-пары и возвращает список обнаруженных пампов или дампов.
     """
     results: list[Dict[str, Any]] = []
+    checked = 0
+    start_ts = time.time()
 
     async with aiohttp.ClientSession() as session:
         symbols = await get_usdt_symbols(session)
+        top_symbols = await get_top_usdt_symbols_by_volume(priority_limit, session=session)
+        priority = [sym for sym in top_symbols if sym in symbols]
+        rest = [sym for sym in symbols if sym not in set(priority)]
+        ordered_symbols = priority + rest
 
-        for i in range(0, len(symbols), batch_size):
-            batch = symbols[i : i + batch_size]
+        for i in range(0, len(ordered_symbols), batch_size):
+            if time.time() - start_ts >= max_cycle_sec:
+                break
+            batch = ordered_symbols[i : i + batch_size]
             tasks = [
                 asyncio.create_task(get_klines_1m(session, symbol, limit=25))
                 for symbol in batch
@@ -176,6 +179,7 @@ async def scan_pumps(batch_size: int = 10, batch_delay: float = 0.2) -> List[Dic
             klines_list = await asyncio.gather(*tasks, return_exceptions=True)
 
             for symbol, klines in zip(batch, klines_list):
+                checked += 1
                 if isinstance(klines, Exception):
                     continue
                 sig = _calc_signal_from_klines(symbol, klines)
@@ -184,6 +188,9 @@ async def scan_pumps(batch_size: int = 10, batch_delay: float = 0.2) -> List[Dic
 
             await asyncio.sleep(batch_delay)
 
+    stats = {"checked": checked, "found": len(results)}
+    if return_stats:
+        return results, stats
     return results
 
 

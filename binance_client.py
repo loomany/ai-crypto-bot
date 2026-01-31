@@ -1,6 +1,7 @@
-import aiohttp
 from dataclasses import dataclass
 from typing import List, Optional
+
+from binance_rest import fetch_json
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 
@@ -17,14 +18,7 @@ class Candle:
 
 
 async def _fetch_json(url: str, params: dict | None = None) -> Optional[list]:
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, timeout=10) as resp:
-                resp.raise_for_status()
-                return await resp.json()
-    except Exception as e:
-        print(f"[binance_client] Error while fetching {url}: {e}")
-        return None
+    return await fetch_json(url, params)
 
 
 async def fetch_klines(symbol: str, interval: str, limit: int) -> List[Candle]:
