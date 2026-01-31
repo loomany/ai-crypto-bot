@@ -18,6 +18,29 @@ DIGEST_INTERVAL_SEC = 60
 BATCH_SIZE = 12
 BATCH_DELAY_SEC = 0.25
 
+last_whale_state = {
+    "btc_netflow_usd": 0.0,
+}
+
+
+def should_send_whale_alert(
+    inflow: bool,
+    outflow: bool,
+    btc_netflow_usd: float,
+    prev_state: Dict[str, float],
+) -> bool:
+    if inflow or outflow:
+        return True
+
+    if abs(btc_netflow_usd) >= 500_000:
+        return True
+
+    if prev_state:
+        if prev_state.get("btc_netflow_usd") != btc_netflow_usd:
+            return True
+
+    return False
+
 
 async def _fetch_agg_trades(
     session: aiohttp.ClientSession, symbol: str, start_ms: int, end_ms: int
@@ -86,7 +109,6 @@ async def whales_market_flow_worker(bot):
     await asyncio.sleep(5)
     flow_buffer: Dict[str, Dict[str, float]] = {}
     last_digest_ts = 0.0
-    last_signature: Optional[tuple] = None
     checked_since_digest = 0
     digest_start_ts = time.time()
 
@@ -152,18 +174,19 @@ async def whales_market_flow_worker(bot):
                     )[:10]
 
                     btc_flow = flow_buffer.get("BTCUSDT", {"buy": 0.0, "sell": 0.0})
+                    btc_netflow_usd = btc_flow.get("buy", 0.0) - btc_flow.get("sell", 0.0)
                     btc_line = (
                         "BTC netflow 60s: "
                         f"+{_format_usd(btc_flow.get('buy', 0.0))} / "
                         f"−{_format_usd(btc_flow.get('sell', 0.0))}"
                     )
 
-                    signature = (
-                        tuple(sym for sym, _ in top_in),
-                        tuple(sym for sym, _ in top_out),
+                    should_send = should_send_whale_alert(
+                        inflow=bool(top_in),
+                        outflow=bool(top_out),
+                        btc_netflow_usd=btc_netflow_usd,
+                        prev_state=last_whale_state,
                     )
-
-                    should_send = signature != last_signature or not flow_buffer
                     if should_send:
                         lines = [
                             f"🐳 Whale Flow (последние {FLOW_WINDOW_SEC} сек)",
@@ -188,7 +211,7 @@ async def whales_market_flow_worker(bot):
                             except Exception:
                                 continue
 
-                        last_signature = signature
+                        last_whale_state["btc_netflow_usd"] = btc_netflow_usd
 
                     cycle_sec = time.time() - digest_start_ts
                     top_in_sym = top_in[0][0] if top_in else "-"
