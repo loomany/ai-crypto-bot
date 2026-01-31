@@ -663,13 +663,18 @@ async def pump_worker(bot: Bot):
 
 async def signals_worker():
     while True:
+        cycle_start = time.time()
+        mark_tick("ai_signals", extra="сканирую рынок...")
+
         try:
-            cycle_start = time.time()
-            signals, stats = await scan_market(
-                use_btc_gate=False,
-                free_mode=True,
-                min_score=FREE_MIN_SCORE,
-                return_stats=True,
+            signals, stats = await asyncio.wait_for(
+                scan_market(
+                    use_btc_gate=False,
+                    free_mode=True,
+                    min_score=FREE_MIN_SCORE,
+                    return_stats=True,
+                ),
+                timeout=55,
             )
             print("SCAN OK", len(signals))
             sent_count = 0
@@ -692,11 +697,13 @@ async def signals_worker():
                     f"cycle={cycle_sec:.1f}s"
                 ),
             )
+        except asyncio.TimeoutError:
+            mark_error("ai_signals", "scan_market timeout >55s")
         except Exception as e:
             msg = f"Worker error: {e}"
             print(f"[ai_signals] {msg}")
             mark_error("ai_signals", msg)
-        mark_tick("ai_signals")
+
         await asyncio.sleep(AI_SCAN_INTERVAL)
 
 
