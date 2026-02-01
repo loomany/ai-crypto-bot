@@ -8,18 +8,13 @@ from typing import Any, Dict, List
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import (
-    Message,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-)
+from aiogram.types import Message
 from aiogram.filters import CommandStart, Command
 from dotenv import load_dotenv
 
 from btc_module import (
     router as btc_router,
     btc_realtime_signal_worker,
-    get_btc_main_keyboard,
 )
 from binance_rest import close_shared_session
 from whales_module import whales_market_flow_worker
@@ -58,7 +53,7 @@ from trial_db import (
 )
 from signal_audit_db import init_signal_audit_tables, insert_signal_audit, get_public_stats
 from signal_audit_worker import signal_audit_worker_loop
-from keyboards import main_menu_keyboard
+from keyboards import main_menu_kb
 from texts import AI_SIGNALS_TEXT, START_TEXT
 
 
@@ -86,15 +81,6 @@ ADMIN_IDS = get_admin_ids()
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
-
-
-def ai_signals_keyboard() -> ReplyKeyboardMarkup:
-    kb = [
-        [KeyboardButton(text="🔔 Включить авто-сигналы")],
-        [KeyboardButton(text="🚫 Отключить авто-сигналы")],
-        [KeyboardButton(text="⬅️ Главное меню")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
 # ===== ВРЕМЯ ТОРГОВ =====
@@ -309,7 +295,7 @@ async def cmd_start(message: Message):
             await message.bot.send_message(ADMIN_CHAT_ID, admin_text)
     trial_ensure_user(message.chat.id)
 
-    await message.answer(START_TEXT, reply_markup=main_menu_keyboard())
+    await message.answer(START_TEXT, reply_markup=main_menu_kb())
     await message.answer(f"Ваш ID: {message.chat.id}")
 
 
@@ -317,36 +303,36 @@ async def cmd_start(message: Message):
 async def ai_signals_menu(message: Message):
     await message.answer(
         AI_SIGNALS_TEXT,
-        reply_markup=main_menu_keyboard(),
+        reply_markup=main_menu_kb(),
     )
 
 
-@dp.message(F.text == "🔔 Включить авто-сигналы")
+@dp.message(F.text == "🔔 Включить уведомления")
 async def ai_signals_subscribe(message: Message):
     is_new = enable_notify(message.chat.id, "ai_signals")
     if is_new:
         await message.answer(
             "Готово! Ты подписан на авто-рассылку AI-сигналов.",
-            reply_markup=ai_signals_keyboard(),
+            reply_markup=main_menu_kb(),
         )
     else:
         await message.answer(
             "Подписка уже активна. Будем присылать новые сигналы автоматически.",
-            reply_markup=ai_signals_keyboard(),
+            reply_markup=main_menu_kb(),
         )
 
 
-@dp.message(F.text == "🚫 Отключить авто-сигналы")
+@dp.message(F.text == "🚫 Отключить уведомления")
 async def ai_signals_unsubscribe(message: Message):
     removed = disable_notify(message.chat.id, "ai_signals")
     if removed:
         await message.answer(
             "Авто-сигналы отключены. Возвращайся, когда потребуется!",
-            reply_markup=ai_signals_keyboard(),
+            reply_markup=main_menu_kb(),
         )
     else:
         await message.answer(
-            "У тебя не было активной подписки.", reply_markup=ai_signals_keyboard()
+            "У тебя не было активной подписки.", reply_markup=main_menu_kb()
         )
 
 
@@ -436,7 +422,7 @@ async def trial_reset_cmd(message: Message):
 
 @dp.message(F.text == "⬅️ Главное меню")
 async def back_to_main(message: Message):
-    await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard())
+    await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_kb())
 
 
 def _format_stats_message(stats: Dict[str, Any]) -> str:
@@ -486,7 +472,7 @@ def _format_stats_message(stats: Dict[str, Any]) -> str:
 @dp.message(F.text == "/stats")
 async def show_stats(message: Message):
     stats = get_public_stats(days=30)
-    await message.answer(_format_stats_message(stats))
+    await message.answer(_format_stats_message(stats), reply_markup=main_menu_kb())
 
 
 @dp.message(F.text == "₿ BTC (intraday)")
@@ -497,7 +483,7 @@ async def open_btc_menu(message: Message):
         "• Сигнал приходит сразу, как только появляется сетап\n"
         "• Горизонт сделок: внутри 24 часов\n\n"
         "Выбирай действие:",
-        reply_markup=get_btc_main_keyboard(),
+        reply_markup=main_menu_kb(),
     )
 
 

@@ -1,15 +1,13 @@
 from aiogram import Router, F
 from aiogram.types import (
     Message,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     CallbackQuery,
 )
 
 from pro_db import pro_get_expires, pro_is
-from keyboards import main_menu_keyboard
+from keyboards import main_menu_kb
 from texts import (
     PRO_MODULES_TEXT,
     PRO_BUY_TEXT,
@@ -18,20 +16,6 @@ from texts import (
 )
 
 router = Router(name="pro_modules")
-
-
-# ============================================================
-# Клавиатура PRO-модулей
-# ============================================================
-
-
-def get_pro_keyboard() -> ReplyKeyboardMarkup:
-    kb = [
-        [KeyboardButton(text="✅ Включить PRO-уведомления")],
-        [KeyboardButton(text="❌ Отключить PRO-уведомления")],
-        [KeyboardButton(text="⬅️ Главное меню")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
 def pro_modules_keyboard() -> InlineKeyboardMarkup:
@@ -70,6 +54,7 @@ def pro_pay_keyboard() -> InlineKeyboardMarkup:
 @router.message(F.text == "🧠 PRO-модули")
 async def open_pro_menu(message: Message):
     await message.answer(PRO_MODULES_TEXT, reply_markup=pro_modules_keyboard())
+    await message.answer("Выберите раздел ⬇️", reply_markup=main_menu_kb())
 
 
 @router.callback_query(F.data == "pro_buy")
@@ -101,7 +86,7 @@ async def back_to_main(callback: CallbackQuery):
     if callback.message:
         await callback.message.answer(
             "Выберите раздел ⬇️",
-            reply_markup=main_menu_keyboard(),
+            reply_markup=main_menu_kb(),
         )
     await callback.answer()
 
@@ -111,13 +96,13 @@ async def enable_pro_notifications(message: Message):
     if not pro_is(message.chat.id):
         await message.answer(
             "⚠️ PRO не активен. Для доступа напишите администратору.",
-            reply_markup=get_pro_keyboard(),
+            reply_markup=main_menu_kb(),
         )
         return
     expires = pro_get_expires(message.chat.id)
     await message.answer(
         f"✅ PRO активен до {expires}. Уведомления включены автоматически.",
-        reply_markup=get_pro_keyboard(),
+        reply_markup=main_menu_kb(),
     )
 
 
@@ -125,5 +110,5 @@ async def enable_pro_notifications(message: Message):
 async def disable_pro_notifications(message: Message):
     await message.answer(
         "⚠️ Отключение PRO возможно только через администратора.",
-        reply_markup=get_pro_keyboard(),
+        reply_markup=main_menu_kb(),
     )
