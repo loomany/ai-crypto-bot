@@ -853,7 +853,6 @@ async def pump_scan_once(bot: Bot) -> None:
                 scan_pumps_chunk(
                     symbols,
                     start_idx=cursor,
-                    session=session,
                     time_budget_sec=BUDGET,
                     return_stats=True,
                 ),

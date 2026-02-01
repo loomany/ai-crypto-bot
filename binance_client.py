@@ -83,8 +83,8 @@ async def get_required_candles(symbol: str):
 async def get_quick_candles(
     symbol: str,
     *,
-    limit_1h: int = 120,
-    limit_15m: int = 120,
+    limit_1h: int = KLINES_1H_LIMIT,
+    limit_15m: int = KLINES_15M_LIMIT,
 ) -> dict[str, List[Candle]]:
     async def _safe(interval: str, limit: int) -> List[Candle]:
         try:

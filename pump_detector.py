@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Tuple
 import aiohttp
 
 from binance_client import fetch_klines, Candle
-from binance_rest import fetch_json
+from binance_rest import binance_request_context, fetch_json
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 
 BINANCE_API = "https://api.binance.com"
@@ -34,13 +34,10 @@ async def get_usdt_symbols(session: aiohttp.ClientSession) -> list[str]:
     return await get_spot_usdt_symbols(session)
 
 
-async def get_klines_1m(
-    session: aiohttp.ClientSession,
-    symbol: str,
-    limit: int = 25,
-) -> list[Candle] | None:
+async def get_klines_1m(symbol: str, limit: int = 25) -> list[Candle] | None:
     try:
-        return await fetch_klines(symbol, "1m", limit)
+        with binance_request_context("pump_detector"):
+            return await fetch_klines(symbol, "1m", limit)
     except Exception as exc:
         print(f"[BINANCE] ERROR {symbol}: {exc}")
         return None
@@ -182,7 +179,6 @@ async def scan_pumps_chunk(
     batch_size: int = BATCH_SIZE,
     max_symbols: int = PUMP_CHUNK_SIZE,
     time_budget_sec: int | None = None,
-    session: aiohttp.ClientSession | None = None,
     return_stats: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int], int]:
     results: list[Dict[str, Any]] = []
@@ -191,35 +187,23 @@ async def scan_pumps_chunk(
         return results, {"checked": 0, "found": 0}, start_idx
 
     end_idx = min(start_idx + max_symbols, len(symbols))
-    close_session = False
-    if session is None:
-        session = aiohttp.ClientSession()
-        close_session = True
-
     start_ts = time.time()
-    try:
-        for i in range(start_idx, end_idx, batch_size):
+    for i in range(start_idx, end_idx, batch_size):
+        if time_budget_sec is not None and time.time() - start_ts >= time_budget_sec:
+            break
+        batch = symbols[i : i + batch_size]
+        tasks = [asyncio.create_task(get_klines_1m(symbol, limit=25)) for symbol in batch]
+        klines_list = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for symbol, klines in zip(batch, klines_list):
             if time_budget_sec is not None and time.time() - start_ts >= time_budget_sec:
                 break
-            batch = symbols[i : i + batch_size]
-            tasks = [
-                asyncio.create_task(get_klines_1m(session, symbol, limit=25))
-                for symbol in batch
-            ]
-            klines_list = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for symbol, klines in zip(batch, klines_list):
-                if time_budget_sec is not None and time.time() - start_ts >= time_budget_sec:
-                    break
-                checked += 1
-                if isinstance(klines, Exception):
-                    continue
-                sig = _calc_signal_from_klines(symbol, klines)
-                if sig:
-                    results.append(sig)
-    finally:
-        if close_session:
-            await session.close()
+            checked += 1
+            if isinstance(klines, Exception):
+                continue
+            sig = _calc_signal_from_klines(symbol, klines)
+            if sig:
+                results.append(sig)
 
     stats = {"checked": checked, "found": len(results)}
     next_idx = end_idx if end_idx < len(symbols) else 0
@@ -249,10 +233,7 @@ async def scan_pumps(
             if time.time() - start_ts >= max_cycle_sec:
                 break
             batch = ordered_symbols[i : i + batch_size]
-            tasks = [
-                asyncio.create_task(get_klines_1m(session, symbol, limit=25))
-                for symbol in batch
-            ]
+            tasks = [asyncio.create_task(get_klines_1m(symbol, limit=25)) for symbol in batch]
             klines_list = await asyncio.gather(*tasks, return_exceptions=True)
 
             for symbol, klines in zip(batch, klines_list):

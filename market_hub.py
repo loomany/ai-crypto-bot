@@ -118,6 +118,10 @@ class MarketDataHub:
             await asyncio.sleep(0.2)
 
     async def _refresh_batch(self, tf: str, symbols: List[str]) -> None:
+        symbols_to_fetch = [symbol for symbol in symbols if self.is_stale(symbol, tf)]
+        if not symbols_to_fetch:
+            return
+
         limit = TF_LIMITS.get(tf, KLINES_1H_LIMIT)
 
         async def _safe_fetch(symbol: str) -> tuple[str, Optional[List[Candle]], Optional[Exception]]:
@@ -128,7 +132,7 @@ class MarketDataHub:
             except Exception as exc:
                 return symbol, None, exc
 
-        tasks = [asyncio.create_task(_safe_fetch(symbol)) for symbol in symbols]
+        tasks = [asyncio.create_task(_safe_fetch(symbol)) for symbol in symbols_to_fetch]
         results = await asyncio.gather(*tasks)
         any_ok = False
         now = time.time()
