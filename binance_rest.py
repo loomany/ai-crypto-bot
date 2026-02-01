@@ -31,7 +31,7 @@ async def close_shared_session() -> None:
 
 # ---- optional concurrency gate (reduces socket spikes) ----
 # One more layer in addition to rate limiter/weight tracker.
-BINANCE_SEM = asyncio.Semaphore(5)
+BINANCE_SEM = asyncio.Semaphore(4)
 
 
 async def fetch_json(

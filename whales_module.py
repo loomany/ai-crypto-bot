@@ -149,7 +149,7 @@ def _prioritize_pairs(
 
 async def whales_scan_once(bot) -> None:
     start = time.time()
-    BUDGET = 30
+    BUDGET = 35
     print("[WHALE] scan_once start")
     cycle_start = time.time()
     try:

@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Tuple
 
 import aiohttp
 
-from binance_client import fetch_klines
+from binance_client import fetch_klines, Candle
 from binance_rest import fetch_json
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 
@@ -34,15 +34,13 @@ async def get_usdt_symbols(session: aiohttp.ClientSession) -> list[str]:
     return await get_spot_usdt_symbols(session)
 
 
-async def get_klines_1m(session: aiohttp.ClientSession, symbol: str, limit: int = 25):
-    params = {"symbol": symbol, "interval": "1m", "limit": limit}
-    print(f"[BINANCE] request {symbol} klines")
+async def get_klines_1m(
+    session: aiohttp.ClientSession,
+    symbol: str,
+    limit: int = 25,
+) -> list[Candle] | None:
     try:
-        return await fetch_json(
-            f"{BINANCE_API}/api/v3/klines",
-            params=params,
-            session=session,
-        )
+        return await fetch_klines(symbol, "1m", limit)
     except Exception as exc:
         print(f"[BINANCE] ERROR {symbol}: {exc}")
         return None
@@ -93,12 +91,19 @@ def _remember_signal(signal: Dict[str, Any]) -> bool:
     return True
 
 
-def _calc_signal_from_klines(symbol: str, klines: list[list[str]]) -> Dict[str, Any] | None:
-    if len(klines) < 6:
+def _calc_signal_from_klines(
+    symbol: str,
+    klines: list[list[str]] | list[Candle],
+) -> Dict[str, Any] | None:
+    if not klines or len(klines) < 6:
         return None
 
-    closes = [float(k[4]) for k in klines]
-    volumes = [float(k[5]) for k in klines]
+    if isinstance(klines[0], Candle):
+        closes = [float(k.close) for k in klines]
+        volumes = [float(k.volume) for k in klines]
+    else:
+        closes = [float(k[4]) for k in klines]
+        volumes = [float(k[5]) for k in klines]
 
     last_price = closes[-1]
     price_1m = closes[-2]

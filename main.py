@@ -4,7 +4,7 @@ import sqlite3
 import time
 from contextlib import suppress
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Awaitable
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -262,7 +262,7 @@ PRO_MIN_VOLUME_RATIO = 1.3
 PRO_SYMBOL_COOLDOWN_SEC = 60 * 60 * 6
 MAX_PRO_SIGNALS_PER_DAY = 4
 MAX_PRO_SIGNALS_PER_CYCLE = 2
-AI_CHUNK_SIZE = 10
+AI_CHUNK_SIZE = 8
 PRO_CHUNK_SIZE = 20
 
 LAST_PRO_SYMBOL_SENT: Dict[str, float] = {}
@@ -709,7 +709,7 @@ def _select_signals_for_cycle(signals: List[Dict[str, Any]]) -> List[Dict[str, A
 
 async def pump_scan_once(bot: Bot) -> None:
     start = time.time()
-    BUDGET = 30
+    BUDGET = 35
     print("[PUMP] scan_once start")
     if not hasattr(pump_scan_once, "state"):
         pump_scan_once.state = {
@@ -790,7 +790,7 @@ async def pump_scan_once(bot: Bot) -> None:
 
 async def ai_scan_once() -> None:
     start = time.time()
-    BUDGET = 45
+    BUDGET = 35
     print("[AI] scan_once start")
     try:
         mark_tick("ai_signals", extra="сканирую рынок...")
@@ -975,13 +975,23 @@ async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     print("Бот запущен!")
     init_db()
-    signals_task = asyncio.create_task(safe_worker_loop("ai_signals", ai_scan_once))
+    async def _delayed_task(delay_sec: float, coro: Awaitable[Any]):
+        await asyncio.sleep(delay_sec)
+        return await coro
+
     pulse_task = asyncio.create_task(safe_worker_loop("market_pulse", market_pulse_scan_once))
-    pump_task = asyncio.create_task(safe_worker_loop("pumpdump", lambda: pump_scan_once(bot)))
-    btc_task = asyncio.create_task(btc_realtime_signal_worker(bot))
-    whales_task = asyncio.create_task(whales_market_flow_worker(bot))
-    pro_ai_task = asyncio.create_task(safe_worker_loop("pro_ai", pro_ai_scan_once))
-    audit_task = asyncio.create_task(signal_audit_worker_loop())
+    btc_task = asyncio.create_task(_delayed_task(3, btc_realtime_signal_worker(bot)))
+    pump_task = asyncio.create_task(
+        _delayed_task(6, safe_worker_loop("pumpdump", lambda: pump_scan_once(bot)))
+    )
+    whales_task = asyncio.create_task(_delayed_task(9, whales_market_flow_worker(bot)))
+    signals_task = asyncio.create_task(
+        _delayed_task(12, safe_worker_loop("ai_signals", ai_scan_once))
+    )
+    pro_ai_task = asyncio.create_task(
+        _delayed_task(15, safe_worker_loop("pro_ai", pro_ai_scan_once))
+    )
+    audit_task = asyncio.create_task(_delayed_task(18, signal_audit_worker_loop()))
     watchdog_task = asyncio.create_task(watchdog())
     try:
         await dp.start_polling(bot)
