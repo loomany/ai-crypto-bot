@@ -818,6 +818,7 @@ def _select_signals_for_cycle(signals: List[Dict[str, Any]]) -> List[Dict[str, A
 async def pump_scan_once(bot: Bot) -> None:
     start = time.time()
     BUDGET = 35
+    log_level = int(os.getenv("PUMPDUMP_LOG_LEVEL", "1"))  # 0=off,1=cycle,2=candidates,3=sends
     print("[PUMP] scan_once start")
     if not hasattr(pump_scan_once, "state"):
         pump_scan_once.state = {
@@ -828,9 +829,19 @@ async def pump_scan_once(bot: Bot) -> None:
 
     try:
         state = pump_scan_once.state
-        subscribers = pro_list()
-        mark_tick("pumpdump", extra=f"подписчиков: {len(subscribers)}")
+
+        notify_subs = list_enabled("pumpdump")
+        pro_subs = pro_list()
+        subscribers = pro_subs  # текущая логика: pump/dump только для PRO
+
+        if log_level >= 1:
+            print(f"[pumpdump] subs: pro={len(pro_subs)} notify={len(notify_subs)} using=pro")
+
+        mark_tick("pumpdump", extra=f"подписчиков(pro): {len(subscribers)}")
+
         if not subscribers:
+            if log_level >= 1:
+                print("[pumpdump] no PRO subscribers -> skip")
             return
 
         session = await get_shared_session()
@@ -861,6 +872,23 @@ async def pump_scan_once(bot: Bot) -> None:
         except asyncio.TimeoutError:
             return
         state["cursor"] = next_cursor
+        found = stats.get("found", len(signals) if isinstance(signals, list) else 0)
+
+        if log_level >= 1:
+            print(
+                f"[pumpdump] chunk: cursor={cursor} -> next={next_cursor} "
+                f"total={len(symbols)} checked={stats.get('checked',0)} found={found}"
+            )
+
+        if log_level >= 2 and signals:
+            for s in signals[:10]:
+                print(
+                    f"[pumpdump] candidate {s.get('symbol')} "
+                    f"type={s.get('type')} "
+                    f"1m={s.get('change_1m')}% "
+                    f"5m={s.get('change_5m')}% "
+                    f"volx={s.get('volume_mul')}"
+                )
         chunk_len = min(PUMP_CHUNK_SIZE, total - cursor) if total else 0
         checked = stats.get("checked", 0)
         update_module_progress("pumpdump", total, next_cursor, checked)
@@ -886,16 +914,19 @@ async def pump_scan_once(bot: Bot) -> None:
                 try:
                     await bot.send_message(chat_id, text, parse_mode="Markdown")
                     sent_count += 1
-                except Exception:
+                except Exception as e:
+                    print(f"[pumpdump] send failed chat_id={chat_id} symbol={symbol}: {e}")
                     continue
 
         cycle_sec = time.time() - cycle_start
         current_symbol = MODULES.get("pumpdump").current_symbol if "pumpdump" in MODULES else None
+        if log_level >= 1:
+            print(f"[pumpdump] cycle done: found={found} sent={sent_count}")
         mark_ok(
             "pumpdump",
             extra=(
                 f"progress={next_cursor}/{total} "
-                f"checked={checked}/{chunk_len} "
+                f"checked={checked}/{chunk_len} found={found} sent={sent_count} "
                 f"current={current_symbol or '-'} cycle={int(cycle_sec)}s"
             ),
         )
