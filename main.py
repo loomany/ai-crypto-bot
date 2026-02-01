@@ -4,7 +4,7 @@ import sqlite3
 import time
 from contextlib import suppress
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -32,7 +32,8 @@ from symbol_cache import get_all_usdt_symbols, get_top_usdt_symbols_by_volume
 from market_regime import get_market_regime
 from health import MODULES, mark_tick, mark_ok, mark_error
 from db_path import get_db_path
-from notifications_db import init_notify_table
+from alert_dedup_db import init_alert_dedup, can_send
+from notifications_db import init_notify_table, enable_notify, disable_notify, list_enabled
 from message_templates import format_scenario_message
 from pro_db import init_pro_tables, pro_list, pro_can_send, pro_inc_sent
 from signal_audit_db import init_signal_audit_tables, insert_signal_audit, get_public_stats
@@ -125,8 +126,30 @@ def init_db():
         conn.close()
 
     init_notify_table()
+    init_alert_dedup()
     init_pro_tables()
     init_signal_audit_tables()
+    migrate_ai_subscribers_to_notify()
+
+
+def migrate_ai_subscribers_to_notify() -> None:
+    """
+    Разово переносим подписчиков из legacy таблицы ai_signals_subscribers
+    в notify_settings(feature='ai_signals'). Старую таблицу не трогаем.
+    """
+    conn = sqlite3.connect(get_db_path())
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT chat_id FROM ai_signals_subscribers")
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    for (chat_id,) in rows:
+        try:
+            enable_notify(int(chat_id), "ai_signals")
+        except Exception:
+            continue
 
 
 def upsert_user(
@@ -188,39 +211,25 @@ def upsert_user(
         conn.close()
 
 
-def add_subscription(chat_id: int) -> bool:
-    conn = sqlite3.connect(get_db_path())
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT OR IGNORE INTO ai_signals_subscribers (chat_id) VALUES (?)",
-            (chat_id,),
-        )
-        conn.commit()
-        return cur.rowcount > 0
-    finally:
-        conn.close()
+def list_ai_subscribers() -> List[int]:
+    """
+    Единый источник подписчиков AI:
+    - основной: notify_settings(feature='ai_signals', enabled=1)
+    - legacy: ai_signals_subscribers (на случай старых баз)
+    """
+    subs = set(list_enabled("ai_signals"))
 
-
-def remove_subscription(chat_id: int) -> bool:
-    conn = sqlite3.connect(get_db_path())
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM ai_signals_subscribers WHERE chat_id = ?", (chat_id,))
-        conn.commit()
-        return cur.rowcount > 0
-    finally:
-        conn.close()
-
-
-def list_subscriptions() -> List[int]:
+    # legacy fallback (не мешает после миграции)
     conn = sqlite3.connect(get_db_path())
     try:
         cur = conn.cursor()
         cur.execute("SELECT chat_id FROM ai_signals_subscribers")
-        return [row[0] for row in cur.fetchall()]
+        for (chat_id,) in cur.fetchall():
+            subs.add(int(chat_id))
     finally:
         conn.close()
+
+    return sorted(subs)
 
 
 # ===== СОЗДАЁМ БОТА =====
@@ -244,7 +253,6 @@ MAX_PRO_SIGNALS_PER_DAY = 4
 MAX_PRO_SIGNALS_PER_CYCLE = 2
 CHUNK_SIZE = 50
 
-LAST_SENT_FREE: Dict[Tuple[str, str], float] = {}
 LAST_PRO_SYMBOL_SENT: Dict[str, float] = {}
 LAST_PULSE_SENT_AT = 0.0
 # Сканируем рынок каждые 60 секунд
@@ -301,7 +309,7 @@ async def ai_signals_menu(message: Message):
 
 @dp.message(F.text == "🔔 Включить авто-сигналы")
 async def ai_signals_subscribe(message: Message):
-    is_new = add_subscription(message.chat.id)
+    is_new = enable_notify(message.chat.id, "ai_signals")
     if is_new:
         await message.answer(
             "Готово! Ты подписан на авто-рассылку AI-сигналов.",
@@ -316,7 +324,7 @@ async def ai_signals_subscribe(message: Message):
 
 @dp.message(F.text == "🚫 Отключить авто-сигналы")
 async def ai_signals_unsubscribe(message: Message):
-    removed = remove_subscription(message.chat.id)
+    removed = disable_notify(message.chat.id, "ai_signals")
     if removed:
         await message.answer(
             "Авто-сигналы отключены. Возвращайся, когда потребуется!",
@@ -331,7 +339,7 @@ async def ai_signals_unsubscribe(message: Message):
 @dp.message(F.text == "/testadmin")
 async def test_admin(message: Message):
     pro_subscribers = pro_list()
-    ai_subscribers = list_subscriptions()
+    ai_subscribers = list_ai_subscribers()
     ai_extra = MODULES.get("ai_signals").extra if "ai_signals" in MODULES else ""
     ai_extra = ai_extra.strip()
     def _merge_extra(base: str, extra: str) -> str:
@@ -447,18 +455,6 @@ def _format_signed_number(value: float, decimals: int = 1) -> str:
     sign = "−" if value < 0 else "+"
     return f"{sign}{abs(value):.{decimals}f}"
 
-def _cooldown_ready(
-    signal: Dict[str, Any], last_sent: Dict[Tuple[str, str], float], cooldown_sec: int
-) -> bool:
-    now = time.time()
-    key = (signal["symbol"], signal.get("direction", "long"))
-    last = last_sent.get(key)
-    if last and now - last < cooldown_sec:
-        return False
-    last_sent[key] = now
-    return True
-
-
 def _format_signal(signal: Dict[str, Any], tier: str) -> str:
     entry_low, entry_high = signal["entry_zone"]
     symbol = signal["symbol"]
@@ -506,20 +502,36 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
         print("[ai_signals] Bot is not initialized; skipping send.")
         return
 
-    subscribers = list_subscriptions()
+    subscribers = list_ai_subscribers()
     if not subscribers:
         return
 
-    if not _cooldown_ready(signal_dict, LAST_SENT_FREE, COOLDOWN_FREE_SEC):
-        return
+    # dedup ключ: символ + направление + зона входа (округление чтобы не шумело)
+    entry_low, entry_high = signal_dict["entry_zone"]
+    symbol = signal_dict.get("symbol", "")
+    direction = signal_dict.get("direction", "long")
+    dedup_key = (
+        f"{symbol}:{direction}:"
+        f"{round(float(entry_low), 6)}-{round(float(entry_high), 6)}"
+    )
 
     text = _format_signal(signal_dict, tier)
     insert_signal_audit(signal_dict, tier=tier, module="ai_signals")
 
-    tasks = [asyncio.create_task(bot.send_message(chat_id, text)) for chat_id in subscribers]
+    tasks = []
+    recipients = []
+    for chat_id in subscribers:
+        # индивидуальный cooldown на пользователя
+        if not can_send(chat_id, "ai_signals", dedup_key, COOLDOWN_FREE_SEC):
+            continue
+        tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
+        recipients.append(chat_id)
+
+    if not tasks:
+        return
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    for chat_id, res in zip(subscribers, results):
+    for chat_id, res in zip(recipients, results):
         if isinstance(res, Exception):
             print(f"[ai_signals] Failed to send to {chat_id}: {res}")
 
@@ -549,7 +561,7 @@ async def market_pulse_worker():
                 await asyncio.sleep(5)
                 continue
 
-            subscribers = list_subscriptions()
+            subscribers = list_ai_subscribers()
             if not subscribers:
                 await asyncio.sleep(30)
                 continue
