@@ -16,16 +16,16 @@ from btc_module import (
     router as btc_router,
     btc_realtime_signal_worker,
 )
-from binance_rest import close_shared_session
+from binance_rest import close_shared_session, get_shared_session
 from whales_module import whales_market_flow_worker
 from pro_modules import (
     router as pro_router,
 )
-from pump_detector import scan_pumps, format_pump_message
+from pump_detector import build_pump_symbol_list, scan_pumps_chunk, format_pump_message
 from signals import scan_market, get_alt_watch_symbol, is_pro_strict_signal
 from symbol_cache import get_all_usdt_symbols, get_top_usdt_symbols_by_volume
 from market_regime import get_market_regime
-from health import MODULES, mark_tick, mark_ok, mark_error
+from health import MODULES, mark_tick, mark_ok, mark_error, safe_worker_loop, watchdog, SCAN_INTERVAL
 from db_path import get_db_path
 from alert_dedup_db import init_alert_dedup, can_send
 from notifications_db import init_notify_table, enable_notify, disable_notify, list_enabled
@@ -263,12 +263,10 @@ PRO_SYMBOL_COOLDOWN_SEC = 60 * 60 * 6
 MAX_PRO_SIGNALS_PER_DAY = 4
 MAX_PRO_SIGNALS_PER_CYCLE = 2
 CHUNK_SIZE = 50
+PRO_CHUNK_SIZE = 50
 
 LAST_PRO_SYMBOL_SENT: Dict[str, float] = {}
 LAST_PULSE_SENT_AT = 0.0
-# Сканируем рынок каждые 60 секунд
-AI_SCAN_INTERVAL = 60  # seconds
-PRO_AI_SCAN_INTERVAL = 60 * 10
 
 
 # ===== ХЭНДЛЕРЫ =====
@@ -651,62 +649,56 @@ def _format_volume_usdt(value: float) -> str:
     return f"{value:.0f}"
 
 
-async def market_pulse_worker():
+async def market_pulse_scan_once() -> None:
     global LAST_PULSE_SENT_AT
 
-    while True:
-        try:
-            if bot is None:
-                await asyncio.sleep(5)
-                continue
+    if bot is None:
+        mark_tick("market_pulse", extra="bot not ready")
+        return
 
-            subscribers = list_ai_subscribers()
-            if not subscribers:
-                await asyncio.sleep(30)
-                continue
+    subscribers = list_ai_subscribers()
+    if not subscribers:
+        mark_tick("market_pulse", extra="нет подписчиков")
+        return
 
-            now = time.time()
-            if now - LAST_PULSE_SENT_AT < PULSE_INTERVAL_SEC:
-                await asyncio.sleep(30)
-                continue
+    now = time.time()
+    since_last = now - LAST_PULSE_SENT_AT
+    if since_last < PULSE_INTERVAL_SEC:
+        wait_left = int(PULSE_INTERVAL_SEC - since_last)
+        mark_ok("market_pulse", extra=f"следующий пульс через {wait_left}s")
+        return
 
-            regime_info = await get_market_regime()
-            regime = regime_info.get("regime", "neutral")
-            regime_label = {
-                "risk_on": "RISK-ON",
-                "risk_off": "RISK-OFF",
-                "neutral": "NEUTRAL",
-            }.get(regime, "NEUTRAL")
+    regime_info = await get_market_regime()
+    regime = regime_info.get("regime", "neutral")
+    regime_label = {
+        "risk_on": "RISK-ON",
+        "risk_off": "RISK-OFF",
+        "neutral": "NEUTRAL",
+    }.get(regime, "NEUTRAL")
 
-            alt_watch = await get_alt_watch_symbol()
-            if alt_watch:
-                alt_symbol = _format_symbol_pair(str(alt_watch.get("symbol", "")))
-                change_pct = float(alt_watch.get("change_pct", 0.0))
-                volume_usdt = float(alt_watch.get("volume_usdt", 0.0))
-                alt_line = (
-                    f"Монета для наблюдения: {alt_symbol} — "
-                    f"{change_pct:+.2f}% за 1ч, объём ~{_format_volume_usdt(volume_usdt)} USDT."
-                )
-            else:
-                alt_line = "Монета для наблюдения: SOL/USDT — повышенный объём, ждём подтверждения."
+    alt_watch = await get_alt_watch_symbol()
+    if alt_watch:
+        alt_symbol = _format_symbol_pair(str(alt_watch.get("symbol", "")))
+        change_pct = float(alt_watch.get("change_pct", 0.0))
+        volume_usdt = float(alt_watch.get("volume_usdt", 0.0))
+        alt_line = (
+            f"Монета для наблюдения: {alt_symbol} — "
+            f"{change_pct:+.2f}% за 1ч, объём ~{_format_volume_usdt(volume_usdt)} USDT."
+        )
+    else:
+        alt_line = "Монета для наблюдения: SOL/USDT — повышенный объём, ждём подтверждения."
 
-            text = (
-                "📡 Market Pulse (каждый час)\n"
-                f"BTC режим: {regime_label}\n"
-                "Сетапов нет — фильтр строгий. Это нормально.\n"
-                f"{alt_line}"
-            )
+    text = (
+        "📡 Market Pulse (каждый час)\n"
+        f"BTC режим: {regime_label}\n"
+        "Сетапов нет — фильтр строгий. Это нормально.\n"
+        f"{alt_line}"
+    )
 
-            tasks = [asyncio.create_task(bot.send_message(chat_id, text)) for chat_id in subscribers]
-            await asyncio.gather(*tasks, return_exceptions=True)
-            LAST_PULSE_SENT_AT = now
-
-        except Exception as e:
-            msg = f"pulse error: {e}"
-            print(f"[pulse_worker] {msg}")
-            mark_error("ai_signals", msg)
-
-        await asyncio.sleep(30)
+    tasks = [asyncio.create_task(bot.send_message(chat_id, text)) for chat_id in subscribers]
+    await asyncio.gather(*tasks, return_exceptions=True)
+    LAST_PULSE_SENT_AT = now
+    mark_ok("market_pulse", extra="пульс отправлен")
 
 
 def _select_signals_for_cycle(signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -735,105 +727,109 @@ def _select_signals_for_cycle(signals: List[Dict[str, Any]]) -> List[Dict[str, A
     return selected
 
 
-async def pump_worker(bot: Bot):
-    """
-    Периодически сканирует рынок и рассылает авто-пампы подписчикам.
-    """
-    last_sent: dict[str, int] = {}
+async def pump_scan_once(bot: Bot) -> None:
+    if not hasattr(pump_scan_once, "state"):
+        pump_scan_once.state = {
+            "last_sent": {},
+            "symbols": [],
+            "cursor": 0,
+        }
 
-    while True:
-        try:
-            subscribers = pro_list()
-            mark_tick("pumpdump", extra=f"подписчиков: {len(subscribers)}")
-            if not subscribers:
-                await asyncio.sleep(15)
-                continue
+    state = pump_scan_once.state
+    subscribers = pro_list()
+    mark_tick("pumpdump", extra=f"подписчиков: {len(subscribers)}")
+    if not subscribers:
+        return
 
-            cycle_start = time.time()
-            signals, stats = await scan_pumps(return_stats=True)
-            now_min = int(time.time() // 60)
-            sent_count = 0
+    session = await get_shared_session()
+    symbols = state["symbols"]
+    cursor = state["cursor"]
+    if not symbols or cursor >= len(symbols):
+        symbols = await build_pump_symbol_list(session)
+        cursor = 0
+        state["symbols"] = symbols
 
-            for sig in signals:
-                symbol = sig["symbol"]
+    if not symbols:
+        mark_error("pumpdump", "no symbols to scan")
+        return
 
-                if last_sent.get(symbol) == now_min:
-                    continue
+    cycle_start = time.time()
+    signals, stats, next_cursor = await scan_pumps_chunk(
+        symbols,
+        start_idx=cursor,
+        session=session,
+        return_stats=True,
+    )
+    state["cursor"] = next_cursor
 
-                text = format_pump_message(sig)
+    now_min = int(time.time() // 60)
+    sent_count = 0
+    last_sent: dict[str, int] = state["last_sent"]
 
-                last_sent[symbol] = now_min
-                for chat_id in subscribers:
-                    try:
-                        await bot.send_message(chat_id, text, parse_mode="Markdown")
-                        sent_count += 1
-                    except Exception:
-                        continue
+    for sig in signals:
+        symbol = sig["symbol"]
 
-            cycle_sec = time.time() - cycle_start
-            mark_ok(
-                "pumpdump",
-                extra=(
-                    f"checked={stats.get('checked', 0)} found={stats.get('found', 0)} "
-                    f"sent={sent_count} cycle={cycle_sec:.1f}s"
-                ),
-            )
-        except Exception as e:
-            msg = f"error: {e}"
-            print(f"[pump_worker] {msg}")
-            mark_error("pumpdump", msg)
-            await asyncio.sleep(10)
+        if last_sent.get(symbol) == now_min:
+            continue
 
-        await asyncio.sleep(15)
+        text = format_pump_message(sig)
 
-
-async def signals_worker():
-    while True:
-        mark_tick("ai_signals", extra="сканирую рынок...")
-
-        try:
-            symbols = await get_all_usdt_symbols()
-            if not symbols:
-                mark_error("ai_signals", "no symbols to scan")
-                await asyncio.sleep(AI_SCAN_INTERVAL)
-                continue
-
-            chunks = [symbols[i : i + CHUNK_SIZE] for i in range(0, len(symbols), CHUNK_SIZE)]
-            if not hasattr(signals_worker, "chunk_idx"):
-                signals_worker.chunk_idx = 0
-            if signals_worker.chunk_idx >= len(chunks):
-                signals_worker.chunk_idx = 0
-            chunk = chunks[signals_worker.chunk_idx]
-            signals_worker.chunk_idx = (signals_worker.chunk_idx + 1) % len(chunks)
-
-            signals = await scan_market(
-                symbols=chunk,
-                use_btc_gate=False,
-                free_mode=True,
-                min_score=FREE_MIN_SCORE,
-                return_stats=False,
-            )
-            print("SCAN OK", len(signals))
-            sent_count = 0
-            for signal in _select_signals_for_cycle(signals):
-                score = signal.get("score", 0)
-                if score < FREE_MIN_SCORE:
-                    continue
-                print(
-                    f"[ai_signals] SEND FREE {signal['symbol']} {signal['direction']} score={score}"
-                )
-                await send_signal_to_all(signal, "free")
+        last_sent[symbol] = now_min
+        for chat_id in subscribers:
+            try:
+                await bot.send_message(chat_id, text, parse_mode="Markdown")
                 sent_count += 1
-            mark_ok(
-                "ai_signals",
-                extra=f"chunk={signals_worker.chunk_idx}/{len(chunks)} checked={len(chunk)} sent={sent_count}",
-            )
-        except Exception as e:
-            msg = f"Worker error: {e}"
-            print(f"[ai_signals] {msg}")
-            mark_error("ai_signals", msg)
+            except Exception:
+                continue
 
-        await asyncio.sleep(AI_SCAN_INTERVAL)
+    cycle_sec = time.time() - cycle_start
+    mark_ok(
+        "pumpdump",
+        extra=(
+            f"checked={stats.get('checked', 0)} found={stats.get('found', 0)} "
+            f"sent={sent_count} cycle={cycle_sec:.1f}s"
+        ),
+    )
+
+
+async def ai_scan_once() -> None:
+    mark_tick("ai_signals", extra="сканирую рынок...")
+
+    symbols = await get_all_usdt_symbols()
+    if not symbols:
+        mark_error("ai_signals", "no symbols to scan")
+        return
+
+    chunks = [symbols[i : i + CHUNK_SIZE] for i in range(0, len(symbols), CHUNK_SIZE)]
+    if not hasattr(ai_scan_once, "chunk_idx"):
+        ai_scan_once.chunk_idx = 0
+    if ai_scan_once.chunk_idx >= len(chunks):
+        ai_scan_once.chunk_idx = 0
+    chunk = chunks[ai_scan_once.chunk_idx]
+    ai_scan_once.chunk_idx = (ai_scan_once.chunk_idx + 1) % len(chunks)
+
+    signals = await scan_market(
+        symbols=chunk,
+        use_btc_gate=False,
+        free_mode=True,
+        min_score=FREE_MIN_SCORE,
+        return_stats=False,
+    )
+    print("SCAN OK", len(signals))
+    sent_count = 0
+    for signal in _select_signals_for_cycle(signals):
+        score = signal.get("score", 0)
+        if score < FREE_MIN_SCORE:
+            continue
+        print(
+            f"[ai_signals] SEND FREE {signal['symbol']} {signal['direction']} score={score}"
+        )
+        await send_signal_to_all(signal, "free")
+        sent_count += 1
+    mark_ok(
+        "ai_signals",
+        extra=f"chunk={ai_scan_once.chunk_idx}/{len(chunks)} checked={len(chunk)} sent={sent_count}",
+    )
 
 
 def _pro_symbol_cooldown_ready(symbol: str) -> bool:
@@ -868,82 +864,85 @@ async def _send_pro_signal(signal_dict: Dict[str, Any], subscribers: List[int]):
     _mark_pro_symbol_sent(signal_dict.get("symbol", ""))
 
 
-async def pro_ai_signals_worker():
-    buffer: Dict[str, Dict[str, Any]] = {}
-    buffer_timestamps: Dict[str, float] = {}
-    buffer_ttl_sec = 60 * 60 * 6
+async def pro_ai_scan_once() -> None:
+    if not hasattr(pro_ai_scan_once, "state"):
+        pro_ai_scan_once.state = {
+            "buffer": {},
+            "buffer_timestamps": {},
+            "buffer_ttl_sec": 60 * 60 * 6,
+            "chunk_idx": 0,
+        }
 
-    while True:
-        try:
-            subscribers = pro_list()
-            mark_tick("pro_ai", extra=f"подписчиков: {len(subscribers)}")
-            mark_tick("pro", extra=f"подписчиков: {len(subscribers)}")
-            if not subscribers:
-                await asyncio.sleep(20)
-                continue
+    state = pro_ai_scan_once.state
+    buffer: Dict[str, Dict[str, Any]] = state["buffer"]
+    buffer_timestamps: Dict[str, float] = state["buffer_timestamps"]
+    buffer_ttl_sec: float = state["buffer_ttl_sec"]
 
-            top_n = int(os.getenv("PRO_SCAN_TOP_N", "250"))
-            symbols = await get_top_usdt_symbols_by_volume(top_n)
+    subscribers = pro_list()
+    mark_tick("pro_ai", extra=f"подписчиков: {len(subscribers)}")
+    mark_tick("pro", extra=f"подписчиков: {len(subscribers)}")
+    if not subscribers:
+        return
 
-            # (опционально) если top не подтянулся — не сканим весь рынок, просто пауза
-            if not symbols:
-                await asyncio.sleep(60)
-                continue
+    top_n = int(os.getenv("PRO_SCAN_TOP_N", "250"))
+    symbols = await get_top_usdt_symbols_by_volume(top_n)
 
-            signals = await scan_market(
-                symbols=symbols,
-                batch_size=5,
-                batch_delay=0.2,
-                use_btc_gate=True,
-                free_mode=False,
-                min_score=PRO_MIN_SCORE,
-                return_stats=False,
-            )
-            now = time.time()
-            for sig in signals:
-                if not is_pro_strict_signal(
-                    sig,
-                    min_score=PRO_MIN_SCORE,
-                    min_rr=PRO_MIN_RR,
-                    min_volume_ratio=PRO_MIN_VOLUME_RATIO,
-                ):
-                    continue
-                symbol = sig.get("symbol")
-                if not symbol or not _pro_symbol_cooldown_ready(symbol):
-                    continue
-                current = buffer.get(symbol)
-                if not current or sig.get("score", 0) > current.get("score", 0):
-                    buffer[symbol] = sig
-                    buffer_timestamps[symbol] = now
+    if not symbols:
+        mark_error("pro_ai", "no symbols to scan")
+        return
 
-            stale_symbols = [
-                symbol
-                for symbol, ts in buffer_timestamps.items()
-                if now - ts > buffer_ttl_sec
-            ]
-            for symbol in stale_symbols:
-                buffer.pop(symbol, None)
-                buffer_timestamps.pop(symbol, None)
+    chunks = [symbols[i : i + PRO_CHUNK_SIZE] for i in range(0, len(symbols), PRO_CHUNK_SIZE)]
+    if state["chunk_idx"] >= len(chunks):
+        state["chunk_idx"] = 0
+    chunk = chunks[state["chunk_idx"]]
+    state["chunk_idx"] = (state["chunk_idx"] + 1) % len(chunks)
 
-            candidates = sorted(buffer.values(), key=lambda item: item.get("score", 0), reverse=True)
+    signals = await scan_market(
+        symbols=chunk,
+        batch_size=5,
+        use_btc_gate=True,
+        free_mode=False,
+        min_score=PRO_MIN_SCORE,
+        return_stats=False,
+    )
+    now = time.time()
+    for sig in signals:
+        if not is_pro_strict_signal(
+            sig,
+            min_score=PRO_MIN_SCORE,
+            min_rr=PRO_MIN_RR,
+            min_volume_ratio=PRO_MIN_VOLUME_RATIO,
+        ):
+            continue
+        symbol = sig.get("symbol")
+        if not symbol or not _pro_symbol_cooldown_ready(symbol):
+            continue
+        current = buffer.get(symbol)
+        if not current or sig.get("score", 0) > current.get("score", 0):
+            buffer[symbol] = sig
+            buffer_timestamps[symbol] = now
 
-            if candidates:
-                mark_ok("pro_ai", extra=f"кандидатов: {len(candidates)}")
-            else:
-                mark_tick("pro_ai", extra="кандидатов: 0")
+    stale_symbols = [
+        symbol
+        for symbol, ts in buffer_timestamps.items()
+        if now - ts > buffer_ttl_sec
+    ]
+    for symbol in stale_symbols:
+        buffer.pop(symbol, None)
+        buffer_timestamps.pop(symbol, None)
 
-            for signal in candidates[:MAX_PRO_SIGNALS_PER_CYCLE]:
-                await _send_pro_signal(signal, subscribers)
-                symbol = signal.get("symbol", "")
-                buffer.pop(symbol, None)
-                buffer_timestamps.pop(symbol, None)
+    candidates = sorted(buffer.values(), key=lambda item: item.get("score", 0), reverse=True)
 
-        except Exception as e:
-            msg = f"Worker error: {e}"
-            print(f"[pro_ai] {msg}")
-            mark_error("pro_ai", msg)
+    if candidates:
+        mark_ok("pro_ai", extra=f"кандидатов: {len(candidates)}")
+    else:
+        mark_tick("pro_ai", extra="кандидатов: 0")
 
-        await asyncio.sleep(PRO_AI_SCAN_INTERVAL)
+    for signal in candidates[:MAX_PRO_SIGNALS_PER_CYCLE]:
+        await _send_pro_signal(signal, subscribers)
+        symbol = signal.get("symbol", "")
+        buffer.pop(symbol, None)
+        buffer_timestamps.pop(symbol, None)
 
 
 # ===== ТОЧКА ВХОДА =====
@@ -953,13 +952,14 @@ async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     print("Бот запущен!")
     init_db()
-    signals_task = asyncio.create_task(signals_worker())
-    pulse_task = asyncio.create_task(market_pulse_worker())
-    pump_task = asyncio.create_task(pump_worker(bot))
+    signals_task = asyncio.create_task(safe_worker_loop("ai_signals", ai_scan_once))
+    pulse_task = asyncio.create_task(safe_worker_loop("market_pulse", market_pulse_scan_once))
+    pump_task = asyncio.create_task(safe_worker_loop("pumpdump", lambda: pump_scan_once(bot)))
     btc_task = asyncio.create_task(btc_realtime_signal_worker(bot))
     whales_task = asyncio.create_task(whales_market_flow_worker(bot))
-    pro_ai_task = asyncio.create_task(pro_ai_signals_worker())
+    pro_ai_task = asyncio.create_task(safe_worker_loop("pro_ai", pro_ai_scan_once))
     audit_task = asyncio.create_task(signal_audit_worker_loop())
+    watchdog_task = asyncio.create_task(watchdog())
     try:
         await dp.start_polling(bot)
     finally:
@@ -984,6 +984,9 @@ async def main():
         audit_task.cancel()
         with suppress(asyncio.CancelledError):
             await audit_task
+        watchdog_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await watchdog_task
         await close_shared_session()
 
 

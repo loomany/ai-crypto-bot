@@ -47,6 +47,7 @@ class BinanceWeightTracker:
     async def block_for(self, seconds: float) -> None:
         if seconds <= 0:
             return
+        seconds = min(seconds, 60.0)
         async with self._lock:
             until = time.monotonic() + seconds
             if until > self._blocked_until:
@@ -61,7 +62,7 @@ class BinanceWeightTracker:
                 used = self.used_weight_1m
 
             if blocked > now:
-                await asyncio.sleep(blocked - now)
+                await asyncio.sleep(min(blocked - now, 60.0))
                 continue
 
             # If we're close to the 1m limit, slow down a bit to let the window slide.
@@ -70,7 +71,7 @@ class BinanceWeightTracker:
                 # scale ~0.5..2.5s when used goes from soft_limit..limit
                 over = min(max(used - soft_limit, 0), max(self.limit_1m - soft_limit, 1))
                 ratio = over / max(self.limit_1m - soft_limit, 1)
-                await asyncio.sleep(0.5 + 2.0 * ratio)
+                await asyncio.sleep(min(0.5 + 2.0 * ratio, 60.0))
                 continue
 
             return
@@ -100,13 +101,13 @@ def calc_backoff_seconds(
     attempt: int,
     retry_after_header: Optional[str],
     base: float = 0.5,
-    cap: float = 30.0,
+    cap: float = 60.0,
 ) -> float:
     """Backoff that prefers Retry-After if present, otherwise exponential + jitter."""
     ra = _parse_retry_after(retry_after_header)
     if ra is not None:
         # tiny jitter so multiple workers don't stampede
-        return min(ra + random.uniform(0.05, 0.25), cap)
+        return min(ra + random.uniform(0.05, 0.25), cap, 60.0)
 
     exp = base * (2**attempt)
-    return min(exp + random.uniform(0.05, 0.25), cap)
+    return min(exp + random.uniform(0.05, 0.25), cap, 60.0)

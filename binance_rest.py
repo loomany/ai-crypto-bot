@@ -64,9 +64,12 @@ async def fetch_json(
                         # Rate limit / ban protection
                         if resp.status in (418, 429):
                             retry_after = resp.headers.get("Retry-After")
-                            backoff = calc_backoff_seconds(
-                                attempt=attempt,
-                                retry_after_header=retry_after,
+                            backoff = min(
+                                calc_backoff_seconds(
+                                    attempt=attempt,
+                                    retry_after_header=retry_after,
+                                ),
+                                60.0,
                             )
                             await BINANCE_WEIGHT_TRACKER.block_for(backoff)
                             await asyncio.sleep(backoff)
@@ -74,7 +77,7 @@ async def fetch_json(
 
                         # Binance temporary errors
                         if resp.status in (502, 503, 504):
-                            await asyncio.sleep(0.4 + 0.2 * attempt)
+                            await asyncio.sleep(min(0.4 + 0.2 * attempt, 60.0))
                             continue
 
                         resp.raise_for_status()
@@ -82,13 +85,16 @@ async def fetch_json(
 
         except asyncio.TimeoutError:
             if attempt < retries:
-                await asyncio.sleep(0.2 + 0.2 * attempt)
+                await asyncio.sleep(min(0.2 + 0.2 * attempt, 60.0))
                 continue
             return None
 
         except aiohttp.ClientResponseError as exc:
             if exc.status in (418, 429):
-                backoff = calc_backoff_seconds(attempt=attempt, retry_after_header=None)
+                backoff = min(
+                    calc_backoff_seconds(attempt=attempt, retry_after_header=None),
+                    60.0,
+                )
                 await BINANCE_WEIGHT_TRACKER.block_for(backoff)
                 await asyncio.sleep(backoff)
                 continue

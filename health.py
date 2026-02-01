@@ -1,6 +1,7 @@
+import asyncio
 import time
 from dataclasses import dataclass
-from typing import Optional, Dict
+from typing import Optional, Dict, Callable, Awaitable
 
 
 @dataclass
@@ -39,7 +40,11 @@ MODULES: Dict[str, ModuleStatus] = {
     "btc": ModuleStatus("₿ BTC (intraday)"),
     "whales_flow": ModuleStatus("🐳 Whale Flow Scanner"),
     "pro_ai": ModuleStatus("🎯 PRO AI-сигналы"),
+    "market_pulse": ModuleStatus("📡 Market Pulse"),
+    "signal_audit": ModuleStatus("🧾 Signal Audit"),
 }
+
+SCAN_INTERVAL = 60  # seconds, strict
 
 
 def mark_tick(key: str, extra: str = ""):
@@ -68,3 +73,30 @@ def mark_error(key: str, err: str):
         return
     st.last_tick = time.time()
     st.last_error = err[:200]
+
+
+async def safe_worker_loop(
+    module_name: str,
+    scan_once_coro: Callable[[], Awaitable[None]],
+) -> None:
+    while True:
+        cycle_start = time.time()
+        mark_tick(module_name)
+
+        try:
+            await scan_once_coro()
+        except Exception as exc:
+            mark_error(module_name, f"{type(exc).__name__}: {exc}")
+
+        elapsed = time.time() - cycle_start
+        await asyncio.sleep(max(0.0, SCAN_INTERVAL - elapsed))
+
+
+async def watchdog() -> None:
+    while True:
+        now = time.time()
+        for name, module in MODULES.items():
+            last = module.last_tick
+            if last and now - last > 120:
+                print(f"[WATCHDOG] {name} stalled: {int(now - last)}s")
+        await asyncio.sleep(30)

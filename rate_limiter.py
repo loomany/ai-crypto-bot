@@ -25,7 +25,7 @@ class RateLimiter:
 
                 wait_time = (1 - self._tokens) / self.rate_per_sec
 
-            await asyncio.sleep(wait_time)
+            await asyncio.sleep(min(wait_time, 60.0))
 
     async def release(self) -> None:
         return None
