@@ -842,15 +842,16 @@ async def ai_scan_once() -> None:
             update_current_symbol("ai_signals", chunk[0])
 
         with binance_request_context("ai_signals"):
-            signals = await scan_market(
+            signals, stats = await scan_market(
                 symbols=chunk,
                 use_btc_gate=False,
                 free_mode=True,
                 min_score=FREE_MIN_SCORE,
-                return_stats=False,
+                return_stats=True,
                 time_budget=BUDGET,
             )
         print("SCAN OK", len(signals))
+        print("[ai_signals] stats:", stats)
         sent_count = 0
         for signal in _select_signals_for_cycle(signals):
             if time.time() - start > BUDGET:
