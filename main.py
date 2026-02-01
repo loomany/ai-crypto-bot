@@ -422,6 +422,18 @@ async def test_admin(message: Message):
     await message.answer("\n".join(lines))
 
 
+@dp.message(Command("test_notify"))
+async def test_notify_cmd(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        return
+    target_chat_id = ADMIN_CHAT_ID or message.from_user.id
+    await message.bot.send_message(
+        target_chat_id,
+        "🧪 Тестовое уведомление: доставка работает.",
+    )
+    print(f"[notify] test sent to {target_chat_id} ok")
+
+
 @dp.message(Command("pro_add"))
 async def pro_add_cmd(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
