@@ -1,7 +1,7 @@
 from aiogram import Router, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
-from pro_db import pro_add, pro_remove
+from pro_db import pro_get_expires, pro_is
 
 router = Router(name="pro_modules")
 
@@ -42,21 +42,22 @@ async def open_pro_menu(message: Message):
 
 @router.message(F.text == "✅ Включить PRO-уведомления")
 async def enable_pro_notifications(message: Message):
-    changed = pro_add(message.chat.id)
+    if not pro_is(message.chat.id):
+        await message.answer(
+            "⚠️ PRO не активен. Для доступа напишите администратору.",
+            reply_markup=get_pro_keyboard(),
+        )
+        return
+    expires = pro_get_expires(message.chat.id)
     await message.answer(
-        "✅ PRO-уведомления включены. Теперь ты получаешь Pump/Dump, Whale Flow и PRO AI-сигналы."
-        if changed
-        else "✅ PRO-уведомления уже активны.",
+        f"✅ PRO активен до {expires}. Уведомления включены автоматически.",
         reply_markup=get_pro_keyboard(),
     )
 
 
 @router.message(F.text == "❌ Отключить PRO-уведомления")
 async def disable_pro_notifications(message: Message):
-    changed = pro_remove(message.chat.id)
     await message.answer(
-        "❌ PRO-уведомления отключены."
-        if changed
-        else "✅ PRO-уведомления уже были отключены.",
+        "⚠️ Отключение PRO возможно только через администратора.",
         reply_markup=get_pro_keyboard(),
     )

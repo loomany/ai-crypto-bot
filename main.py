@@ -13,7 +13,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
 )
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from dotenv import load_dotenv
 
 from btc_module import (
@@ -35,7 +35,27 @@ from db_path import get_db_path
 from alert_dedup_db import init_alert_dedup, can_send
 from notifications_db import init_notify_table, enable_notify, disable_notify, list_enabled
 from message_templates import format_scenario_message
-from pro_db import init_pro_tables, pro_list, pro_can_send, pro_inc_sent
+from pro_db import (
+    init_pro_tables,
+    pro_activate,
+    pro_get_expires,
+    pro_is,
+    pro_list,
+    pro_remove,
+    pro_can_send,
+    pro_inc_sent,
+)
+from trial_db import (
+    FREE_TRIAL_LIMIT,
+    init_trial_tables,
+    pro_paywall_text,
+    trial_can_send,
+    trial_ensure_user,
+    trial_inc,
+    trial_mark_paywall,
+    trial_paywall_sent,
+    trial_reset,
+)
 from signal_audit_db import init_signal_audit_tables, insert_signal_audit, get_public_stats
 from signal_audit_worker import signal_audit_worker_loop
 
@@ -50,6 +70,20 @@ def load_settings() -> str:
         raise ValueError("Нет BOT_TOKEN в .env файле")
 
     return bot_token
+
+
+def get_admin_ids() -> set[int]:
+    raw = os.getenv("ADMIN_IDS", "").strip()
+    if not raw:
+        return set()
+    return {int(x.strip()) for x in raw.split(",") if x.strip().isdigit()}
+
+
+ADMIN_IDS = get_admin_ids()
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
 
 
 # ===== КНОПКИ МЕНЮ =====
@@ -128,6 +162,7 @@ def init_db():
     init_notify_table()
     init_alert_dedup()
     init_pro_tables()
+    init_trial_tables()
     init_signal_audit_tables()
     migrate_ai_subscribers_to_notify()
 
@@ -286,6 +321,7 @@ async def cmd_start(message: Message):
                 f"Язык: {language}"
             )
             await message.bot.send_message(ADMIN_CHAT_ID, admin_text)
+    trial_ensure_user(message.chat.id)
 
     text = (
         "Привет! Я AI-крипто бот для рынка Binance 🧠📈\n\n"
@@ -297,6 +333,7 @@ async def cmd_start(message: Message):
     )
 
     await message.answer(text, reply_markup=main_menu_keyboard(), parse_mode="Markdown")
+    await message.answer(f"Ваш ID: {message.chat.id}")
 
 
 @dp.message(F.text == "🎯 AI-сигналы")
@@ -365,6 +402,59 @@ async def test_admin(message: Message):
         lines.append(f"{st.name}:\n{st.as_text()}\n")
 
     await message.answer("\n".join(lines))
+
+
+@dp.message(Command("pro_add"))
+async def pro_add_cmd(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.answer("Формат: /pro_add <chat_id> <days>")
+        return
+    _, chat_id, days = parts[:3]
+    expires = pro_activate(int(chat_id), int(days))
+    await message.answer(f"✅ PRO включен до {expires}")
+
+
+@dp.message(Command("pro_remove"))
+async def pro_remove_cmd(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("Формат: /pro_remove <chat_id>")
+        return
+    _, chat_id = parts[:2]
+    pro_remove(int(chat_id))
+    await message.answer("❌ PRO отключен")
+
+
+@dp.message(Command("pro_status"))
+async def pro_status_cmd(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("Формат: /pro_status <chat_id>")
+        return
+    _, chat_id = parts[:2]
+    active = pro_is(int(chat_id))
+    exp = pro_get_expires(int(chat_id))
+    await message.answer(f"PRO: {'ACTIVE' if active else 'OFF'}\nДо: {exp}")
+
+
+@dp.message(Command("trial_reset"))
+async def trial_reset_cmd(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("Формат: /trial_reset <chat_id>")
+        return
+    _, chat_id = parts[:2]
+    trial_reset(int(chat_id))
+    await message.answer("♻️ Trial сброшен (3 сигнала снова доступны)")
 
 
 @dp.message(F.text == "⬅️ Главное меню")
@@ -524,6 +614,15 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
         # индивидуальный cooldown на пользователя
         if not can_send(chat_id, "ai_signals", dedup_key, COOLDOWN_FREE_SEC):
             continue
+        if tier == "free" and not pro_is(chat_id):
+            trial_ensure_user(chat_id)
+            if not trial_can_send(chat_id, FREE_TRIAL_LIMIT):
+                if not trial_paywall_sent(chat_id):
+                    await bot.send_message(chat_id, pro_paywall_text())
+                    disable_notify(chat_id, "ai_signals")
+                    trial_mark_paywall(chat_id)
+                continue
+            trial_inc(chat_id)
         tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
         recipients.append(chat_id)
 
