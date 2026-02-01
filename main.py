@@ -30,6 +30,7 @@ from pump_detector import (
 from signals import scan_market, is_pro_strict_signal
 from symbol_cache import get_all_usdt_symbols, get_top_usdt_symbols_by_volume
 from market_regime import get_market_regime
+from market_hub import MARKET_HUB
 from health import (
     MODULES,
     get_klines_request_count,
@@ -412,6 +413,16 @@ async def test_admin(message: Message):
         MODULES["pro_ai"].extra = _merge_extra(base, MODULES["pro_ai"].extra)
 
     lines = ["🛠 Статус модулей:\n"]
+    now = time.time()
+    if MARKET_HUB.last_ok_at:
+        ok_ago = int(now - MARKET_HUB.last_ok_at)
+        ok_text = f"ok {ok_ago}s ago"
+    else:
+        ok_text = "ok n/a"
+    hub_err = MARKET_HUB.last_error or "-"
+    lines.append(
+        f"MarketHub: {ok_text} | err: {hub_err} | symbols: {len(MARKET_HUB._symbols)}"
+    )
     for key, st in MODULES.items():
         lines.append(f"{st.name}:\n{st.as_text()}\n")
 
@@ -1135,8 +1146,11 @@ async def main():
     audit_task = asyncio.create_task(_delayed_task(18, signal_audit_worker_loop()))
     watchdog_task = asyncio.create_task(watchdog())
     try:
+        await MARKET_HUB.start()
+        print("[market_hub] started")
         await dp.start_polling(bot)
     finally:
+        await MARKET_HUB.stop()
         signals_task.cancel()
         with suppress(asyncio.CancelledError):
             await signals_task

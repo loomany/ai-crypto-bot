@@ -13,9 +13,10 @@ from aiogram.types import (
 )
 from aiogram.fsm.context import FSMContext
 
-from binance_client import Candle, get_required_candles
+from binance_client import Candle
 from ai_patterns import analyze_ai_patterns
 from market_regime import get_market_regime
+from market_access import get_bundle_with_fallback
 from trading_core import (
     detect_trend_and_structure,
     find_key_levels,
@@ -126,9 +127,15 @@ async def btc_scan_once(bot) -> None:
         state["cursor"] = (cursor + 1) % len(symbols)
 
         try:
-            candles = await asyncio.wait_for(get_required_candles(symbol), timeout=20)
+            candles = await asyncio.wait_for(
+                get_bundle_with_fallback(symbol, ("1d", "4h", "1h", "15m", "5m")),
+                timeout=20,
+            )
         except asyncio.TimeoutError:
             mark_warn("btc", "klines timeout")
+            return
+        if not candles:
+            mark_tick("btc", extra="нет данных 1d/4h/1h/15m/5m")
             return
         candles_5m = candles.get("5m", [])
         if len(candles_5m) < 2:
@@ -283,7 +290,14 @@ async def generate_btc_signal(
     now = dt.datetime.utcnow() + dt.timedelta(hours=TIMEZONE_OFFSET_HOURS)
 
     if candles is None:
-        candles = await get_required_candles(BTC_SYMBOL)
+        candles = await get_bundle_with_fallback(BTC_SYMBOL, ("1d", "4h", "1h", "15m", "5m"))
+    if not candles:
+        return BTCSingal(
+            timestamp=now,
+            side="NO_TRADE",
+            probability=0,
+            explanation="Нет данных с Binance для полного анализа (проверка соединения).",
+        )
     candles_1d = candles.get("1d", [])
     candles_4h = candles.get("4h", [])
     candles_1h = candles.get("1h", [])
