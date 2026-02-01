@@ -1,17 +1,13 @@
 import asyncio
 import os
-import time
 from dataclasses import dataclass
 from typing import List, Optional
 
-from binance_rest import fetch_json
+from binance_rest import fetch_klines as fetch_klines_raw
 
-BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 _KLINES_SEM = asyncio.Semaphore(
     int(os.environ.get("BINANCE_KLINES_PER_SYMBOL_CONCURRENCY", "3"))
 )
-_KLINES_CACHE: dict[tuple[str, str, int], tuple[float, List["Candle"]]] = {}
-_KLINES_CACHE_TTL_SEC = 20
 
 
 @dataclass
@@ -25,25 +21,9 @@ class Candle:
     close_time: int
 
 
-async def _fetch_json(url: str, params: dict | None = None) -> Optional[list]:
-    return await fetch_json(url, params)
-
-
 async def fetch_klines(symbol: str, interval: str, limit: int) -> List[Candle]:
-    cache_key = (symbol, interval, limit)
-    now = time.time()
-    cached = _KLINES_CACHE.get(cache_key)
-    if cached and now - cached[0] < _KLINES_CACHE_TTL_SEC:
-        return cached[1]
-    url = f"{BINANCE_BASE_URL}/klines"
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit,
-    }
-    print(f"[BINANCE] request {symbol} klines")
     try:
-        raw = await _fetch_json(url, params)
+        raw = await fetch_klines_raw(symbol, interval, limit)
     except Exception as exc:
         print(f"[BINANCE] ERROR {symbol}: {exc}")
         raise
@@ -63,7 +43,6 @@ async def fetch_klines(symbol: str, interval: str, limit: int) -> List[Candle]:
                 close_time=int(item[6]),
             )
         )
-    _KLINES_CACHE[cache_key] = (now, candles)
     return candles
 
 

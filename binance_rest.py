@@ -1,4 +1,5 @@
 import asyncio
+import time
 from typing import Any, Optional
 
 import aiohttp
@@ -9,6 +10,11 @@ from rate_limiter import BINANCE_RATE_LIMITER
 # ---- shared session (one per process) ----
 _SHARED_SESSION: aiohttp.ClientSession | None = None
 _SHARED_LOCK = asyncio.Lock()
+
+BINANCE_BASE_URL = "https://api.binance.com/api/v3"
+_KLINES_CACHE: dict[tuple[str, str, int], tuple[float, list]] = {}
+_KLINES_CACHE_TTL_SEC = 20
+_KLINES_CACHE_LOCK = asyncio.Lock()
 
 
 async def get_shared_session() -> aiohttp.ClientSession:
@@ -116,3 +122,29 @@ async def fetch_json(
             return None
 
     return None
+
+
+async def fetch_klines(symbol: str, interval: str, limit: int) -> Optional[list]:
+    cache_key = (symbol, interval, limit)
+    now = time.time()
+    async with _KLINES_CACHE_LOCK:
+        cached = _KLINES_CACHE.get(cache_key)
+        if cached and now - cached[0] < _KLINES_CACHE_TTL_SEC:
+            print(
+                f"[binance_rest] klines {symbol} {interval} {limit} (cache_hit=True)"
+            )
+            return cached[1]
+
+    print(f"[binance_rest] klines {symbol} {interval} {limit} (cache_hit=False)")
+    url = f"{BINANCE_BASE_URL}/klines"
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit,
+    }
+    data = await fetch_json(url, params)
+    if not isinstance(data, list):
+        return None
+    async with _KLINES_CACHE_LOCK:
+        _KLINES_CACHE[cache_key] = (now, data)
+    return data
