@@ -34,6 +34,7 @@ from trading_core import (
 )
 from health import mark_tick, mark_ok, mark_error
 from notifications_db import disable_notify, enable_notify, list_enabled
+from message_templates import format_scenario_message
 
 # ============================================================
 # Константы и базовые настройки
@@ -61,6 +62,10 @@ class BTCSingal:
     tp1: Optional[float] = None
     tp2: Optional[float] = None
     rr: Optional[float] = None
+    trend_1d: Optional[str] = None
+    trend_4h: Optional[str] = None
+    rsi_1h: Optional[float] = None
+    volume_ratio: Optional[float] = None
     explanation: str = ""
     raw_score: Optional[int] = None
 
@@ -162,7 +167,7 @@ async def btc_realtime_signal_worker(bot):
     last_signature: Optional[Tuple[str, int]] = None
     last_checked_candle_close_time: Optional[int] = None
     last_signal_time: Optional[dt.datetime] = None
-    MIN_SIGNAL_INTERVAL_SECONDS = 10 * 60
+    MIN_SIGNAL_INTERVAL_SECONDS = 7 * 60
 
     while True:
         try:
@@ -306,7 +311,7 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
 
     nearest_high, dist_high = _nearest_level(current_price, key_levels["highs"])
     nearest_low, dist_low = _nearest_level(current_price, key_levels["lows"])
-    threshold_pct = 0.6
+    threshold_pct = 0.8
 
     candidate_side: Optional[str] = None
     level_touched: Optional[float] = None
@@ -435,8 +440,17 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
         )
 
     side = "LONG" if raw_score >= 70 else "SHORT"
-    probability = min(95, abs(raw_score))
-    rr = abs((tp1 - entry_to) / risk) if risk != 0 else None
+    score_for_message = min(100, abs(raw_score))
+    entry_mid = (entry_from + entry_to) / 2
+    rr = abs((tp1 - entry_mid) / (entry_mid - sl)) if (entry_mid - sl) != 0 else None
+
+    closes_1h = [c.close for c in candles_1h]
+    rsi_1h_series = _compute_rsi_series(closes_1h)
+    rsi_1h_value = rsi_1h_series[-1] if rsi_1h_series else 50.0
+    volumes_1h = [c.volume for c in candles_1h[-21:]]
+    avg_volume = sum(volumes_1h[:-1]) / (len(volumes_1h) - 1) if len(volumes_1h) > 1 else 0.0
+    last_volume = volumes_1h[-1] if volumes_1h else 0.0
+    volume_ratio = last_volume / avg_volume if avg_volume > 0 else 0.0
 
     explanation_parts = [
         f"1D/4H тренд: {global_trend}, 1H локально: {local_trend}",
@@ -459,13 +473,17 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
     return BTCSingal(
         timestamp=now,
         side=side,
-        probability=probability,
+        probability=score_for_message,
         entry_from=entry_from,
         entry_to=entry_to,
         sl=sl,
         tp1=tp1,
         tp2=tp2,
         rr=rr,
+        trend_1d=global_trend,
+        trend_4h=h4_structure["trend"],
+        rsi_1h=rsi_1h_value,
+        volume_ratio=volume_ratio,
         explanation="\n• " + "\n• ".join(explanation_parts),
         raw_score=raw_score,
     )
@@ -480,8 +498,6 @@ def format_signal_message(signal: BTCSingal, desired_side: Optional[str]) -> str
     Формирование текста сигнала для отправки пользователю.
     """
 
-    local_time_str = signal.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-
     if signal.side == "NO_TRADE":
         return (
             f"⚠️ BTC / {desired_side or 'AUTO'}\n\n"
@@ -489,41 +505,34 @@ def format_signal_message(signal: BTCSingal, desired_side: Optional[str]) -> str
             f"Пояснение:\n{signal.explanation}"
         )
 
-    emoji = "📈" if signal.side == "LONG" else "📉"
-    side_str = "LONG" if signal.side == "LONG" else "SHORT"
-
-    lines = [
-        f"{emoji} BTC / {side_str}",
-        "",
-        f"Время сигнала: {local_time_str}",
-        "Таймфреймы анализа: 30d, 7d, 1d, 1h, 15m, 5m",
-        "",
-        f"Вероятность сценария (оценка модели): {signal.probability:.0f}%",
-    ]
-
-    if signal.entry_from and signal.entry_to:
-        lines.append(
-            f"Зона входа: {signal.entry_from:,.2f} – {signal.entry_to:,.2f} USDT"
-        )
-    if signal.sl:
-        lines.append(f"Стоп-лосс (SL): {signal.sl:,.2f} USDT")
-    if signal.tp1:
-        lines.append(f"Тейк-профит 1 (TP1): {signal.tp1:,.2f} USDT")
-    if signal.tp2:
-        lines.append(f"Тейк-профит 2 (TP2): {signal.tp2:,.2f} USDT")
-    if signal.rr:
-        lines.append(
-            f"Ожидаемое соотношение риск/прибыль (R:R): ~1:{signal.rr:.1f}"
+    if not all([signal.entry_from, signal.entry_to, signal.sl, signal.tp1, signal.tp2]):
+        return (
+            f"⚠️ BTC / {desired_side or 'AUTO'}\n\n"
+            "Сейчас сильного сигнала нет.\n\n"
+            "Пояснение:\nНедостаточно данных для форматирования сценария."
         )
 
-    lines.append("")
-    lines.append("Почему так решил:")
-    lines.append(signal.explanation)
-    lines.append("")
-    lines.append(
-        "⚠️ Это не инвестиционная рекомендация.\n"
-        "Ты сам принимаешь решение и несёшь риск.\n"
-        "Стратегия рассчитана на внутридневную торговлю (до 24 часов)."
+    entry_mid = (signal.entry_from + signal.entry_to) / 2
+    rr_value = (
+        abs((signal.tp1 - entry_mid) / (entry_mid - signal.sl))
+        if signal.sl and (entry_mid - signal.sl) != 0
+        else 0.0
     )
 
-    return "\n".join(lines)
+    return format_scenario_message(
+        symbol_text="BTC / USDT",
+        side=signal.side,
+        timeframe="1H",
+        entry_from=signal.entry_from,
+        entry_to=signal.entry_to,
+        sl=signal.sl,
+        tp1=signal.tp1,
+        tp2=signal.tp2,
+        score=int(signal.probability),
+        trend_1d=signal.trend_1d,
+        trend_4h=signal.trend_4h,
+        rsi_1h=signal.rsi_1h or 50.0,
+        volume_ratio=signal.volume_ratio or 0.0,
+        rr=signal.rr if signal.rr is not None else rr_value,
+        price_precision=2,
+    )

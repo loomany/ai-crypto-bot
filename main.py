@@ -32,6 +32,7 @@ from market_regime import get_market_regime
 from health import MODULES, mark_tick, mark_ok, mark_error
 from db_path import get_db_path
 from notifications_db import init_notify_table
+from message_templates import format_scenario_message
 from pro_db import init_pro_tables, pro_list, pro_can_send, pro_inc_sent
 
 
@@ -405,7 +406,6 @@ def _cooldown_ready(
 
 def _format_signal(signal: Dict[str, Any], tier: str) -> str:
     entry_low, entry_high = signal["entry_zone"]
-    is_long = signal.get("direction") == "long"
     symbol = signal["symbol"]
     if symbol.endswith("USDT"):
         base = symbol[:-4]
@@ -415,66 +415,32 @@ def _format_signal(signal: Dict[str, Any], tier: str) -> str:
         quote = ""
     symbol_text = f"{base} / {quote}" if quote else base
 
-    entry_mid = (entry_low + entry_high) / 2
-    tp1_pct = (signal["tp1"] / entry_mid - 1) * 100
-    tp2_pct = (signal["tp2"] / entry_mid - 1) * 100
-    sl_pct = (signal["sl"] / entry_mid - 1) * 100
-
     raw_reason = signal.get("reason")
     reason = raw_reason if isinstance(raw_reason, dict) else {}
-    trend_1d = _trend_short_text(reason.get("trend_1d", "neutral"))
-    trend_4h = _trend_short_text(reason.get("trend_4h", "neutral"))
     rsi_1h = float(reason.get("rsi_1h", 50.0))
-    rsi_zone = reason.get("rsi_1h_zone") or _rsi_short_zone(rsi_1h)
-    volume_ratio = reason.get("volume_ratio", 0.0)
-    volume_avg = reason.get("volume_avg", 0.0)
-    rr = reason.get("rr", 0.0)
+    volume_ratio = float(reason.get("volume_ratio", 0.0))
+    rr = float(reason.get("rr", 0.0))
 
-    short_block = (
-        "Краткий рыночный контекст:\n"
-        f"• 1D тренд: {trend_1d} (оценка направления)\n"
-        f"• 4H тренд: {trend_4h} (оценка направления)\n"
-        f"• RSI 1H: {rsi_1h:.1f} ({rsi_zone})\n"
-        f"• Объём: {volume_ratio:.2f}x от среднего {volume_avg:.2f}\n"
-        f"• R:R: {rr:.2f} : 1 (расчётный ориентир)"
-    )
-
-    tier_title = "🔥 AI-сценарий"
+    side = "LONG" if signal.get("direction") == "long" else "SHORT"
     score = int(signal.get("score", 0))
-    scenario_text = "LONG" if is_long else "SHORT"
-    scenario_line = f"📈 Сценарий: возможный {scenario_text}" if is_long else f"📉 Сценарий: возможный {scenario_text}"
-    timeframe_line = "⏱ Таймфрейм анализа: 1H"
-    condition_line = (
-        "• сценарий актуален, если цена не закрепляется ниже зоны"
-        if is_long
-        else "• сценарий актуален, если цена не закрепляется выше зоны"
-    )
-    stop_condition = "ниже" if is_long else "выше"
 
-    text = (
-        f"{tier_title}\n\n"
-        f"Монета: {symbol_text}\n"
-        f"{scenario_line}\n"
-        f"{timeframe_line}\n\n"
-        "Зона интереса (POI):\n"
-        f"• {entry_low:.4f} – {entry_high:.4f}\n"
-        "Условие реализации сценария:\n"
-        f"{condition_line}\n"
-        "• рекомендуется дождаться подтверждения на 5–15m\n\n"
-        "Уровень отмены сценария (Stop):\n"
-        f"• {signal['sl']:.4f}  ({_format_signed_number(sl_pct)}%) — закрепление {stop_condition} на 1H\n\n"
-        "Потенциальные цели движения:\n"
-        f"• 🎯 Цель 1: {signal['tp1']:.4f}  ({_format_signed_number(tp1_pct)}%)\n"
-        f"• 🎯 Цель 2: {signal['tp2']:.4f}  ({_format_signed_number(tp2_pct)}%)\n\n"
-        "Оценка модели:\n"
-        f"🧠 Score: {score} / 100\n\n"
-        f"{short_block}\n\n"
-        "⚠️ Бот не знает твой депозит и не управляет рисками. "
-        "Решение о входе, объёме позиции и уровне риска ты принимаешь самостоятельно.\n\n"
-        "📌 Данный сценарий предназначен для аналитики рынка и не является инвестиционной рекомендацией.\n\n"
-        "Источник данных: Binance"
+    return format_scenario_message(
+        symbol_text=symbol_text,
+        side=side,
+        timeframe="1H",
+        entry_from=entry_low,
+        entry_to=entry_high,
+        sl=float(signal["sl"]),
+        tp1=float(signal["tp1"]),
+        tp2=float(signal["tp2"]),
+        score=score,
+        trend_1d=reason.get("trend_1d"),
+        trend_4h=reason.get("trend_4h"),
+        rsi_1h=rsi_1h,
+        volume_ratio=volume_ratio,
+        rr=rr,
+        price_precision=4,
     )
-    return text
 
 
 async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
