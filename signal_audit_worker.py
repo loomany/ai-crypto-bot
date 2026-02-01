@@ -165,7 +165,12 @@ async def evaluate_open_signals(
             symbol = signal["symbol"]
             sent_at = int(signal["sent_at"])
             with binance_request_context("signal_audit"):
-                data = await fetch_klines(symbol, "5m", 1000)
+                data = await fetch_klines(
+                    symbol,
+                    "5m",
+                    500,
+                    start_ms=sent_at * 1000,
+                )
             if not data:
                 continue
 
