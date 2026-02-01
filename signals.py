@@ -9,6 +9,7 @@ from binance_client import (
     Candle,
     KLINES_15M_LIMIT,
     KLINES_1H_LIMIT,
+    fetch_klines as fetch_candles,
     get_quick_candles,
     get_required_candles,
 )
@@ -38,6 +39,18 @@ MIN_VOLUME_RATIO_FREE = 1.15
 MIN_RR_FREE = 1.8
 EMA50_NEAR_PCT_FREE = 1.0
 EMA50_GATE_SCORE = int(os.getenv("EMA50_GATE_SCORE", "78"))
+EMA50_NEAR_PCT_STRICT = float(os.getenv("EMA50_NEAR_PCT_STRICT", "1.0"))
+EMA50_NEAR_PCT_WEAK = float(os.getenv("EMA50_NEAR_PCT_WEAK", "1.5"))
+EMA50_NEAR_PCT_MID = float(os.getenv("EMA50_NEAR_PCT_MID", "2.5"))
+EMA50_SCORE_WEAK = int(os.getenv("EMA50_SCORE_WEAK", "72"))
+EMA50_SCORE_MID = int(os.getenv("EMA50_SCORE_MID", "78"))
+REQUIRE_15M_CONFIRM_ON_EXPANDED = os.getenv("REQUIRE_15M_CONFIRM_ON_EXPANDED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "y",
+)
+MAX_FAIL_DEBUG_LOGS_PER_CYCLE = int(os.getenv("MAX_FAIL_DEBUG_LOGS_PER_CYCLE", "8"))
 AI_STAGE_A_TOP_K = int(os.getenv("AI_STAGE_A_TOP_K", "10"))
 AI_STAGE_A_LIMIT_1H = int(os.getenv("AI_STAGE_A_LIMIT_1H", str(KLINES_1H_LIMIT)))
 AI_STAGE_A_LIMIT_15M = int(os.getenv("AI_STAGE_A_LIMIT_15M", str(KLINES_15M_LIMIT)))
@@ -259,6 +272,7 @@ async def _prepare_signal(
     free_mode: bool = False,
     min_score: float = 80,
     stats: Dict[str, int] | None = None,
+    debug_state: Dict[str, int] | None = None,
 ) -> Optional[Dict[str, Any]]:
     def _inc_fail(reason: str) -> None:
         if stats is None:
@@ -271,6 +285,30 @@ async def _prepare_signal(
         if tp1 < entry and sl > entry:
             return "SHORT"
         return None
+
+    def _log_fail_debug(
+        reason: str,
+        *,
+        score_pre: float,
+        dist_to_ema50_pct: float,
+        allowed_dist_pct: float,
+        strict_pct: float,
+        ema50_value: float,
+        last_price: float,
+        scenario: Optional[str],
+    ) -> None:
+        if debug_state is None:
+            return
+        if debug_state["used"] >= debug_state["max"]:
+            return
+        debug_state["used"] += 1
+        print(
+            "[ai_signals] debug_fail "
+            f"{reason} {symbol} score_pre={score_pre:.2f} "
+            f"dist_to_ema50_pct={dist_to_ema50_pct:.2f} allowed_dist_pct={allowed_dist_pct:.2f} "
+            f"strict_pct={strict_pct:.2f} ema50={ema50_value:.6f} last_price={last_price:.6f} "
+            f"side={scenario}"
+        )
 
     candles_1d = candles["1d"]
     candles_4h = candles["4h"]
@@ -428,11 +466,54 @@ async def _prepare_signal(
 
     if not ma_trend_ok:
         if free_mode and ema50_1h:
-            near_ema50 = abs(current_price - ema50_1h) / current_price * 100 <= EMA50_NEAR_PCT_FREE
-            if score_pre < EMA50_GATE_SCORE:
-                if not near_ema50:
+            dist_to_ema50_pct = abs(current_price - ema50_1h) / ema50_1h * 100
+            allowed_dist_pct = EMA50_NEAR_PCT_WEAK
+            if EMA50_SCORE_WEAK <= score_pre < EMA50_SCORE_MID:
+                allowed_dist_pct = EMA50_NEAR_PCT_MID
+
+            if score_pre < EMA50_SCORE_MID:
+                if dist_to_ema50_pct > allowed_dist_pct:
                     _inc_fail("fail_not_near_ema50_weak")
+                    _log_fail_debug(
+                        "fail_not_near_ema50_weak",
+                        score_pre=score_pre,
+                        dist_to_ema50_pct=dist_to_ema50_pct,
+                        allowed_dist_pct=allowed_dist_pct,
+                        strict_pct=EMA50_NEAR_PCT_STRICT,
+                        ema50_value=ema50_1h,
+                        last_price=current_price,
+                        scenario=candidate_side,
+                    )
                     return None
+
+                is_expanded_pass = (
+                    dist_to_ema50_pct > EMA50_NEAR_PCT_STRICT
+                    and dist_to_ema50_pct <= allowed_dist_pct
+                )
+                if REQUIRE_15M_CONFIRM_ON_EXPANDED and is_expanded_pass:
+                    confirm_candles = candles_15m
+                    if len(confirm_candles) < 3:
+                        confirmed = False
+                    else:
+                        last_closed = confirm_candles[-2]  # последняя закрытая
+                        prev_closed = confirm_candles[-3]
+                        if candidate_side == "SHORT":
+                            confirmed = last_closed.close < last_closed.open and last_closed.close < prev_closed.close
+                        else:
+                            confirmed = last_closed.close > last_closed.open and last_closed.close > prev_closed.close
+                    if not confirmed:
+                        _inc_fail("fail_no_15m_confirm")
+                        _log_fail_debug(
+                            "fail_no_15m_confirm",
+                            score_pre=score_pre,
+                            dist_to_ema50_pct=dist_to_ema50_pct,
+                            allowed_dist_pct=allowed_dist_pct,
+                            strict_pct=EMA50_NEAR_PCT_STRICT,
+                            ema50_value=ema50_1h,
+                            last_price=current_price,
+                            scenario=candidate_side,
+                        )
+                        return None
             else:
                 _inc_fail("ema50_bypassed_strong")
         else:
@@ -569,6 +650,7 @@ async def scan_market(
     klines_ok = 0
     fails: Dict[str, int] = {}
     start_time = time.time()
+    debug_state = {"used": 0, "max": MAX_FAIL_DEBUG_LOGS_PER_CYCLE}
 
     if use_btc_gate:
         if not btc_ctx["allow_longs"] and not btc_ctx["allow_shorts"]:
@@ -622,6 +704,7 @@ async def scan_market(
                 free_mode=free_mode,
                 min_score=min_score,
                 stats=fails if return_stats else None,
+                debug_state=debug_state,
             )
             if signal:
                 signals.append(signal)
