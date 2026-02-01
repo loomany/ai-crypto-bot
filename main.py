@@ -102,6 +102,11 @@ def is_admin(user_id: int) -> bool:
     return ADMIN_USER_ID != 0 and user_id == ADMIN_USER_ID
 
 
+def _hidden_status_modules() -> set[str]:
+    raw = os.getenv("STATUS_HIDE_MODULES", "pro,market_pulse,signal_audit")
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
 # ===== ВРЕМЯ ТОРГОВ =====
 
 ALMATY_TZ = timezone(timedelta(hours=5))
@@ -456,7 +461,10 @@ async def test_admin(message: Message):
     lines.append(
         f"MarketHub: {ok_text} | err: {hub_err} | symbols: {len(MARKET_HUB._symbols)}"
     )
+    hidden = _hidden_status_modules()
     for key, st in MODULES.items():
+        if key in hidden:
+            continue
         lines.append(f"{st.name}:\n{st.as_text()}\n")
 
     await message.answer("\n".join(lines))
