@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 from aiogram.filters import CommandStart, Command
 from dotenv import load_dotenv
 
@@ -43,18 +43,22 @@ from pro_db import (
 from trial_db import (
     FREE_TRIAL_LIMIT,
     init_trial_tables,
-    pro_paywall_text,
-    trial_can_send,
     trial_ensure_user,
+    trial_get,
     trial_inc,
     trial_mark_paywall,
-    trial_paywall_sent,
+    trial_remaining,
     trial_reset,
 )
 from signal_audit_db import init_signal_audit_tables, insert_signal_audit, get_public_stats
 from signal_audit_worker import signal_audit_worker_loop
-from keyboards import main_menu_kb
-from texts import AI_SIGNALS_TEXT, START_TEXT
+from keyboards import (
+    ai_signals_inline_kb,
+    btc_inline_kb,
+    main_menu_kb,
+    paywall_inline_kb,
+)
+from texts import AI_PAYWALL_TEXT, AI_SIGNALS_TEXT, START_TEXT
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -293,7 +297,8 @@ async def cmd_start(message: Message):
                 f"Язык: {language}"
             )
             await message.bot.send_message(ADMIN_CHAT_ID, admin_text)
-    trial_ensure_user(message.chat.id)
+    trial_ensure_user(message.chat.id, "ai_signals")
+    trial_ensure_user(message.chat.id, "btc")
 
     await message.answer(START_TEXT, reply_markup=main_menu_kb())
     await message.answer(f"Ваш ID: {message.chat.id}")
@@ -303,37 +308,63 @@ async def cmd_start(message: Message):
 async def ai_signals_menu(message: Message):
     await message.answer(
         AI_SIGNALS_TEXT,
-        reply_markup=main_menu_kb(),
+        reply_markup=ai_signals_inline_kb(),
     )
 
+@dp.callback_query(F.data == "ai_notify_on")
+async def ai_notify_on(callback: CallbackQuery):
+    if callback.from_user is None:
+        return
+    chat_id = callback.from_user.id
+    enable_notify(chat_id, "ai_signals")
+    trial_ensure_user(chat_id, "ai_signals")
+    remaining = trial_remaining(chat_id, "ai_signals")
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(
+            "✅ AI-уведомления включены.\n\n"
+            "🎁 Вам доступно 3 бесплатных AI-сигнала.\n"
+            f"Осталось: {remaining}/3\n\n"
+            "После лимита бот предложит PRO (39$ / 30 дней)."
+        )
 
-@dp.message(F.text == "🔔 Включить уведомления")
-async def ai_signals_subscribe(message: Message):
-    is_new = enable_notify(message.chat.id, "ai_signals")
-    if is_new:
-        await message.answer(
-            "Готово! Ты подписан на авто-рассылку AI-сигналов.",
-            reply_markup=main_menu_kb(),
-        )
-    else:
-        await message.answer(
-            "Подписка уже активна. Будем присылать новые сигналы автоматически.",
-            reply_markup=main_menu_kb(),
+
+@dp.callback_query(F.data == "ai_notify_off")
+async def ai_notify_off(callback: CallbackQuery):
+    if callback.from_user is None:
+        return
+    disable_notify(callback.from_user.id, "ai_signals")
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer("🚫 Уведомления отключены.")
+
+
+@dp.callback_query(F.data == "btc_notify_on")
+async def btc_notify_on(callback: CallbackQuery):
+    if callback.from_user is None:
+        return
+    chat_id = callback.from_user.id
+    enable_notify(chat_id, "btc")
+    trial_ensure_user(chat_id, "btc")
+    remaining = trial_remaining(chat_id, "btc")
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(
+            "✅ BTC-уведомления включены.\n\n"
+            "🎁 Вам доступно 3 бесплатных BTC-сигнала.\n"
+            f"Осталось: {remaining}/3\n\n"
+            "После лимита бот предложит PRO (39$ / 30 дней)."
         )
 
 
-@dp.message(F.text == "🚫 Отключить уведомления")
-async def ai_signals_unsubscribe(message: Message):
-    removed = disable_notify(message.chat.id, "ai_signals")
-    if removed:
-        await message.answer(
-            "Авто-сигналы отключены. Возвращайся, когда потребуется!",
-            reply_markup=main_menu_kb(),
-        )
-    else:
-        await message.answer(
-            "У тебя не было активной подписки.", reply_markup=main_menu_kb()
-        )
+@dp.callback_query(F.data == "btc_notify_off")
+async def btc_notify_off(callback: CallbackQuery):
+    if callback.from_user is None:
+        return
+    disable_notify(callback.from_user.id, "btc")
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer("🚫 Уведомления отключены.")
 
 
 @dp.message(F.text == "/testadmin")
@@ -468,9 +499,10 @@ def _format_stats_message(stats: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-@dp.message(F.text == "📊 Статистика")
 @dp.message(F.text == "/stats")
 async def show_stats(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        return
     stats = get_public_stats(days=30)
     await message.answer(_format_stats_message(stats), reply_markup=main_menu_kb())
 
@@ -482,8 +514,8 @@ async def open_btc_menu(message: Message):
         "• Автоматические сигналы LONG/SHORT\n"
         "• Сигнал приходит сразу, как только появляется сетап\n"
         "• Горизонт сделок: внутри 24 часов\n\n"
-        "Выбирай действие:",
-        reply_markup=main_menu_kb(),
+        "🔔 Авто-сигналы включаются кнопками ниже.",
+        reply_markup=btc_inline_kb(),
     )
 
 
@@ -578,14 +610,19 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
         if not can_send(chat_id, "ai_signals", dedup_key, COOLDOWN_FREE_SEC):
             continue
         if tier == "free" and not pro_is(chat_id):
-            trial_ensure_user(chat_id)
-            if not trial_can_send(chat_id, FREE_TRIAL_LIMIT):
-                if not trial_paywall_sent(chat_id):
-                    await bot.send_message(chat_id, pro_paywall_text())
+            trial_ensure_user(chat_id, "ai_signals")
+            used_count, paywall_sent = trial_get(chat_id, "ai_signals")
+            if used_count >= FREE_TRIAL_LIMIT:
+                if not paywall_sent:
+                    await bot.send_message(
+                        chat_id,
+                        AI_PAYWALL_TEXT,
+                        reply_markup=paywall_inline_kb(),
+                    )
                     disable_notify(chat_id, "ai_signals")
-                    trial_mark_paywall(chat_id)
+                    trial_mark_paywall(chat_id, "ai_signals")
                 continue
-            trial_inc(chat_id)
+            trial_inc(chat_id, "ai_signals")
         tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
         recipients.append(chat_id)
 
