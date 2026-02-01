@@ -279,7 +279,7 @@ PRO_MIN_VOLUME_RATIO = 1.3
 PRO_SYMBOL_COOLDOWN_SEC = 60 * 60 * 6
 MAX_PRO_SIGNALS_PER_DAY = 4
 MAX_PRO_SIGNALS_PER_CYCLE = 2
-AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "20"))
+AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "40"))
 PRO_CHUNK_SIZE = 20
 
 LAST_PRO_SYMBOL_SENT: Dict[str, float] = {}
@@ -1041,6 +1041,7 @@ async def main():
         _delayed_task(6, safe_worker_loop("pumpdump", lambda: pump_scan_once(bot)))
     )
     whales_task = asyncio.create_task(_delayed_task(9, whales_market_flow_worker(bot)))
+    print(f"[ai_signals] AI_CHUNK_SIZE={AI_CHUNK_SIZE}")
     signals_task = asyncio.create_task(
         _delayed_task(12, safe_worker_loop("ai_signals", ai_scan_once))
     )
