@@ -611,8 +611,15 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
         print("[ai_signals] Bot is not initialized; skipping send.")
         return
 
+    skipped_dedup = 0
+    skipped_paywall = 0
+    skipped_no_subs = 0
     subscribers = list_ai_subscribers()
     if not subscribers:
+        skipped_no_subs += 1
+        print(
+            "[ai_signals] deliver: subs=0 queued=0 dedup=0 paywall=0"
+        )
         return
 
     # dedup ключ: символ + направление + зона входа (округление чтобы не шумело)
@@ -632,6 +639,7 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
     for chat_id in subscribers:
         # индивидуальный cooldown на пользователя
         if not can_send(chat_id, "ai_signals", dedup_key, COOLDOWN_FREE_SEC):
+            skipped_dedup += 1
             continue
         if tier == "free" and not pro_is(chat_id):
             trial_ensure_user(chat_id, "ai_signals")
@@ -645,11 +653,17 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
                     )
                     disable_notify(chat_id, "ai_signals")
                     trial_mark_paywall(chat_id, "ai_signals")
+                    skipped_paywall += 1
                 continue
             trial_inc(chat_id, "ai_signals")
         tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
         recipients.append(chat_id)
 
+    print(
+        "[ai_signals] deliver: "
+        f"subs={len(subscribers)} queued={len(tasks)} "
+        f"dedup={skipped_dedup} paywall={skipped_paywall}"
+    )
     if not tasks:
         return
 

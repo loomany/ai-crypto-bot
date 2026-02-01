@@ -176,6 +176,10 @@ async def btc_scan_once(bot) -> None:
 
         text = format_signal_message(signal, desired_side=signal.side)
         user_ids = list_enabled("btc")
+        print(f"[BTC] enabled={user_ids}")
+        if not user_ids:
+            print("[BTC] no enabled subscribers")
+            return
 
         for user_id in user_ids:
             if time.time() - start > BUDGET:
@@ -189,6 +193,10 @@ async def btc_scan_once(bot) -> None:
                     used_count, paywall_sent = trial_get(user_id, "btc")
                     if used_count >= FREE_TRIAL_LIMIT:
                         if not paywall_sent:
+                            print(
+                                "[BTC] paywall -> disable_notify "
+                                f"user_id={user_id}"
+                            )
                             await bot.send_message(
                                 chat_id=user_id,
                                 text=BTC_PAYWALL_TEXT,
