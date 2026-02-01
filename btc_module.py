@@ -9,8 +9,6 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
 )
 from aiogram.fsm.context import FSMContext
 
@@ -35,6 +33,7 @@ from trading_core import (
 from health import mark_tick, mark_ok, mark_error
 from notifications_db import disable_notify, enable_notify, list_enabled
 from message_templates import format_scenario_message
+from keyboards import main_menu_kb
 
 # ============================================================
 # Константы и базовые настройки
@@ -73,25 +72,6 @@ class BTCSingal:
 
 
 # ============================================================
-# Клавиатура (только уведомления)
-# ============================================================
-
-def get_btc_main_keyboard() -> ReplyKeyboardMarkup:
-    """
-    Нижнее меню BTC:
-    - Включить уведомления по BTC
-    - Отключить уведомления по BTC
-    - Назад в главное меню
-    """
-    kb = [
-        [KeyboardButton(text="🔔 Включить уведомления по BTC")],
-        [KeyboardButton(text="🚫 Отключить уведомления по BTC")],
-        [KeyboardButton(text="⬅️ Главное меню")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-
-
-# ============================================================
 # Вход в BTC-меню
 # ============================================================
 
@@ -106,7 +86,7 @@ async def btc_menu_command(message: Message, state: FSMContext):
         "• Сигнал приходит сразу, как только появляется сетап\n"
         "• Горизонт сделок: внутри 24 часов\n\n"
         "Выбери действие:",
-        reply_markup=get_btc_main_keyboard(),
+        reply_markup=main_menu_kb(),
     )
 
 
@@ -125,7 +105,7 @@ async def handle_btc_notify_on_message(message: Message):
         "как только появляется новый сильный сетап (интрадей, внутри 24 часов)."
         if changed
         else "✅ Уведомления по BTC уже включены.",
-        reply_markup=get_btc_main_keyboard(),
+        reply_markup=main_menu_kb(),
     )
 
 
@@ -136,7 +116,7 @@ async def handle_btc_notify_off_message(message: Message):
 
     await message.answer(
         "❌ Уведомления по BTC отключены." if changed else "✅ Уведомления по BTC уже отключены.",
-        reply_markup=get_btc_main_keyboard(),
+        reply_markup=main_menu_kb(),
     )
 
 
