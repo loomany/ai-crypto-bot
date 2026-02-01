@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -9,6 +10,8 @@ BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 _KLINES_SEM = asyncio.Semaphore(
     int(os.environ.get("BINANCE_KLINES_PER_SYMBOL_CONCURRENCY", "3"))
 )
+_KLINES_CACHE: dict[tuple[str, str, int], tuple[float, List["Candle"]]] = {}
+_KLINES_CACHE_TTL_SEC = 20
 
 
 @dataclass
@@ -27,6 +30,11 @@ async def _fetch_json(url: str, params: dict | None = None) -> Optional[list]:
 
 
 async def fetch_klines(symbol: str, interval: str, limit: int) -> List[Candle]:
+    cache_key = (symbol, interval, limit)
+    now = time.time()
+    cached = _KLINES_CACHE.get(cache_key)
+    if cached and now - cached[0] < _KLINES_CACHE_TTL_SEC:
+        return cached[1]
     url = f"{BINANCE_BASE_URL}/klines"
     params = {
         "symbol": symbol,
@@ -55,6 +63,7 @@ async def fetch_klines(symbol: str, interval: str, limit: int) -> List[Candle]:
                 close_time=int(item[6]),
             )
         )
+    _KLINES_CACHE[cache_key] = (now, candles)
     return candles
 
 

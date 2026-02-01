@@ -1,4 +1,5 @@
 import asyncio
+import re
 import time
 from typing import List, Dict, Any, Tuple
 
@@ -20,8 +21,9 @@ MIN_PRICE_USDT = 0.0005
 MIN_VOLUME_5M_USDT = 10_000
 PRIORITY_LIMIT = 250
 BATCH_SIZE = 20
-PUMP_CHUNK_SIZE = 100
-MAX_CYCLE_SEC = 60
+PUMP_CHUNK_SIZE = 60
+MAX_CYCLE_SEC = 30
+SYMBOL_REGEX = re.compile(r"^[A-Z0-9]{2,20}USDT$")
 _last_signals: dict[str, Dict[str, Any]] = {}
 
 
@@ -161,8 +163,9 @@ async def build_pump_symbol_list(
     priority_limit: int = PRIORITY_LIMIT,
 ) -> list[str]:
     symbols = await get_usdt_symbols(session)
+    symbols = [sym for sym in symbols if SYMBOL_REGEX.match(sym)]
     top_symbols = await get_top_usdt_symbols_by_volume(priority_limit, session=session)
-    priority = [sym for sym in top_symbols if sym in symbols]
+    priority = [sym for sym in top_symbols if sym in symbols and SYMBOL_REGEX.match(sym)]
     rest = [sym for sym in symbols if sym not in set(priority)]
     return priority + rest
 
@@ -173,6 +176,7 @@ async def scan_pumps_chunk(
     start_idx: int = 0,
     batch_size: int = BATCH_SIZE,
     max_symbols: int = PUMP_CHUNK_SIZE,
+    time_budget_sec: int | None = None,
     session: aiohttp.ClientSession | None = None,
     return_stats: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int], int]:
@@ -187,8 +191,11 @@ async def scan_pumps_chunk(
         session = aiohttp.ClientSession()
         close_session = True
 
+    start_ts = time.time()
     try:
         for i in range(start_idx, end_idx, batch_size):
+            if time_budget_sec is not None and time.time() - start_ts >= time_budget_sec:
+                break
             batch = symbols[i : i + batch_size]
             tasks = [
                 asyncio.create_task(get_klines_1m(session, symbol, limit=25))
@@ -197,6 +204,8 @@ async def scan_pumps_chunk(
             klines_list = await asyncio.gather(*tasks, return_exceptions=True)
 
             for symbol, klines in zip(batch, klines_list):
+                if time_budget_sec is not None and time.time() - start_ts >= time_budget_sec:
+                    break
                 checked += 1
                 if isinstance(klines, Exception):
                     continue
