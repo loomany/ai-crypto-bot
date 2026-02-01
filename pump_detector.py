@@ -236,60 +236,36 @@ def _build_dump_plan(price: float) -> Dict[str, float]:
 
 def _format_plan(signal: Dict[str, Any]) -> str:
     price = signal["price"]
-    base_capital = 100.0
 
     if signal["type"] == "pump":
         plan = _build_pump_plan(price)
-        tp1_pct = (plan["tp1"] / plan["entry_mid"] - 1) * 100
-        tp2_pct = (plan["tp2"] / plan["entry_mid"] - 1) * 100
-        sl_pct = (plan["sl"] / plan["entry_mid"] - 1) * 100
-        header = "Рекомендации (памп):"
-        entry_type = "Тип входа: откат после импульса"
-        stop_label = "Стоп (SL):"
-        stop_line = f"• {_format_price(plan['sl'])}  ({_format_signed(sl_pct, 1)}%)\n\n"
-        tp1_label = "Цели:"
-        warning = "⚠️ Пампы крайне рискованные — высокая вероятность зайти на вершине."
+        how_to = (
+            "Как использовать (наблюдение):\n"
+            "• резкие импульсы часто дают откат/перезалив\n"
+            "• вход рассматривается только после подтверждения на 1–5m\n\n"
+        )
+        cancel_text = "• если цена уходит ниже — сценарий отката/продолжения ломается"
     else:
         plan = _build_dump_plan(price)
-        tp1_pct = (plan["entry_mid"] / plan["tp1"] - 1) * 100
-        tp2_pct = (plan["entry_mid"] / plan["tp2"] - 1) * 100
-        sl_pct = (plan["sl"] / plan["entry_mid"] - 1) * 100
-        header = "Рекомендации (дамп):"
-        entry_type = "Тип входа: short после отката вверх"
-        stop_label = "Стоп (SL):"
-        stop_line = f"• {_format_price(plan['sl'])}  (убыток ~{_format_signed(sl_pct, 1).replace('+', '')}%)\n\n"
-        tp1_label = "Цели:"
-        warning = "⚠️ Резкий дамп — высокий риск “поймать нож”. Торгуй только при хорошем опыте и строгом стопе."
-
-    tp1_usdt = base_capital * tp1_pct / 100
-    tp2_usdt = base_capital * tp2_pct / 100
-    sl_pnl_pct = sl_pct if signal["type"] == "pump" else -sl_pct
-    sl_usdt = base_capital * sl_pnl_pct / 100
-
-    change_format = lambda v: f"{_format_signed(v, 1)}%"
-
-    if signal["type"] == "dump":
-        tp1_display = f"профит ~{_format_signed(tp1_pct, 1).replace('+', '')}%"
-        tp2_display = f"профит ~{_format_signed(tp2_pct, 1).replace('+', '')}%"
-    else:
-        tp1_display = change_format(tp1_pct)
-        tp2_display = change_format(tp2_pct)
+        how_to = (
+            "Как использовать (наблюдение):\n"
+            "• резкие импульсы часто дают отскок/перезалив\n"
+            "• вход рассматривается только после подтверждения на 1–5m\n\n"
+        )
+        cancel_text = "• если цена уходит выше — сценарий отката/продолжения ломается"
 
     text = (
-        f"{header}\n"
-        f"{entry_type}\n\n"
-        "Зона входа:\n"
+        f"{how_to}"
+        "Зона интереса (POI):\n"
         f"• {_format_price(plan['entry_low'])} – {_format_price(plan['entry_high'])}  (откат ~2–3%)\n\n"
-        f"{stop_label}\n"
-        f"{stop_line}"
-        f"{tp1_label}\n"
-        f"• TP1: {_format_price(plan['tp1'])}  ({tp1_display})\n"
-        f"• TP2: {_format_price(plan['tp2'])}  ({tp2_display})\n\n"
-        "Пример для позиции 100 USDT:\n"
-        f"• До TP1: {_format_signed(tp1_usdt, 1)} USDT\n"
-        f"• До TP2: {_format_signed(tp2_usdt, 1)} USDT\n"
-        f"• До SL: {_format_signed(sl_usdt, 1)} USDT\n\n"
-        f"{warning}\n"
+        "Уровень отмены сценария:\n"
+        f"• {_format_price(plan['sl'])}\n"
+        f"{cancel_text}\n\n"
+        "Потенциальные уровни движения:\n"
+        f"• 🎯 Уровень 1: {_format_price(plan['tp1'])}\n"
+        f"• 🎯 Уровень 2: {_format_price(plan['tp2'])}\n\n"
+        "⚠️ Резкие импульсы высокорисковые: возможен вход на “вершине”.\n"
+        "Бот не знает твой депозит и не управляет рисками.\n"
         "Источник данных: Binance"
     )
     return text
@@ -303,19 +279,19 @@ def format_pump_message(signal: Dict[str, Any]) -> str:
     volume_mul = signal["volume_mul"]
 
     header = (
-        "🚀 Pump/Dump Scanner: PUMP!"
+        "🚀 Pump/Dump Scanner: резкий импульс"
         if signal["type"] == "pump"
-        else "📉 Pump/Dump Scanner: DUMP!"
+        else "📉 Pump/Dump Scanner: резкий импульс"
     )
 
     text = (
         f"{header}\n\n"
         f"Монета: {symbol_pair}\n"
-        f"Текущая цена: {_format_price(price)} USDT\n\n"
+        f"Текущая цена: {_format_price(price)}\n\n"
         "Движение:\n"
         f"• за 1 мин: {_format_signed(ch1)}%\n"
         f"• за 5 мин: {_format_signed(ch5)}%\n"
-        f"• Объём: {volume_mul:.2f}x от среднего\n\n"
+        f"• объём: {volume_mul:.2f}× от среднего\n\n"
         f"{_format_plan(signal)}"
     )
     return text
