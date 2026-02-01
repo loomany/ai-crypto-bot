@@ -17,13 +17,23 @@ _SHARED_LOCK = asyncio.Lock()
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 _KLINES_CACHE: dict[tuple[str, str, int], tuple[float, list]] = {}
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 _KLINES_CACHE_TTL_SEC_DEFAULT = 20
 _KLINES_CACHE_TTL_BY_INTERVAL = {
-    "1d": 60 * 15,
-    "4h": 60 * 5,
-    "1h": 60 * 2,
-    "15m": 30,
-    "5m": 15,
+    "1d": _env_int("KLINES_TTL_1D", 60 * 15),
+    "4h": _env_int("KLINES_TTL_4H", 60 * 5),
+    "1h": _env_int("KLINES_TTL_1H", 60 * 2),
+    "15m": _env_int("KLINES_TTL_15M", 30),
+    "5m": _env_int("KLINES_TTL_5M", 15),
 }
 _KLINES_CACHE_LOCK = asyncio.Lock()
 _BINANCE_REQUEST_MODULE = ContextVar("binance_request_module", default=None)
