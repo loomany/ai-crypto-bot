@@ -1,14 +1,7 @@
 from typing import Any, Dict, List, Optional
 
-from binance_rest import fetch_json
-
-BINANCE_BASE_URL = "https://api.binance.com/api/v3"
-
-
-# ===== HTTP-ХЕЛПЕР =====
-
-async def _fetch_json(url: str, params: dict | None = None) -> Optional[Any]:
-    return await fetch_json(url, params)
+from binance_client import fetch_klines
+from market_cache import get_spot_24h
 
 
 # ===== ТЕХАНАЛИЗ НА СЫРЫХ ДАННЫХ =====
@@ -105,34 +98,28 @@ def _macd_signal(closes: List[float]) -> str:
 # ===== ПОЛУЧЕНИЕ ДАННЫХ С BINANCE =====
 
 async def get_ticker_basic(symbol: str) -> Optional[Dict[str, float]]:
-    url = f"{BINANCE_BASE_URL}/ticker/24hr"
-    params = {"symbol": symbol}
-    print(f"[BINANCE] request {symbol} ticker/24hr")
     try:
-        data = await _fetch_json(url, params)
+        data = await get_spot_24h()
     except Exception as exc:
         print(f"[BINANCE] ERROR {symbol}: {exc}")
         return None
-    if not data or "lastPrice" not in data:
+    if not data:
+        return None
+
+    row = next((item for item in data if item.get("symbol") == symbol), None)
+    if not row or "lastPrice" not in row:
         return None
 
     return {
-        "symbol": data["symbol"],
-        "price": float(data["lastPrice"]),
-        "change_24h": float(data["priceChangePercent"]),
+        "symbol": row["symbol"],
+        "price": float(row["lastPrice"]),
+        "change_24h": float(row["priceChangePercent"]),
     }
 
 
 async def _get_klines(symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict[str, float]]]:
-    url = f"{BINANCE_BASE_URL}/klines"
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit,
-    }
-    print(f"[BINANCE] request {symbol} klines")
     try:
-        data = await _fetch_json(url, params)
+        data = await fetch_klines(symbol, interval, limit)
     except Exception as exc:
         print(f"[BINANCE] ERROR {symbol}: {exc}")
         return None
@@ -141,12 +128,11 @@ async def _get_klines(symbol: str, interval: str, limit: int = 100) -> Optional[
 
     klines: List[Dict[str, float]] = []
     for k in data:
-        # kline schema: [open_time, open, high, low, close, volume, ...]
-        open_price = float(k[1])
-        high = float(k[2])
-        low = float(k[3])
-        close = float(k[4])
-        volume = float(k[5])
+        open_price = float(k.open)
+        high = float(k.high)
+        low = float(k.low)
+        close = float(k.close)
+        volume = float(k.volume)
         klines.append(
             {
                 "open": open_price,
