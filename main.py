@@ -371,22 +371,31 @@ async def test_admin(message: Message):
     ai_subscribers = list_ai_subscribers()
     ai_extra = MODULES.get("ai_signals").extra if "ai_signals" in MODULES else ""
     ai_extra = ai_extra.strip()
-    def _merge_extra(base: str, extra: str) -> str:
-        return f"{base}; {extra}" if extra else base
 
+    def _merge_extra(base: str, extra: str) -> str:
+        if not extra:
+            return base
+        extra_items = [item.strip() for item in extra.split(";") if item.strip()]
+        extra_items = [item for item in extra_items if not item.startswith("подписчиков:")]
+        if not extra_items:
+            return base
+        return f"{base}; {'; '.join(extra_items)}"
+
+    pro_subscribers_count = len(pro_subscribers)
+    ai_subscribers_count = len(ai_subscribers)
     if "pro" in MODULES:
-        MODULES["pro"].extra = f"подписчиков: {len(pro_subscribers)}"
+        MODULES["pro"].extra = f"подписчиков: {pro_subscribers_count}"
     if "ai_signals" in MODULES:
-        base = f"подписчиков: {len(ai_subscribers)}"
+        base = f"подписчиков: {ai_subscribers_count}"
         MODULES["ai_signals"].extra = _merge_extra(base, ai_extra)
     if "pumpdump" in MODULES:
-        base = f"подписчиков: {len(pro_subscribers)}"
+        base = f"подписчиков: {pro_subscribers_count}"
         MODULES["pumpdump"].extra = _merge_extra(base, MODULES["pumpdump"].extra)
     if "whales_flow" in MODULES:
-        base = f"подписчиков: {len(pro_subscribers)}"
+        base = f"подписчиков: {pro_subscribers_count}"
         MODULES["whales_flow"].extra = _merge_extra(base, MODULES["whales_flow"].extra)
     if "pro_ai" in MODULES:
-        base = f"подписчиков: {len(pro_subscribers)}"
+        base = f"подписчиков: {pro_subscribers_count}"
         MODULES["pro_ai"].extra = _merge_extra(base, MODULES["pro_ai"].extra)
 
     lines = ["🛠 Статус модулей:\n"]
