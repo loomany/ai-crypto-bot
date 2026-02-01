@@ -1,6 +1,8 @@
+from statistics import mean
 from typing import Any, Dict, List
 
 from binance_client import Candle, get_required_candles
+from trading_core import _compute_rsi_series, compute_ema, detect_trend_and_structure
 
 
 async def get_market_regime() -> Dict[str, Any]:
@@ -16,12 +18,23 @@ async def get_market_regime() -> Dict[str, Any]:
     symbol = "BTCUSDT"
     data = await get_required_candles(symbol)
     candles_1d: List[Candle] = data.get("1d") or []
+    candles_4h: List[Candle] = data.get("4h") or []
+    candles_1h: List[Candle] = data.get("1h") or []
+    candles_15m: List[Candle] = data.get("15m") or []
     if not candles_1d:
-        return {"regime": "neutral", "description": "Нет данных по BTC."}
+        return {
+            "regime": "neutral",
+            "description": "Нет данных по BTC.",
+            "reason": "Нет данных по BTC.",
+        }
 
     closes = [c.close for c in candles_1d[-30:]]
     if len(closes) < 5:
-        return {"regime": "neutral", "description": "Слишком мало данных по BTC."}
+        return {
+            "regime": "neutral",
+            "description": "Слишком мало данных по BTC.",
+            "reason": "Слишком мало данных по BTC.",
+        }
 
     start = closes[0]
     end = closes[-1]
@@ -44,7 +57,77 @@ async def get_market_regime() -> Dict[str, Any]:
         regime = "neutral"
         desc_parts.append("режим ближе к нейтральному, без явного перекоса.")
 
+    trend_1d = detect_trend_and_structure(candles_1d)["trend"] if candles_1d else "range"
+    trend_4h = detect_trend_and_structure(candles_4h)["trend"] if candles_4h else "range"
+    trend_1h = detect_trend_and_structure(candles_1h)["trend"] if candles_1h else "range"
+
+    closes_15m = [c.close for c in candles_15m]
+    rsi_15m_series = _compute_rsi_series(closes_15m) if closes_15m else []
+    rsi_15m_value = rsi_15m_series[-1] if rsi_15m_series else 50.0
+
+    closes_1h = [c.close for c in candles_1h]
+    ema_fast = compute_ema(closes_1h, 50) if len(closes_1h) >= 50 else None
+    ema_slow = compute_ema(closes_1h, 200) if len(closes_1h) >= 200 else None
+
+    vols_15m = [c.volume for c in candles_15m[-21:-1]]
+    last_vol = candles_15m[-1].volume if candles_15m else 0.0
+    avg_vol = mean(vols_15m) if vols_15m else 0.0
+    volume_ratio_15m = last_vol / avg_vol if avg_vol > 0 else 0.0
+
+    allow_longs = (
+        trend_1d in ("up", "range")
+        and trend_1h == "up"
+        and 40 <= rsi_15m_value <= 65
+        and volume_ratio_15m >= 1.2
+    )
+
+    allow_shorts = (
+        trend_1d in ("down", "range")
+        and trend_1h == "down"
+        and 35 <= rsi_15m_value <= 70
+        and volume_ratio_15m >= 1.2
+    )
+
+    gate_reasons: List[str] = []
+    if not candles_1h or not candles_15m:
+        gate_reasons.append("Недостаточно данных для гейта по 1H/15m.")
+    else:
+        if not allow_longs:
+            long_reasons: List[str] = []
+            if trend_1d not in ("up", "range"):
+                long_reasons.append(f"1D={trend_1d}")
+            if trend_1h != "up":
+                long_reasons.append(f"1H={trend_1h}")
+            if not (40 <= rsi_15m_value <= 65):
+                long_reasons.append(f"RSI15={rsi_15m_value:.1f}")
+            if volume_ratio_15m < 1.2:
+                long_reasons.append(f"объём15m x{volume_ratio_15m:.2f}")
+            gate_reasons.append("longs blocked: " + "; ".join(long_reasons))
+        if not allow_shorts:
+            short_reasons: List[str] = []
+            if trend_1d not in ("down", "range"):
+                short_reasons.append(f"1D={trend_1d}")
+            if trend_1h != "down":
+                short_reasons.append(f"1H={trend_1h}")
+            if not (35 <= rsi_15m_value <= 70):
+                short_reasons.append(f"RSI15={rsi_15m_value:.1f}")
+            if volume_ratio_15m < 1.2:
+                short_reasons.append(f"объём15m x{volume_ratio_15m:.2f}")
+            gate_reasons.append("shorts blocked: " + "; ".join(short_reasons))
+
+    gate_reason = " / ".join(gate_reasons) if gate_reasons else "Гейт открыт для лонгов и шортов."
+    reason = " ".join([" ".join(desc_parts), gate_reason]).strip()
+
     return {
         "regime": regime,
         "description": " ".join(desc_parts),
+        "reason": reason,
+        "trend_1d": trend_1d,
+        "trend_4h": trend_4h,
+        "trend_1h": trend_1h,
+        "ema_fast": ema_fast,
+        "ema_slow": ema_slow,
+        "rsi_15m": rsi_15m_value,
+        "allow_longs": allow_longs,
+        "allow_shorts": allow_shorts,
     }

@@ -740,10 +740,36 @@ async def market_pulse_scan_once() -> None:
         "neutral": "NEUTRAL",
     }.get(regime, "NEUTRAL")
 
+    trend_1d = regime_info.get("trend_1d", "n/a")
+    trend_4h = regime_info.get("trend_4h", "n/a")
+    trend_1h = regime_info.get("trend_1h", "n/a")
+    ema_fast = regime_info.get("ema_fast")
+    ema_slow = regime_info.get("ema_slow")
+    rsi_15m = regime_info.get("rsi_15m")
+    allow_longs = regime_info.get("allow_longs")
+    allow_shorts = regime_info.get("allow_shorts")
+    reason = regime_info.get("reason") or regime_info.get("description") or "Нет причины."
+
+    def _fmt_ema(value: Any) -> str:
+        return f"{value:.2f}" if isinstance(value, (int, float)) else "n/a"
+
+    def _fmt_bool(value: Any) -> str:
+        if value is True:
+            return "yes"
+        if value is False:
+            return "no"
+        return "n/a"
+
+    rsi_text = f"{rsi_15m:.1f}" if isinstance(rsi_15m, (int, float)) else "n/a"
+
     text = (
         "📡 Market Pulse (каждый час)\n"
         f"BTC режим: {regime_label}\n"
-        "Сетапов нет — фильтр строгий. Это нормально."
+        f"trend: 1D={trend_1d} 4H={trend_4h} 1H={trend_1h}\n"
+        f"ema_fast={_fmt_ema(ema_fast)} ema_slow={_fmt_ema(ema_slow)}\n"
+        f"rsi15={rsi_text}\n"
+        f"allow_longs={_fmt_bool(allow_longs)} allow_shorts={_fmt_bool(allow_shorts)}\n"
+        f"reason: {reason}"
     )
 
     tasks = [asyncio.create_task(bot.send_message(chat_id, text)) for chat_id in subscribers]
