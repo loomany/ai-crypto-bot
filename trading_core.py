@@ -405,88 +405,153 @@ async def analyze_orderflow(symbol: str) -> Dict[str, bool]:
     }
 
 
-def compute_score(context: Dict) -> int:
+def compute_score_breakdown(context: Dict) -> tuple[int, list[dict]]:
     side = context.get("candidate_side")
     if not side:
-        return 0
+        return 0, []
 
     score = 0.0
+    breakdown: list[dict] = []
+
+    def _append_breakdown(key: str, label: str, applied: bool, weight: float, delta: float) -> None:
+        breakdown.append(
+            {
+                "key": key,
+                "label": label,
+                "applied": applied,
+                "weight": round(weight, 4),
+                "delta": round(delta, 4),
+            }
+        )
 
     # Глобальный тренд
     global_trend = context.get("global_trend")
     if global_trend == "up" and side == "LONG":
         score += 25
+        _append_breakdown("global_trend", "Global trend match", True, 25, 25)
     elif global_trend == "down" and side == "SHORT":
         score += 25
+        _append_breakdown("global_trend", "Global trend match", True, 25, 25)
     elif global_trend in ("up", "down"):
         score -= 15
+        _append_breakdown("global_trend", "Global trend mismatch", True, 15, -15)
+    else:
+        _append_breakdown("global_trend", "Global trend neutral", False, 0, 0)
 
     # Локальный тренд
     local_trend = context.get("local_trend")
     if local_trend == "up" and side == "LONG":
         score += 15
+        _append_breakdown("local_trend", "Local trend match", True, 15, 15)
     elif local_trend == "down" and side == "SHORT":
         score += 15
+        _append_breakdown("local_trend", "Local trend match", True, 15, 15)
     elif local_trend in ("up", "down"):
         score -= 10
+        _append_breakdown("local_trend", "Local trend mismatch", True, 10, -10)
+    else:
+        _append_breakdown("local_trend", "Local trend neutral", False, 0, 0)
 
     # Работа от ключевого уровня
     if context.get("near_key_level"):
         score += 20
+        _append_breakdown("near_key_level", "Near key level", True, 20, 20)
+    else:
+        _append_breakdown("near_key_level", "Near key level", False, 20, 0)
 
     # Снос ликвидности
     if context.get("liquidity_sweep"):
         score += 15
+        _append_breakdown("liquidity_sweep", "Liquidity sweep", True, 15, 15)
+    else:
+        _append_breakdown("liquidity_sweep", "Liquidity sweep", False, 15, 0)
 
     # Объёмный всплеск
     if context.get("volume_climax"):
         score += 10
+        _append_breakdown("volume_climax", "Volume climax", True, 10, 10)
+    else:
+        _append_breakdown("volume_climax", "Volume climax", False, 10, 0)
 
     # RSI дивергенция
     if context.get("rsi_divergence"):
         score += 10
+        _append_breakdown("rsi_divergence", "RSI divergence", True, 10, 10)
+    else:
+        _append_breakdown("rsi_divergence", "RSI divergence", False, 10, 0)
 
     # ATR-адекватность стопа
     if context.get("atr_ok"):
         score += 5
+        _append_breakdown("atr_ok", "ATR stop valid", True, 5, 5)
     else:
         score -= 5
+        _append_breakdown("atr_ok", "ATR stop invalid", False, 5, -5)
 
     # Bollinger экстремум + возврат
     if context.get("bb_extreme"):
         score += 15
+        _append_breakdown("bb_extreme", "Bollinger extreme", True, 15, 15)
+    else:
+        _append_breakdown("bb_extreme", "Bollinger extreme", False, 15, 0)
 
     # EMA тренд (EMA50/EMA200 в нужную сторону)
     if context.get("ma_trend_ok"):
         score += 10
+        _append_breakdown("ma_trend_ok", "EMA trend alignment", True, 10, 10)
+    else:
+        _append_breakdown("ma_trend_ok", "EMA trend alignment", False, 10, 0)
 
     # Ордерфлоу / киты
     if context.get("orderflow_bullish") and side == "LONG":
         score += 10
+        _append_breakdown("orderflow", "Orderflow bullish", True, 10, 10)
     if context.get("orderflow_bearish") and side == "SHORT":
         score += 10
+        _append_breakdown("orderflow", "Orderflow bearish", True, 10, 10)
     if context.get("whale_activity"):
         score += 5
+        _append_breakdown("whale_activity", "Whale activity", True, 5, 5)
+    else:
+        _append_breakdown("whale_activity", "Whale activity", False, 5, 0)
 
     # AI-паттерны
     pattern_trend = context.get("ai_pattern_trend")  # "bullish" / "bearish" / None
     pattern_strength = context.get("ai_pattern_strength", 0)
     if pattern_trend and pattern_strength:
         if pattern_trend == "bullish" and side == "LONG":
-            score += min(15, pattern_strength / 5)
+            weight = min(15, pattern_strength / 5)
+            score += weight
+            _append_breakdown("ai_pattern", "AI pattern alignment", True, weight, weight)
         elif pattern_trend == "bearish" and side == "SHORT":
-            score += min(15, pattern_strength / 5)
+            weight = min(15, pattern_strength / 5)
+            score += weight
+            _append_breakdown("ai_pattern", "AI pattern alignment", True, weight, weight)
         else:
-            score -= min(10, pattern_strength / 7)
+            weight = min(10, pattern_strength / 7)
+            score -= weight
+            _append_breakdown("ai_pattern", "AI pattern mismatch", True, weight, -weight)
+    else:
+        _append_breakdown("ai_pattern", "AI pattern alignment", False, 0, 0)
 
     # Market Regime
     regime = context.get("market_regime")  # "risk_on" / "risk_off" / "neutral"
     if regime == "risk_on" and side == "LONG":
         score += 10
+        _append_breakdown("market_regime", "Market regime alignment", True, 10, 10)
     elif regime == "risk_off" and side == "SHORT":
         score += 10
+        _append_breakdown("market_regime", "Market regime alignment", True, 10, 10)
     elif regime in ("risk_on", "risk_off"):
         score -= 5
+        _append_breakdown("market_regime", "Market regime mismatch", True, 5, -5)
+    else:
+        _append_breakdown("market_regime", "Market regime neutral", False, 0, 0)
 
     final_score = int(round(score))
-    return max(-100, min(100, final_score))
+    return max(-100, min(100, final_score)), breakdown
+
+
+def compute_score(context: Dict) -> int:
+    score, _ = compute_score_breakdown(context)
+    return score

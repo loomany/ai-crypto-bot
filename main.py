@@ -34,6 +34,8 @@ from db_path import get_db_path
 from notifications_db import init_notify_table
 from message_templates import format_scenario_message
 from pro_db import init_pro_tables, pro_list, pro_can_send, pro_inc_sent
+from signal_audit_db import init_signal_audit_tables, insert_signal_audit, get_public_stats
+from signal_audit_worker import signal_audit_worker_loop
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -58,6 +60,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         ],
         [
             KeyboardButton(text="🧠 PRO-модули"),
+            KeyboardButton(text="📊 Статистика"),
         ],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -122,6 +125,7 @@ def init_db():
 
     init_notify_table()
     init_pro_tables()
+    init_signal_audit_tables()
 
 
 def upsert_user(
@@ -359,6 +363,56 @@ async def back_to_main(message: Message):
     await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard())
 
 
+def _format_stats_message(stats: Dict[str, Any]) -> str:
+    total = stats.get("total", 0)
+    closed = stats.get("closed", 0)
+    filled_closed = stats.get("filled_closed", 0)
+    filled_rate = stats.get("filled_rate", 0.0) * 100
+    winrate = stats.get("winrate", 0.0) * 100
+    avg_r = stats.get("avg_r", 0.0)
+    median_r = stats.get("median_r", 0.0)
+    profit_factor = stats.get("profit_factor")
+    streak = stats.get("streak", "-")
+    last10 = stats.get("last10", [])
+
+    pf_text = f"{profit_factor:.2f}" if isinstance(profit_factor, (int, float)) else "—"
+
+    lines = [
+        "📊 Статистика сигналов (30d)",
+        "",
+        f"• Всего: {total}",
+        f"• Закрыто: {closed}",
+        f"• Filled rate: {filled_rate:.1f}% ({filled_closed} из {total})",
+        f"• Winrate (filled): {winrate:.1f}%",
+        f"• Profit factor: {pf_text}",
+        f"• Avg R: {avg_r:.2f}",
+        f"• Median R: {median_r:.2f}",
+        f"• Streak: {streak}",
+        "",
+        "Последние 10 сигналов:",
+    ]
+
+    if not last10:
+        lines.append("• Нет данных")
+    else:
+        for row in last10:
+            symbol = row.get("symbol", "-")
+            direction = row.get("direction", "-")
+            outcome = row.get("outcome", "-")
+            pnl_r = row.get("pnl_r")
+            pnl_text = f"{pnl_r:+.2f}R" if isinstance(pnl_r, (int, float)) else "-"
+            lines.append(f"• {symbol} {direction.upper()} → {outcome} ({pnl_text})")
+
+    return "\n".join(lines)
+
+
+@dp.message(F.text == "📊 Статистика")
+@dp.message(F.text == "/stats")
+async def show_stats(message: Message):
+    stats = get_public_stats(days=30)
+    await message.answer(_format_stats_message(stats))
+
+
 @dp.message(F.text == "₿ BTC (intraday)")
 async def open_btc_menu(message: Message):
     await message.answer(
@@ -459,6 +513,7 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
         return
 
     text = _format_signal(signal_dict, tier)
+    insert_signal_audit(signal_dict, tier=tier, module="ai_signals")
 
     tasks = [asyncio.create_task(bot.send_message(chat_id, text)) for chat_id in subscribers]
 
@@ -688,6 +743,7 @@ async def _send_pro_signal(signal_dict: Dict[str, Any], subscribers: List[int]):
         return
 
     text = _format_signal(signal_dict, "pro")
+    insert_signal_audit(signal_dict, tier="pro", module="pro_ai")
     for chat_id in subscribers:
         if not pro_can_send(chat_id, MAX_PRO_SIGNALS_PER_DAY):
             continue
@@ -775,6 +831,7 @@ async def main():
     btc_task = asyncio.create_task(btc_realtime_signal_worker(bot))
     whales_task = asyncio.create_task(whales_market_flow_worker(bot))
     pro_ai_task = asyncio.create_task(pro_ai_signals_worker())
+    audit_task = asyncio.create_task(signal_audit_worker_loop())
     try:
         await dp.start_polling(bot)
     finally:
@@ -796,6 +853,9 @@ async def main():
         pro_ai_task.cancel()
         with suppress(asyncio.CancelledError):
             await pro_ai_task
+        audit_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await audit_task
 
 
 if __name__ == "__main__":
