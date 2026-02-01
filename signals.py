@@ -261,7 +261,13 @@ async def _prepare_signal(
     *,
     free_mode: bool = False,
     min_score: float = 80,
+    stats: Dict[str, int] | None = None,
 ) -> Optional[Dict[str, Any]]:
+    def _inc_fail(reason: str) -> None:
+        if stats is None:
+            return
+        stats[reason] = stats.get(reason, 0) + 1
+
     def detect_side(entry: float, sl: float, tp1: float) -> Optional[str]:
         if tp1 > entry and sl < entry:
             return "LONG"
@@ -279,6 +285,7 @@ async def _prepare_signal(
 
     # Отсекаем сверхдешёвые монеты
     if current_price < 0.00001:
+        _inc_fail("fail_price_too_low")
         return None
 
     daily_structure = detect_trend_and_structure(candles_1d)
@@ -316,6 +323,7 @@ async def _prepare_signal(
             level_touched = nearest_high
 
     if not candidate_side:
+        _inc_fail("fail_not_near_level")
         return None
 
     sweep = is_liquidity_sweep(
@@ -340,9 +348,11 @@ async def _prepare_signal(
         )
 
     if candidate_side == "LONG" and not btc_ctx.get("allow_longs", False):
+        _inc_fail("fail_btc_gate_long")
         return None
 
     if candidate_side == "SHORT" and not btc_ctx.get("allow_shorts", False):
+        _inc_fail("fail_btc_gate_short")
         return None
 
     atr_15m = compute_atr(candles_15m[-60:]) if len(candles_15m) >= 15 else None
@@ -393,11 +403,14 @@ async def _prepare_signal(
         if free_mode and ema50_1h:
             near_ema50 = abs(current_price - ema50_1h) / current_price * 100 <= EMA50_NEAR_PCT_FREE
             if not near_ema50:
+                _inc_fail("fail_not_near_ema50")
                 return None
         else:
+            _inc_fail("fail_ma_trend")
             return None
 
     if not atr_ok:
+        _inc_fail("fail_atr_ok")
         return None
 
     orderflow = await analyze_orderflow(symbol)
@@ -428,11 +441,13 @@ async def _prepare_signal(
     raw_score, breakdown = compute_score_breakdown(context)
 
     if abs(raw_score) < min_score:
+        _inc_fail("fail_score")
         return None
 
     entry_ref = (entry_from + entry_to) / 2
     side = detect_side(entry_ref, sl, tp1)
     if side is None:
+        _inc_fail("fail_invalid_side")
         print(f"[ai_signals] Invalid side for {symbol}: entry={entry_ref} sl={sl} tp1={tp1}")
         return None
 
@@ -442,9 +457,11 @@ async def _prepare_signal(
 
     min_rr = MIN_RR_FREE if free_mode else 2.0
     if rr < min_rr:
+        _inc_fail("fail_rr")
         return None
 
     if side not in ("LONG", "SHORT") or rr < 1.5 or risk <= 0 or reward <= 0:
+        _inc_fail("fail_rr")
         print(
             "[ai_signals] Pre-send check failed "
             f"{symbol}: side={side} rr={rr:.2f} risk={risk:.6f} reward={reward:.6f}"
@@ -464,6 +481,7 @@ async def _prepare_signal(
     # Требуем хотя бы 30% всплеска объёма
     min_volume_ratio = MIN_VOLUME_RATIO_FREE if free_mode else 1.3
     if volume_ratio < min_volume_ratio:
+        _inc_fail("fail_volume_ratio")
         return None
 
     support_level = nearest_low if nearest_low is not None else level_touched
@@ -504,7 +522,7 @@ async def scan_market(
     min_score: float = 80,
     return_stats: bool = False,
     time_budget: float | None = None,
-) -> List[Dict[str, Any]] | Tuple[List[Dict[str, Any]], Dict[str, int]]:
+) -> List[Dict[str, Any]] | Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Сканирует весь рынок Binance по спотовым USDT-парам и возвращает сигналы.
     """
@@ -516,12 +534,19 @@ async def scan_market(
         "allow_shorts": True,
     }
     checked = 0
+    klines_ok = 0
+    fails: Dict[str, int] = {}
     start_time = time.time()
 
     if use_btc_gate:
         if not btc_ctx["allow_longs"] and not btc_ctx["allow_shorts"]:
             if return_stats:
-                return [], {"checked": checked, "candidates": 0}
+                return [], {
+                    "checked": checked,
+                    "klines_ok": klines_ok,
+                    "signals_found": 0,
+                    "fails": fails,
+                }
             return []
     else:
         btc_ctx = {**btc_ctx, "allow_longs": True, "allow_shorts": True}
@@ -554,7 +579,9 @@ async def scan_market(
 
         for symbol, klines in zip(candidate_symbols, klines_list):
             if not klines:
+                fails["fail_no_klines"] = fails.get("fail_no_klines", 0) + 1
                 continue
+            klines_ok += 1
 
             signal = await _prepare_signal(
                 symbol,
@@ -562,10 +589,16 @@ async def scan_market(
                 btc_ctx,
                 free_mode=free_mode,
                 min_score=min_score,
+                stats=fails if return_stats else None,
             )
             if signal:
                 signals.append(signal)
 
     if return_stats:
-        return signals, {"checked": checked, "candidates": len(signals)}
+        return signals, {
+            "checked": checked,
+            "klines_ok": klines_ok,
+            "signals_found": len(signals),
+            "fails": fails,
+        }
     return signals
