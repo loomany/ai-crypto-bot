@@ -4,6 +4,7 @@ from statistics import mean
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from binance_client import Candle, get_required_candles
+from binance_limits import BINANCE_WEIGHT_TRACKER
 from binance_rest import fetch_json
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
@@ -508,7 +509,16 @@ async def scan_market(
             if signal:
                 signals.append(signal)
 
-        await asyncio.sleep(batch_delay)
+        # Adaptive throttle when we're close to Binance 1m weight limit.
+        used = BINANCE_WEIGHT_TRACKER.used_weight_1m
+        soft = int(BINANCE_WEIGHT_TRACKER.limit_1m * BINANCE_WEIGHT_TRACKER.soft_ratio)
+        extra = 0.0
+        if BINANCE_WEIGHT_TRACKER.limit_1m > 0 and used >= soft:
+            denom = max(BINANCE_WEIGHT_TRACKER.limit_1m - soft, 1)
+            ratio = min(max((used - soft) / denom, 0.0), 1.0)
+            extra = 0.5 + 2.5 * ratio  # up to ~3s extra
+
+        await asyncio.sleep(batch_delay + extra)
 
     if return_stats:
         return signals, {"checked": checked, "candidates": len(signals)}
