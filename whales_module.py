@@ -44,8 +44,8 @@ async def _fetch_agg_trades(
     else:
         base_url = f"{BINANCE_FAPI_BASE}/fapi/v1/aggTrades"
     params = {"symbol": symbol, "startTime": start_ms, "endTime": end_ms, "limit": 1000}
-    endpoint = "aggTrades spot" if market == "spot" else "aggTrades futures"
-    print(f"[BINANCE] request {symbol} {endpoint}")
+    cache_hit = False
+    print(f"[whales_flow] aggTrades {symbol} {market} (cache_hit={cache_hit})")
     try:
         data = await fetch_json(
             base_url,
