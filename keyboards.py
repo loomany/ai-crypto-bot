@@ -12,6 +12,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="₿ BTC (intraday)"), KeyboardButton(text="🤖 AI-сигналы")],
+            [KeyboardButton(text="⚡ Pump/Dump")],
             [KeyboardButton(text="🧠 PRO-модули")],
         ],
         resize_keyboard=True,
@@ -52,6 +53,27 @@ def btc_inline_kb() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="🚫 Отключить BTC-уведомления",
                     callback_data="btc_notify_off",
+                )
+            ],
+            [InlineKeyboardButton(text="💳 Купить PRO", callback_data="pro_buy")],
+            [InlineKeyboardButton(text="✉️ Написать админу", url=admin_url())],
+        ]
+    )
+
+
+def pumpdump_inline_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔔 Включить Pump/Dump-уведомления",
+                    callback_data="pumpdump_notify_on",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🚫 Отключить Pump/Dump-уведомления",
+                    callback_data="pumpdump_notify_off",
                 )
             ],
             [InlineKeyboardButton(text="💳 Купить PRO", callback_data="pro_buy")],

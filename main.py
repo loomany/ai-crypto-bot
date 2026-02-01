@@ -77,9 +77,10 @@ from keyboards import (
     ai_signals_inline_kb,
     btc_inline_kb,
     main_menu_kb,
+    pumpdump_inline_kb,
     paywall_inline_kb,
 )
-from texts import AI_PAYWALL_TEXT, AI_SIGNALS_TEXT, START_TEXT
+from texts import AI_PAYWALL_TEXT, AI_SIGNALS_TEXT, PUMPDUMP_TEXT, START_TEXT
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -323,6 +324,15 @@ async def ai_signals_menu(message: Message):
         reply_markup=ai_signals_inline_kb(),
     )
 
+
+@dp.message(F.text == "⚡ Pump/Dump")
+async def pumpdump_menu(message: Message):
+    await message.answer(
+        PUMPDUMP_TEXT,
+        reply_markup=pumpdump_inline_kb(),
+    )
+
+
 @dp.callback_query(F.data == "ai_notify_on")
 async def ai_notify_on(callback: CallbackQuery):
     if callback.from_user is None:
@@ -377,6 +387,29 @@ async def btc_notify_off(callback: CallbackQuery):
     await callback.answer()
     if callback.message:
         await callback.message.answer("🚫 Уведомления отключены.")
+
+
+@dp.callback_query(F.data == "pumpdump_notify_on")
+async def pumpdump_notify_on(callback: CallbackQuery):
+    if callback.from_user is None:
+        return
+    enable_notify(callback.from_user.id, "pumpdump")
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(
+            "✅ Pump/Dump уведомления включены.\n"
+            "Теперь бот будет присылать алерты при резких движениях рынка."
+        )
+
+
+@dp.callback_query(F.data == "pumpdump_notify_off")
+async def pumpdump_notify_off(callback: CallbackQuery):
+    if callback.from_user is None:
+        return
+    disable_notify(callback.from_user.id, "pumpdump")
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer("🚫 Pump/Dump уведомления отключены.")
 
 
 @dp.message(F.text == "/testadmin")
@@ -832,16 +865,18 @@ async def pump_scan_once(bot: Bot) -> None:
 
         notify_subs = list_enabled("pumpdump")
         pro_subs = pro_list()
-        subscribers = pro_subs  # текущая логика: pump/dump только для PRO
+        subscribers = notify_subs
 
         if log_level >= 1:
-            print(f"[pumpdump] subs: pro={len(pro_subs)} notify={len(notify_subs)} using=pro")
+            print(
+                f"[pumpdump] subs: pro={len(pro_subs)} notify={len(notify_subs)} using=notify"
+            )
 
-        mark_tick("pumpdump", extra=f"подписчиков(pro): {len(subscribers)}")
+        mark_tick("pumpdump", extra=f"подписчиков: {len(subscribers)}")
 
         if not subscribers:
             if log_level >= 1:
-                print("[pumpdump] no PRO subscribers -> skip")
+                print("[pumpdump] no notify subscribers -> skip")
             return
 
         session = await get_shared_session()

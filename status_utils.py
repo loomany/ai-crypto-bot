@@ -13,6 +13,4 @@ def get_usage_today(chat_id: int, feature: str) -> tuple[int, int]:
 
 
 def is_notify_enabled(chat_id: int, feature: str) -> bool:
-    if feature == "pumpdump":
-        return pro_is(chat_id)
     return db_is_notify_enabled(chat_id, feature)
