@@ -90,18 +90,11 @@ def load_settings() -> str:
     return bot_token
 
 
-def get_admin_ids() -> set[int]:
-    raw = os.getenv("ADMIN_IDS", "").strip()
-    if not raw:
-        return set()
-    return {int(x.strip()) for x in raw.split(",") if x.strip().isdigit()}
-
-
-ADMIN_IDS = get_admin_ids()
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+    return ADMIN_USER_ID != 0 and user_id == ADMIN_USER_ID
 
 
 # ===== ВРЕМЯ ТОРГОВ =====
@@ -424,14 +417,27 @@ async def test_admin(message: Message):
 
 @dp.message(Command("test_notify"))
 async def test_notify_cmd(message: Message):
+    user_id = message.from_user.id if message.from_user else None
+    print("[notify] /test_notify received", user_id, message.chat.id)
     if message.from_user is None or not is_admin(message.from_user.id):
+        await message.answer("⛔ Нет доступа")
         return
-    target_chat_id = ADMIN_CHAT_ID or message.from_user.id
-    await message.bot.send_message(
-        target_chat_id,
-        "🧪 Тестовое уведомление: доставка работает.",
-    )
-    print(f"[notify] test sent to {target_chat_id} ok")
+    target_chat_id = message.chat.id
+    try:
+        await message.bot.send_message(
+            target_chat_id,
+            "🧪 Тестовое уведомление: доставка работает.",
+        )
+        print("[notify] test sent ok")
+    except Exception as e:
+        print(f"[notify] test failed: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
+
+
+@dp.message(Command("my_id"))
+async def my_id_cmd(message: Message):
+    user_id = message.from_user.id if message.from_user else "unknown"
+    await message.answer(f"user_id={user_id}\nchat_id={message.chat.id}")
 
 
 @dp.message(Command("pro_add"))
