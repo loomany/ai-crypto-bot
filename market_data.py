@@ -1,6 +1,11 @@
 from typing import Any, Dict, List, Optional
 
-from binance_client import fetch_klines
+from binance_client import (
+    KLINES_15M_LIMIT,
+    KLINES_1H_LIMIT,
+    KLINES_4H_LIMIT,
+    fetch_klines,
+)
 from market_cache import get_spot_24h
 
 
@@ -180,10 +185,19 @@ async def get_coin_analysis(symbol: str) -> Optional[Dict[str, Any]]:
 
     tf_data: Dict[str, Dict[str, Any]] = {}
 
+    tf_limits = {
+        "4h": KLINES_4H_LIMIT,
+        "1h": KLINES_1H_LIMIT,
+        "15m": KLINES_15M_LIMIT,
+    }
+
     for name, interval in timeframes.items():
-        klines = await _get_klines(symbol, interval, limit=80)
+        limit = tf_limits.get(interval, 80)
+        klines = await _get_klines(symbol, interval, limit=limit)
         if not klines:
             continue
+
+        klines = klines[-80:]
 
         closes = [k["close"] for k in klines]
         volumes = [k["volume"] for k in klines]
