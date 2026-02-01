@@ -263,7 +263,7 @@ PRO_SYMBOL_COOLDOWN_SEC = 60 * 60 * 6
 MAX_PRO_SIGNALS_PER_DAY = 4
 MAX_PRO_SIGNALS_PER_CYCLE = 2
 AI_CHUNK_SIZE = 10
-PRO_CHUNK_SIZE = 50
+PRO_CHUNK_SIZE = 20
 
 LAST_PRO_SYMBOL_SENT: Dict[str, float] = {}
 LAST_PULSE_SENT_AT = 0.0
@@ -708,6 +708,8 @@ def _select_signals_for_cycle(signals: List[Dict[str, Any]]) -> List[Dict[str, A
 
 
 async def pump_scan_once(bot: Bot) -> None:
+    start = time.time()
+    BUDGET = 45
     if not hasattr(pump_scan_once, "state"):
         pump_scan_once.state = {
             "last_sent": {},
@@ -734,12 +736,18 @@ async def pump_scan_once(bot: Bot) -> None:
         return
 
     cycle_start = time.time()
-    signals, stats, next_cursor = await scan_pumps_chunk(
-        symbols,
-        start_idx=cursor,
-        session=session,
-        return_stats=True,
-    )
+    try:
+        signals, stats, next_cursor = await asyncio.wait_for(
+            scan_pumps_chunk(
+                symbols,
+                start_idx=cursor,
+                session=session,
+                return_stats=True,
+            ),
+            timeout=BUDGET,
+        )
+    except asyncio.TimeoutError:
+        return
     state["cursor"] = next_cursor
 
     now_min = int(time.time() // 60)
@@ -747,6 +755,8 @@ async def pump_scan_once(bot: Bot) -> None:
     last_sent: dict[str, int] = state["last_sent"]
 
     for sig in signals:
+        if time.time() - start > BUDGET:
+            break
         symbol = sig["symbol"]
 
         if last_sent.get(symbol) == now_min:
@@ -773,7 +783,8 @@ async def pump_scan_once(bot: Bot) -> None:
 
 
 async def ai_scan_once() -> None:
-    TIME_BUDGET = 45
+    start = time.time()
+    BUDGET = 45
     mark_tick("ai_signals", extra="сканирую рынок...")
 
     symbols = await get_all_usdt_symbols()
@@ -797,11 +808,13 @@ async def ai_scan_once() -> None:
         free_mode=True,
         min_score=FREE_MIN_SCORE,
         return_stats=False,
-        time_budget=TIME_BUDGET,
+        time_budget=BUDGET,
     )
     print("SCAN OK", len(signals))
     sent_count = 0
     for signal in _select_signals_for_cycle(signals):
+        if time.time() - start > BUDGET:
+            break
         score = signal.get("score", 0)
         if score < FREE_MIN_SCORE:
             continue
@@ -849,6 +862,8 @@ async def _send_pro_signal(signal_dict: Dict[str, Any], subscribers: List[int]):
 
 
 async def pro_ai_scan_once() -> None:
+    start = time.time()
+    BUDGET = 45
     if not hasattr(pro_ai_scan_once, "state"):
         pro_ai_scan_once.state = {
             "buffer": {},
@@ -881,16 +896,24 @@ async def pro_ai_scan_once() -> None:
     chunk = chunks[state["chunk_idx"]]
     state["chunk_idx"] = (state["chunk_idx"] + 1) % len(chunks)
 
-    signals = await scan_market(
-        symbols=chunk,
-        batch_size=5,
-        use_btc_gate=True,
-        free_mode=False,
-        min_score=PRO_MIN_SCORE,
-        return_stats=False,
-    )
+    try:
+        signals = await asyncio.wait_for(
+            scan_market(
+                symbols=chunk,
+                batch_size=5,
+                use_btc_gate=True,
+                free_mode=False,
+                min_score=PRO_MIN_SCORE,
+                return_stats=False,
+            ),
+            timeout=BUDGET,
+        )
+    except asyncio.TimeoutError:
+        return
     now = time.time()
     for sig in signals:
+        if time.time() - start > BUDGET:
+            break
         if not is_pro_strict_signal(
             sig,
             min_score=PRO_MIN_SCORE,
@@ -923,6 +946,8 @@ async def pro_ai_scan_once() -> None:
         mark_tick("pro_ai", extra="кандидатов: 0")
 
     for signal in candidates[:MAX_PRO_SIGNALS_PER_CYCLE]:
+        if time.time() - start > BUDGET:
+            break
         await _send_pro_signal(signal, subscribers)
         symbol = signal.get("symbol", "")
         buffer.pop(symbol, None)

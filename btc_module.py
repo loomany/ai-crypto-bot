@@ -1,4 +1,5 @@
 import asyncio
+import time
 import datetime as dt
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict, Iterable
@@ -30,7 +31,7 @@ from trading_core import (
     analyze_orderflow,
     compute_score,
 )
-from health import mark_tick, mark_ok, mark_error, safe_worker_loop
+from health import mark_tick, mark_ok, mark_error, mark_warn, safe_worker_loop
 from notifications_db import disable_notify, list_enabled
 from message_templates import format_scenario_message
 from keyboards import btc_inline_kb, paywall_inline_kb
@@ -104,6 +105,8 @@ async def btc_menu_command(message: Message, state: FSMContext):
 # ============================================================
 
 async def btc_scan_once(bot) -> None:
+    start = time.time()
+    BUDGET = 45
     if not hasattr(btc_scan_once, "state"):
         btc_scan_once.state = {
             "last_signature": None,
@@ -120,7 +123,11 @@ async def btc_scan_once(bot) -> None:
     symbol = symbols[cursor]
     state["cursor"] = (cursor + 1) % len(symbols)
 
-    candles_5m = await fetch_klines(symbol, "5m", 3)
+    try:
+        candles_5m = await asyncio.wait_for(fetch_klines(symbol, "5m", 3), timeout=5)
+    except asyncio.TimeoutError:
+        mark_warn("btc", "klines timeout")
+        return
     if len(candles_5m) < 2:
         mark_tick("btc", extra="нет достаточных свечей 5m")
         return
@@ -162,6 +169,8 @@ async def btc_scan_once(bot) -> None:
     user_ids = list_enabled("btc")
 
     for user_id in user_ids:
+        if time.time() - start > BUDGET:
+            break
         try:
             if int(signal.probability or 0) < BTC_MIN_PROBABILITY:
                 continue

@@ -10,6 +10,7 @@ class ModuleStatus:
     last_tick: float = 0.0
     last_ok: float = 0.0
     last_error: Optional[str] = None
+    last_warn: Optional[str] = None
     extra: str = ""
 
     def as_text(self) -> str:
@@ -26,6 +27,9 @@ class ModuleStatus:
 
         if self.last_error:
             state += f"\n   ⚠️ ошибка: {self.last_error}"
+
+        if self.last_warn:
+            state += f"\n   ⚠️ предупреждение: {self.last_warn}"
 
         if self.extra:
             state += f"\n   ℹ️ {self.extra}"
@@ -75,6 +79,14 @@ def mark_error(key: str, err: str):
     st.last_error = err[:200]
 
 
+def mark_warn(key: str, warn: str):
+    st = MODULES.get(key)
+    if not st:
+        return
+    st.last_tick = time.time()
+    st.last_warn = warn[:200]
+
+
 async def safe_worker_loop(module_name: str, scan_once_coro):
     while True:
         cycle_start = time.time()
@@ -84,13 +96,14 @@ async def safe_worker_loop(module_name: str, scan_once_coro):
 
         try:
             # ❗ Ограничиваем ВЕСЬ scan_once по времени
-            await asyncio.wait_for(scan_once_coro(), timeout=50)
+            await asyncio.wait_for(scan_once_coro(), timeout=55)
         except asyncio.TimeoutError:
-            mark_error(module_name, "scan_once timeout >50s")
+            mark_warn(module_name, "timeout >55s")
         except Exception as e:
             mark_error(module_name, f"{type(e).__name__}: {e}")
 
         elapsed = time.time() - cycle_start
+        mark_tick(module_name, extra=f"cycle={int(elapsed)}s")
         await asyncio.sleep(max(0, SCAN_INTERVAL - elapsed))
 
 

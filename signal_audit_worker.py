@@ -142,12 +142,20 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
     }
 
 
-async def evaluate_open_signals() -> None:
-    open_signals = fetch_open_signals(MAX_SIGNAL_AGE_SEC)
+async def evaluate_open_signals(
+    open_signals: Optional[list[dict]] = None,
+    *,
+    start_ts: float | None = None,
+    budget_sec: int = 45,
+) -> None:
+    if open_signals is None:
+        open_signals = fetch_open_signals(MAX_SIGNAL_AGE_SEC)
     if not open_signals:
         return
 
     for signal in open_signals:
+        if start_ts is not None and time.time() - start_ts > budget_sec:
+            break
         try:
             sent_at = int(signal["sent_at"])
             start_ms = sent_at * 1000
@@ -188,8 +196,28 @@ async def evaluate_open_signals() -> None:
 
 async def signal_audit_worker_loop() -> None:
     async def _scan_once() -> None:
+        start = time.time()
+        BUDGET = 45
         mark_tick("signal_audit", extra="audit cycle")
-        await evaluate_open_signals()
+        open_signals = fetch_open_signals(MAX_SIGNAL_AGE_SEC)
+        if not open_signals:
+            mark_ok("signal_audit", extra="audit cycle")
+            return
+
+        if not hasattr(_scan_once, "cursor"):
+            _scan_once.cursor = 0
+        chunk_size = 100
+        cursor = _scan_once.cursor
+        if cursor >= len(open_signals):
+            cursor = 0
+        chunk = open_signals[cursor : cursor + chunk_size]
+        _scan_once.cursor = cursor + len(chunk)
+
+        await evaluate_open_signals(
+            chunk,
+            start_ts=start,
+            budget_sec=BUDGET,
+        )
         mark_ok("signal_audit", extra="audit cycle")
 
     await safe_worker_loop("signal_audit", _scan_once)
