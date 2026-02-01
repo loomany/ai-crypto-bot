@@ -15,7 +15,7 @@ async def get_shared_session() -> aiohttp.ClientSession:
     global _SHARED_SESSION
     async with _SHARED_LOCK:
         if _SHARED_SESSION is None or _SHARED_SESSION.closed:
-            timeout = aiohttp.ClientTimeout(total=20)
+            timeout = aiohttp.ClientTimeout(total=5)
             connector = aiohttp.TCPConnector(ssl=True, limit=100, ttl_dns_cache=300)
             _SHARED_SESSION = aiohttp.ClientSession(timeout=timeout, connector=connector)
         return _SHARED_SESSION
@@ -31,7 +31,7 @@ async def close_shared_session() -> None:
 
 # ---- optional concurrency gate (reduces socket spikes) ----
 # One more layer in addition to rate limiter/weight tracker.
-_BINANCE_HTTP_SEM = asyncio.Semaphore(25)
+BINANCE_SEM = asyncio.Semaphore(5)
 
 
 async def fetch_json(
@@ -39,7 +39,7 @@ async def fetch_json(
     params: dict | None = None,
     *,
     session: aiohttp.ClientSession | None = None,
-    timeout: int = 10,
+    timeout: int = 5,
     retries: int = 2,
 ) -> Optional[Any]:
     """
@@ -57,9 +57,10 @@ async def fetch_json(
             await BINANCE_WEIGHT_TRACKER.pre_request_wait()
 
             async def _perform_request():
-                async with _BINANCE_HTTP_SEM:
+                timeout_cfg = aiohttp.ClientTimeout(total=timeout)
+                async with BINANCE_SEM:
                     async with BINANCE_RATE_LIMITER:
-                        async with session.get(url, params=params, timeout=timeout) as resp:
+                        async with session.get(url, params=params, timeout=timeout_cfg) as resp:
                             await BINANCE_WEIGHT_TRACKER.update_from_headers(resp.headers)
                             status = resp.status
                             headers = resp.headers
@@ -69,7 +70,7 @@ async def fetch_json(
                             return status, headers, await resp.json()
 
             status, headers, payload = await asyncio.wait_for(
-                _perform_request(), timeout=5
+                _perform_request(), timeout=timeout
             )
 
             # Rate limit / ban protection
