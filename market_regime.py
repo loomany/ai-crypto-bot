@@ -1,7 +1,8 @@
 from statistics import mean
 from typing import Any, Dict, List
 
-from binance_client import Candle, get_required_candles
+from binance_client import Candle
+from market_access import get_bundle_with_fallback
 from trading_core import _compute_rsi_series, compute_ema, detect_trend_and_structure
 
 
@@ -16,11 +17,11 @@ async def get_market_regime() -> Dict[str, Any]:
           • среднедневная волатильность за 30 дней
     """
     symbol = "BTCUSDT"
-    data = await get_required_candles(symbol)
-    candles_1d: List[Candle] = data.get("1d") or []
-    candles_4h: List[Candle] = data.get("4h") or []
-    candles_1h: List[Candle] = data.get("1h") or []
-    candles_15m: List[Candle] = data.get("15m") or []
+    data = await get_bundle_with_fallback(symbol, ("1d", "4h", "1h", "15m"))
+    candles_1d: List[Candle] = data.get("1d") or [] if data else []
+    candles_4h: List[Candle] = data.get("4h") or [] if data else []
+    candles_1h: List[Candle] = data.get("1h") or [] if data else []
+    candles_15m: List[Candle] = data.get("15m") or [] if data else []
     if not candles_1d:
         return {
             "regime": "neutral",

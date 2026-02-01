@@ -5,16 +5,8 @@ import time
 from statistics import mean
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from binance_client import (
-    Candle,
-    KLINES_15M_LIMIT,
-    KLINES_1H_LIMIT,
-    fetch_klines as fetch_candles,
-    get_quick_candles,
-    get_required_candles,
-)
-from binance_limits import BINANCE_WEIGHT_TRACKER
-from binance_rest import binance_request_context, fetch_klines
+from binance_client import Candle, KLINES_15M_LIMIT, KLINES_1H_LIMIT
+from market_access import get_bundle_with_fallback, get_quick_with_fallback
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
 from market_regime import get_market_regime
@@ -102,7 +94,7 @@ async def get_btc_context() -> Dict[str, Any]:
       - флаги allow_longs / allow_shorts
     """
 
-    candles = await get_required_candles(BTC_SYMBOL)
+    candles = await get_bundle_with_fallback(BTC_SYMBOL, ("1d", "4h", "1h", "15m"))
     candles_1d = candles.get("1d", []) if candles else []
     candles_1h = candles.get("4h", []) or candles.get("1h", []) if candles else []
     candles_15m = candles.get("15m", []) if candles else []
@@ -167,28 +159,11 @@ def _volume_ratio(volumes: Sequence[float]) -> Tuple[float, float]:
 
 
 async def _gather_klines(symbol: str) -> Optional[Dict[str, List[Candle]]]:
-    candles = await get_required_candles(symbol)
-    if not candles:
-        return None
-
-    required_keys = ["1d", "4h", "1h", "15m", "5m"]
-    if not all(candles.get(tf) for tf in required_keys):
-        return None
-
-    return {tf: candles[tf] for tf in required_keys}
+    return await get_bundle_with_fallback(symbol, ("1d", "4h", "1h", "15m", "5m"))
 
 
 async def _gather_quick_klines(symbol: str) -> Optional[Dict[str, List[Candle]]]:
-    candles = await get_quick_candles(
-        symbol,
-        limit_1h=AI_STAGE_A_LIMIT_1H,
-        limit_15m=AI_STAGE_A_LIMIT_15M,
-    )
-    if not candles:
-        return None
-    if not candles.get("1h") or not candles.get("15m"):
-        return None
-    return candles
+    return await get_quick_with_fallback(symbol, tfs=("1h", "15m"))
 
 
 def _quick_score(candles: Dict[str, List[Candle]]) -> float:
@@ -205,18 +180,17 @@ def _quick_score(candles: Dict[str, List[Candle]]) -> float:
 
 
 async def _get_hourly_snapshot(symbol: str) -> Optional[Dict[str, float]]:
-    with binance_request_context("ai_signals"):
-        data = await fetch_klines(symbol, "1h", 2)
-    if not data or len(data) < 1:
+    bundle = await get_bundle_with_fallback(symbol, ("1h",))
+    if not bundle:
+        return None
+    candles_1h = bundle.get("1h") or []
+    if len(candles_1h) < 1:
         return None
 
-    kline = data[-1]
-    try:
-        open_price = float(kline[1])
-        close_price = float(kline[4])
-        quote_volume = float(kline[7])
-    except (TypeError, ValueError, IndexError):
-        return None
+    kline = candles_1h[-1]
+    open_price = float(kline.open)
+    close_price = float(kline.close)
+    quote_volume = float(kline.volume) * close_price
 
     if open_price <= 0:
         return None
