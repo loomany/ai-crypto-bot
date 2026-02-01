@@ -46,6 +46,7 @@ from health import (
 from db_path import get_db_path
 from alert_dedup_db import init_alert_dedup, can_send
 from notifications_db import init_notify_table, enable_notify, disable_notify, list_enabled
+from status_utils import get_user_plan, get_usage_today, is_notify_enabled
 from message_templates import format_scenario_message
 from pro_db import (
     init_pro_tables,
@@ -491,6 +492,25 @@ async def trial_reset_cmd(message: Message):
     _, chat_id = parts[:2]
     trial_reset(int(chat_id))
     await message.answer("♻️ Trial сброшен (3 сигнала снова доступны)")
+
+
+def _format_feature_status(chat_id: int, feature: str, label: str) -> str:
+    notify = "ON" if is_notify_enabled(chat_id, feature) else "OFF"
+    used, limit = get_usage_today(chat_id, feature)
+    return f"{label}: notify={notify}, использовано {used}/{limit}"
+
+
+@dp.message(Command("status"))
+async def status_cmd(message: Message):
+    chat_id = message.chat.id
+    plan = get_user_plan(chat_id)
+    lines = [
+        f"👤 План: {plan}",
+        _format_feature_status(chat_id, "ai_signals", "AI-сигналы"),
+        _format_feature_status(chat_id, "btc", "BTC"),
+        _format_feature_status(chat_id, "pumpdump", "Pump/Dump"),
+    ]
+    await message.answer("\n".join(lines))
 
 
 @dp.message(F.text == "⬅️ Главное меню")
