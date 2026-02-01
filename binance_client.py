@@ -1,9 +1,14 @@
+import asyncio
+import os
 from dataclasses import dataclass
 from typing import List, Optional
 
 from binance_rest import fetch_json
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
+_KLINES_SEM = asyncio.Semaphore(
+    int(os.environ.get("BINANCE_KLINES_PER_SYMBOL_CONCURRENCY", "3"))
+)
 
 
 @dataclass
@@ -49,10 +54,28 @@ async def fetch_klines(symbol: str, interval: str, limit: int) -> List[Candle]:
 
 
 async def get_required_candles(symbol: str):
-    return {
-        "1d": await fetch_klines(symbol, "1d", 60),
-        "4h": await fetch_klines(symbol, "4h", 120),
-        "1h": await fetch_klines(symbol, "1h", 168),
-        "15m": await fetch_klines(symbol, "15m", 192),
-        "5m": await fetch_klines(symbol, "5m", 288),
+    async def _safe(interval: str, limit: int) -> List[Candle]:
+        # per-symbol limiter: at most N parallel TF requests for this symbol
+        async with _KLINES_SEM:
+            try:
+                return await fetch_klines(symbol, interval, limit)
+            except Exception:
+                return []
+
+    tasks = {
+        "1d": asyncio.create_task(_safe("1d", 60)),
+        "4h": asyncio.create_task(_safe("4h", 120)),
+        "1h": asyncio.create_task(_safe("1h", 168)),
+        "15m": asyncio.create_task(_safe("15m", 192)),
+        "5m": asyncio.create_task(_safe("5m", 288)),
     }
+
+    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+    out = {}
+    for key, value in zip(tasks.keys(), results):
+        if isinstance(value, Exception):
+            out[key] = []
+        else:
+            out[key] = value
+    return out

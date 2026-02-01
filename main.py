@@ -21,13 +21,14 @@ from btc_module import (
     btc_realtime_signal_worker,
     get_btc_main_keyboard,
 )
+from binance_rest import close_shared_session
 from whales_module import whales_market_flow_worker
 from pro_modules import (
     router as pro_router,
 )
 from pump_detector import scan_pumps, format_pump_message
 from signals import scan_market, get_alt_watch_symbol, is_pro_strict_signal
-from symbol_cache import get_all_usdt_symbols
+from symbol_cache import get_all_usdt_symbols, get_top_usdt_symbols_by_volume
 from market_regime import get_market_regime
 from health import MODULES, mark_tick, mark_ok, mark_error
 from db_path import get_db_path
@@ -770,7 +771,23 @@ async def pro_ai_signals_worker():
                 await asyncio.sleep(20)
                 continue
 
-            signals = await scan_market()
+            top_n = int(os.getenv("PRO_SCAN_TOP_N", "250"))
+            symbols = await get_top_usdt_symbols_by_volume(top_n)
+
+            # (опционально) если top не подтянулся — не сканим весь рынок, просто пауза
+            if not symbols:
+                await asyncio.sleep(60)
+                continue
+
+            signals = await scan_market(
+                symbols=symbols,
+                batch_size=5,
+                batch_delay=0.2,
+                use_btc_gate=True,
+                free_mode=False,
+                min_score=PRO_MIN_SCORE,
+                return_stats=False,
+            )
             now = time.time()
             for sig in signals:
                 if not is_pro_strict_signal(
@@ -856,6 +873,7 @@ async def main():
         audit_task.cancel()
         with suppress(asyncio.CancelledError):
             await audit_task
+        await close_shared_session()
 
 
 if __name__ == "__main__":
