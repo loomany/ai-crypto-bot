@@ -22,7 +22,7 @@ from pro_modules import (
     router as pro_router,
 )
 from pump_detector import build_pump_symbol_list, scan_pumps_chunk, format_pump_message
-from signals import scan_market, get_alt_watch_symbol, is_pro_strict_signal
+from signals import scan_market, is_pro_strict_signal
 from symbol_cache import get_all_usdt_symbols, get_top_usdt_symbols_by_volume
 from market_regime import get_market_regime
 from health import MODULES, mark_tick, mark_ok, mark_error, safe_worker_loop, watchdog, SCAN_INTERVAL
@@ -642,22 +642,6 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
             print(f"[ai_signals] Failed to send to {chat_id}: {res}")
 
 
-def _format_symbol_pair(symbol: str) -> str:
-    if symbol.endswith("USDT"):
-        return f"{symbol[:-4]}/USDT"
-    return symbol
-
-
-def _format_volume_usdt(value: float) -> str:
-    if value >= 1_000_000_000:
-        return f"{value / 1_000_000_000:.2f}B"
-    if value >= 1_000_000:
-        return f"{value / 1_000_000:.2f}M"
-    if value >= 1_000:
-        return f"{value / 1_000:.2f}K"
-    return f"{value:.0f}"
-
-
 async def market_pulse_scan_once() -> None:
     global LAST_PULSE_SENT_AT
 
@@ -685,23 +669,10 @@ async def market_pulse_scan_once() -> None:
         "neutral": "NEUTRAL",
     }.get(regime, "NEUTRAL")
 
-    alt_watch = await get_alt_watch_symbol()
-    if alt_watch:
-        alt_symbol = _format_symbol_pair(str(alt_watch.get("symbol", "")))
-        change_pct = float(alt_watch.get("change_pct", 0.0))
-        volume_usdt = float(alt_watch.get("volume_usdt", 0.0))
-        alt_line = (
-            f"Монета для наблюдения: {alt_symbol} — "
-            f"{change_pct:+.2f}% за 1ч, объём ~{_format_volume_usdt(volume_usdt)} USDT."
-        )
-    else:
-        alt_line = "Монета для наблюдения: SOL/USDT — повышенный объём, ждём подтверждения."
-
     text = (
         "📡 Market Pulse (каждый час)\n"
         f"BTC режим: {regime_label}\n"
-        "Сетапов нет — фильтр строгий. Это нормально.\n"
-        f"{alt_line}"
+        "Сетапов нет — фильтр строгий. Это нормально."
     )
 
     tasks = [asyncio.create_task(bot.send_message(chat_id, text)) for chat_id in subscribers]
