@@ -1,0 +1,196 @@
+import asyncio
+import time
+from typing import Any, Dict, Optional, Tuple
+
+from binance_rest import fetch_json
+from signal_audit_db import fetch_open_signals, mark_signal_closed
+
+BINANCE_BASE_URL = "https://api.binance.com/api/v3"
+KLINES_URL = f"{BINANCE_BASE_URL}/klines"
+WORKER_INTERVAL_SEC = 60 * 5
+MAX_SIGNAL_AGE_SEC = 60 * 60 * 24
+
+
+def _parse_kline(kline: list[Any]) -> Optional[Dict[str, float]]:
+    try:
+        return {
+            "open_time": int(kline[0]),
+            "open": float(kline[1]),
+            "high": float(kline[2]),
+            "low": float(kline[3]),
+            "close": float(kline[4]),
+        }
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _entry_filled(candle: Dict[str, float], entry_from: float, entry_to: float) -> bool:
+    return candle["low"] <= entry_to and candle["high"] >= entry_from
+
+
+def _check_hits(
+    candle: Dict[str, float],
+    direction: str,
+    sl: float,
+    tp1: float,
+    tp2: float,
+    entry_ref: float,
+) -> Tuple[bool, bool, bool, bool]:
+    if direction == "long":
+        sl_hit = candle["low"] <= sl
+        tp1_hit = candle["high"] >= tp1
+        tp2_hit = candle["high"] >= tp2
+        be_hit = candle["low"] <= entry_ref
+    else:
+        sl_hit = candle["high"] >= sl
+        tp1_hit = candle["low"] <= tp1
+        tp2_hit = candle["low"] <= tp2
+        be_hit = candle["high"] >= entry_ref
+    return sl_hit, tp1_hit, tp2_hit, be_hit
+
+
+def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) -> Optional[dict]:
+    entry_from = float(signal["entry_from"])
+    entry_to = float(signal["entry_to"])
+    direction = signal["direction"]
+    sl = float(signal["sl"])
+    tp1 = float(signal["tp1"])
+    tp2 = float(signal["tp2"])
+    sent_at = int(signal["sent_at"])
+
+    entry_ref = (entry_from + entry_to) / 2
+    r_value = abs(entry_ref - sl)
+    if r_value <= 0:
+        return None
+
+    tp1_r = abs(tp1 - entry_ref) / r_value
+    tp2_r = abs(tp2 - entry_ref) / r_value
+
+    filled_at: int | None = None
+    tp1_hit = False
+
+    for candle in candles:
+        if filled_at is None:
+            if _entry_filled(candle, entry_from, entry_to):
+                filled_at = int(candle["open_time"] / 1000)
+            else:
+                continue
+
+        sl_hit, tp1_hit_candle, tp2_hit_candle, be_hit = _check_hits(
+            candle, direction, sl, tp1, tp2, entry_ref
+        )
+
+        if sl_hit and (tp1_hit_candle or tp2_hit_candle):
+            return {
+                "outcome": "AMBIGUOUS",
+                "pnl_r": None,
+                "filled_at": filled_at,
+                "notes": "SL and TP touched in same candle",
+            }
+
+        if tp2_hit_candle:
+            return {
+                "outcome": "TP2",
+                "pnl_r": 0.5 * tp1_r + 0.5 * tp2_r,
+                "filled_at": filled_at,
+                "notes": None,
+            }
+
+        if tp1_hit_candle and not tp1_hit:
+            tp1_hit = True
+
+        if not tp1_hit and sl_hit:
+            return {
+                "outcome": "SL",
+                "pnl_r": -1.0,
+                "filled_at": filled_at,
+                "notes": None,
+            }
+
+        if tp1_hit and be_hit:
+            return {
+                "outcome": "BE",
+                "pnl_r": 0.5 * tp1_r,
+                "filled_at": filled_at,
+                "notes": None,
+            }
+
+    age_sec = int(time.time()) - sent_at
+    if age_sec < MAX_SIGNAL_AGE_SEC:
+        return None
+
+    last_close = candles[-1]["close"] if candles else None
+    if filled_at is None:
+        return {
+            "outcome": "NO_FILL",
+            "pnl_r": None,
+            "filled_at": None,
+            "notes": None,
+        }
+
+    pnl_r = None
+    if last_close is not None:
+        if direction == "long":
+            pnl_r = (last_close - entry_ref) / r_value * 0.5
+        else:
+            pnl_r = (entry_ref - last_close) / r_value * 0.5
+
+    return {
+        "outcome": "EXPIRED",
+        "pnl_r": pnl_r,
+        "filled_at": filled_at,
+        "notes": None,
+    }
+
+
+async def evaluate_open_signals() -> None:
+    open_signals = fetch_open_signals(MAX_SIGNAL_AGE_SEC)
+    if not open_signals:
+        return
+
+    for signal in open_signals:
+        try:
+            sent_at = int(signal["sent_at"])
+            start_ms = sent_at * 1000
+            params = {
+                "symbol": signal["symbol"],
+                "interval": "5m",
+                "startTime": start_ms,
+                "limit": 1000,
+            }
+            data = await fetch_json(KLINES_URL, params=params)
+            if not data:
+                continue
+
+            candles = []
+            for item in data:
+                parsed = _parse_kline(item)
+                if parsed:
+                    candles.append(parsed)
+
+            if not candles:
+                continue
+
+            result = _evaluate_signal(signal, candles)
+            if result is None:
+                continue
+
+            mark_signal_closed(
+                signal_id=signal["signal_id"],
+                outcome=result["outcome"],
+                pnl_r=result["pnl_r"],
+                filled_at=result["filled_at"],
+                notes=result["notes"],
+            )
+        except Exception as exc:
+            print(f"[signal_audit] Failed to evaluate signal {signal.get('signal_id')}: {exc}")
+            continue
+
+
+async def signal_audit_worker_loop() -> None:
+    while True:
+        try:
+            await evaluate_open_signals()
+        except Exception as exc:
+            print(f"[signal_audit] Worker error: {exc}")
+        await asyncio.sleep(WORKER_INTERVAL_SEC)

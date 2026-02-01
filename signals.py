@@ -14,7 +14,7 @@ from trading_core import (
     analyze_orderflow,
     compute_atr,
     compute_ema,
-    compute_score,
+    compute_score_breakdown,
     detect_rsi_divergence,
     detect_trend_and_structure,
     find_key_levels,
@@ -387,7 +387,7 @@ async def _prepare_signal(
         "market_regime": market_info.get("regime", "neutral"),
     }
 
-    raw_score = compute_score(context)
+    raw_score, breakdown = compute_score_breakdown(context)
 
     if abs(raw_score) < min_score:
         return None
@@ -448,6 +448,7 @@ async def _prepare_signal(
             "volume_avg": volume_avg,
             "rr": rr,
         },
+        "breakdown": breakdown,
         "levels": {
             "support": round(support_level or 0.0, 4),
             "resistance": round(resistance_level or 0.0, 4),
