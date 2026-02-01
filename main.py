@@ -262,7 +262,7 @@ PRO_MIN_VOLUME_RATIO = 1.3
 PRO_SYMBOL_COOLDOWN_SEC = 60 * 60 * 6
 MAX_PRO_SIGNALS_PER_DAY = 4
 MAX_PRO_SIGNALS_PER_CYCLE = 2
-CHUNK_SIZE = 50
+AI_CHUNK_SIZE = 10
 PRO_CHUNK_SIZE = 50
 
 LAST_PRO_SYMBOL_SENT: Dict[str, float] = {}
@@ -802,6 +802,7 @@ async def pump_scan_once(bot: Bot) -> None:
 
 
 async def ai_scan_once() -> None:
+    TIME_BUDGET = 45
     mark_tick("ai_signals", extra="сканирую рынок...")
 
     symbols = await get_all_usdt_symbols()
@@ -809,7 +810,9 @@ async def ai_scan_once() -> None:
         mark_error("ai_signals", "no symbols to scan")
         return
 
-    chunks = [symbols[i : i + CHUNK_SIZE] for i in range(0, len(symbols), CHUNK_SIZE)]
+    chunks = [
+        symbols[i : i + AI_CHUNK_SIZE] for i in range(0, len(symbols), AI_CHUNK_SIZE)
+    ]
     if not hasattr(ai_scan_once, "chunk_idx"):
         ai_scan_once.chunk_idx = 0
     if ai_scan_once.chunk_idx >= len(chunks):
@@ -823,6 +826,7 @@ async def ai_scan_once() -> None:
         free_mode=True,
         min_score=FREE_MIN_SCORE,
         return_stats=False,
+        time_budget=TIME_BUDGET,
     )
     print("SCAN OK", len(signals))
     sent_count = 0

@@ -1,4 +1,5 @@
 import asyncio
+import time
 import math
 from statistics import mean
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -464,6 +465,7 @@ async def scan_market(
     free_mode: bool = False,
     min_score: float = 80,
     return_stats: bool = False,
+    time_budget: float | None = None,
 ) -> List[Dict[str, Any]] | Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """
     Сканирует весь рынок Binance по спотовым USDT-парам и возвращает сигналы.
@@ -475,7 +477,8 @@ async def scan_market(
         "allow_longs": True,
         "allow_shorts": True,
     }
-    checked = len(symbols)
+    checked = 0
+    start_time = time.time()
 
     if use_btc_gate:
         if not btc_ctx["allow_longs"] and not btc_ctx["allow_shorts"]:
@@ -488,7 +491,10 @@ async def scan_market(
     signals: List[Dict[str, Any]] = []
 
     for i in range(0, len(symbols), batch_size):
+        if time_budget is not None and time.time() - start_time > time_budget:
+            break
         batch = symbols[i : i + batch_size]
+        checked += len(batch)
         tasks = [asyncio.create_task(_gather_klines(symbol)) for symbol in batch]
         klines_list = await asyncio.gather(*tasks)
 
