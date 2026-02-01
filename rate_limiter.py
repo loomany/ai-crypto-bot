@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 
 
@@ -38,4 +39,7 @@ class RateLimiter:
         await self.release()
 
 
-BINANCE_RATE_LIMITER = RateLimiter(rate_per_sec=10.0, capacity=10)
+BINANCE_RATE_LIMITER = RateLimiter(
+    rate_per_sec=float(os.getenv("BINANCE_RPS", "10")),
+    capacity=int(os.getenv("BINANCE_BURST", "20")),
+)

@@ -1,10 +1,11 @@
 import asyncio
-import time
 import math
+import os
+import time
 from statistics import mean
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from binance_client import Candle, get_required_candles
+from binance_client import Candle, get_quick_candles, get_required_candles
 from binance_limits import BINANCE_WEIGHT_TRACKER
 from binance_rest import fetch_json
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
@@ -33,6 +34,9 @@ LEVEL_NEAR_PCT_FREE = 1.2
 MIN_VOLUME_RATIO_FREE = 1.15
 MIN_RR_FREE = 1.8
 EMA50_NEAR_PCT_FREE = 1.0
+AI_STAGE_A_TOP_K = int(os.getenv("AI_STAGE_A_TOP_K", "10"))
+AI_STAGE_A_LIMIT_1H = int(os.getenv("AI_STAGE_A_LIMIT_1H", "120"))
+AI_STAGE_A_LIMIT_15M = int(os.getenv("AI_STAGE_A_LIMIT_15M", "120"))
 
 
 def is_pro_strict_signal(
@@ -155,6 +159,32 @@ async def _gather_klines(symbol: str) -> Optional[Dict[str, List[Candle]]]:
         return None
 
     return {tf: candles[tf] for tf in required_keys}
+
+
+async def _gather_quick_klines(symbol: str) -> Optional[Dict[str, List[Candle]]]:
+    candles = await get_quick_candles(
+        symbol,
+        limit_1h=AI_STAGE_A_LIMIT_1H,
+        limit_15m=AI_STAGE_A_LIMIT_15M,
+    )
+    if not candles:
+        return None
+    if not candles.get("1h") or not candles.get("15m"):
+        return None
+    return candles
+
+
+def _quick_score(candles: Dict[str, List[Candle]]) -> float:
+    candles_1h = candles["1h"]
+    candles_15m = candles["15m"]
+    closes_15m = [c.close for c in candles_15m]
+    rsi_15m_series = _compute_rsi_series(closes_15m)
+    rsi_15m = rsi_15m_series[-1] if rsi_15m_series else 50.0
+    volume_ratio, _ = _volume_ratio([c.volume for c in candles_15m])
+    trend = detect_trend_and_structure(candles_1h)
+    trend_bonus = 1.1 if trend.get("trend") not in ("range", "neutral") else 1.0
+    rsi_distance = abs(rsi_15m - 50.0) / 50.0
+    return max(volume_ratio, 0.01) * (1.0 + rsi_distance) * trend_bonus
 
 
 async def _get_hourly_snapshot(symbol: str) -> Optional[Dict[str, float]]:
@@ -503,10 +533,26 @@ async def scan_market(
             break
         batch = symbols[i : i + batch_size]
         checked += len(batch)
-        tasks = [asyncio.create_task(_gather_klines(symbol)) for symbol in batch]
+        candidate_symbols = batch
+        if free_mode:
+            quick_tasks = [asyncio.create_task(_gather_quick_klines(symbol)) for symbol in batch]
+            quick_list = await asyncio.gather(*quick_tasks)
+            scored: List[Tuple[str, float]] = []
+            for symbol, quick in zip(batch, quick_list):
+                if not quick:
+                    continue
+                scored.append((symbol, _quick_score(quick)))
+            scored.sort(key=lambda item: item[1], reverse=True)
+            top_k = min(AI_STAGE_A_TOP_K, len(scored))
+            candidate_symbols = [symbol for symbol, _ in scored[:top_k]]
+
+        if not candidate_symbols:
+            continue
+
+        tasks = [asyncio.create_task(_gather_klines(symbol)) for symbol in candidate_symbols]
         klines_list = await asyncio.gather(*tasks)
 
-        for symbol, klines in zip(batch, klines_list):
+        for symbol, klines in zip(candidate_symbols, klines_list):
             if not klines:
                 continue
 

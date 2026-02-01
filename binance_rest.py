@@ -1,10 +1,14 @@
 import asyncio
+import os
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Optional
 
 import aiohttp
 
 from binance_limits import BINANCE_WEIGHT_TRACKER, calc_backoff_seconds
+from health import increment_request_count
 from rate_limiter import BINANCE_RATE_LIMITER
 
 # ---- shared session (one per process) ----
@@ -13,8 +17,16 @@ _SHARED_LOCK = asyncio.Lock()
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 _KLINES_CACHE: dict[tuple[str, str, int], tuple[float, list]] = {}
-_KLINES_CACHE_TTL_SEC = 20
+_KLINES_CACHE_TTL_SEC_DEFAULT = 20
+_KLINES_CACHE_TTL_BY_INTERVAL = {
+    "1d": 60 * 15,
+    "4h": 60 * 5,
+    "1h": 60 * 2,
+    "15m": 30,
+    "5m": 15,
+}
 _KLINES_CACHE_LOCK = asyncio.Lock()
+_BINANCE_REQUEST_MODULE = ContextVar("binance_request_module", default=None)
 
 
 async def get_shared_session() -> aiohttp.ClientSession:
@@ -37,7 +49,22 @@ async def close_shared_session() -> None:
 
 # ---- optional concurrency gate (reduces socket spikes) ----
 # One more layer in addition to rate limiter/weight tracker.
-BINANCE_SEM = asyncio.Semaphore(4)
+BINANCE_SEM = asyncio.Semaphore(int(os.getenv("BINANCE_HTTP_CONCURRENCY", "10")))
+
+
+@contextmanager
+def binance_request_context(module: str):
+    token = _BINANCE_REQUEST_MODULE.set(module)
+    try:
+        yield
+    finally:
+        _BINANCE_REQUEST_MODULE.reset(token)
+
+
+def _track_request() -> None:
+    module = _BINANCE_REQUEST_MODULE.get()
+    if module:
+        increment_request_count(module)
 
 
 async def fetch_json(
@@ -66,6 +93,7 @@ async def fetch_json(
                 timeout_cfg = aiohttp.ClientTimeout(total=timeout)
                 async with BINANCE_SEM:
                     async with BINANCE_RATE_LIMITER:
+                        _track_request()
                         async with session.get(url, params=params, timeout=timeout_cfg) as resp:
                             await BINANCE_WEIGHT_TRACKER.update_from_headers(resp.headers)
                             status = resp.status
@@ -127,9 +155,10 @@ async def fetch_json(
 async def fetch_klines(symbol: str, interval: str, limit: int) -> Optional[list]:
     cache_key = (symbol, interval, limit)
     now = time.time()
+    ttl_sec = _KLINES_CACHE_TTL_BY_INTERVAL.get(interval, _KLINES_CACHE_TTL_SEC_DEFAULT)
     async with _KLINES_CACHE_LOCK:
         cached = _KLINES_CACHE.get(cache_key)
-        if cached and now - cached[0] < _KLINES_CACHE_TTL_SEC:
+        if cached and now - cached[0] < ttl_sec:
             print(
                 f"[binance_rest] klines {symbol} {interval} {limit} (cache_hit=True)"
             )
