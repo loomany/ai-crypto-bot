@@ -58,6 +58,8 @@ from trial_db import (
 )
 from signal_audit_db import init_signal_audit_tables, insert_signal_audit, get_public_stats
 from signal_audit_worker import signal_audit_worker_loop
+from keyboards import main_menu_keyboard
+from texts import AI_SIGNALS_TEXT, START_TEXT
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -84,22 +86,6 @@ ADMIN_IDS = get_admin_ids()
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
-
-
-# ===== КНОПКИ МЕНЮ =====
-
-def main_menu_keyboard() -> ReplyKeyboardMarkup:
-    kb = [
-        [
-            KeyboardButton(text="₿ BTC (intraday)"),
-            KeyboardButton(text="🎯 AI-сигналы"),
-        ],
-        [
-            KeyboardButton(text="🧠 PRO-модули"),
-            KeyboardButton(text="📊 Статистика"),
-        ],
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
 def ai_signals_keyboard() -> ReplyKeyboardMarkup:
@@ -323,24 +309,15 @@ async def cmd_start(message: Message):
             await message.bot.send_message(ADMIN_CHAT_ID, admin_text)
     trial_ensure_user(message.chat.id)
 
-    text = (
-        "Привет! Я AI-крипто бот для рынка Binance 🧠📈\n\n"
-        "Что умею:\n"
-        "• ₿ BTC (intraday) — быстрые сигналы по BTCUSDT\n"
-        "• 🎯 AI-сигналы — автоматические сетапы по рынку\n"
-        "• 🧠 PRO — Pump/Dump, Whale Flow и PRO AI-сигналы\n\n"
-        "Нажми кнопку ниже 👇"
-    )
-
-    await message.answer(text, reply_markup=main_menu_keyboard(), parse_mode="Markdown")
+    await message.answer(START_TEXT, reply_markup=main_menu_keyboard())
     await message.answer(f"Ваш ID: {message.chat.id}")
 
 
-@dp.message(F.text == "🎯 AI-сигналы")
+@dp.message(F.text == "🤖 AI-сигналы")
 async def ai_signals_menu(message: Message):
     await message.answer(
-        "🎯 AI-сигналы\n\nВыбери режим:\n1) 🔔 Включить авто-сигналы\n2) 🚫 Отключить авто-сигналы",
-        reply_markup=ai_signals_keyboard(),
+        AI_SIGNALS_TEXT,
+        reply_markup=main_menu_keyboard(),
     )
 
 
