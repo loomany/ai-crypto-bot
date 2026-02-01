@@ -34,6 +34,7 @@ LEVEL_NEAR_PCT_FREE = 1.2
 MIN_VOLUME_RATIO_FREE = 1.15
 MIN_RR_FREE = 1.8
 EMA50_NEAR_PCT_FREE = 1.0
+EMA50_GATE_SCORE = int(os.getenv("EMA50_GATE_SCORE", "78"))
 AI_STAGE_A_TOP_K = int(os.getenv("AI_STAGE_A_TOP_K", "10"))
 AI_STAGE_A_LIMIT_1H = int(os.getenv("AI_STAGE_A_LIMIT_1H", "120"))
 AI_STAGE_A_LIMIT_15M = int(os.getenv("AI_STAGE_A_LIMIT_15M", "120"))
@@ -389,6 +390,36 @@ async def _prepare_signal(
     )
     bb_extreme = bb_extreme_15 or bb_extreme_5
 
+    level_distance = dist_low if candidate_side == "LONG" else dist_high
+    level_distance = level_distance if level_distance is not None else level_near_pct
+    level_score = max(0.0, 30.0 * (1.0 - min(level_distance, level_near_pct) / level_near_pct))
+
+    entry_ref = (entry_from + entry_to) / 2
+    risk_pre = abs(entry_ref - sl)
+    reward_pre = abs(tp1 - entry_ref)
+    rr_pre = reward_pre / risk_pre if risk_pre > 0 else 0.0
+    min_rr_pre = MIN_RR_FREE if free_mode else 2.0
+
+    def _trend_supports(side_value: str, trend_value: str) -> bool:
+        if side_value == "LONG":
+            return trend_value in ("up", "bullish")
+        if side_value == "SHORT":
+            return trend_value in ("down", "bearish")
+        return False
+
+    trend_support = _trend_supports(candidate_side, local_trend) or _trend_supports(candidate_side, global_trend)
+    score_pre = (
+        level_score
+        + (12.0 if sweep else 0.0)
+        + (12.0 if volume_spike else 0.0)
+        + (10.0 if rsi_div else 0.0)
+        + (10.0 if atr_ok else 0.0)
+        + (10.0 if bb_extreme else 0.0)
+        + (8.0 if trend_support else 0.0)
+        + (8.0 if rr_pre >= min_rr_pre else 0.0)
+    )
+    score_pre = min(100.0, max(0.0, score_pre))
+
     closes_1h = [c.close for c in candles_1h]
     ema50_1h = compute_ema(closes_1h, 50) if len(closes_1h) >= 50 else None
     ema200_1h = compute_ema(closes_1h, 200) if len(closes_1h) >= 200 else None
@@ -402,9 +433,12 @@ async def _prepare_signal(
     if not ma_trend_ok:
         if free_mode and ema50_1h:
             near_ema50 = abs(current_price - ema50_1h) / current_price * 100 <= EMA50_NEAR_PCT_FREE
-            if not near_ema50:
-                _inc_fail("fail_not_near_ema50")
-                return None
+            if score_pre < EMA50_GATE_SCORE:
+                if not near_ema50:
+                    _inc_fail("fail_not_near_ema50_weak")
+                    return None
+            else:
+                _inc_fail("ema50_bypassed_strong")
         else:
             _inc_fail("fail_ma_trend")
             return None
@@ -444,7 +478,6 @@ async def _prepare_signal(
         _inc_fail("fail_score")
         return None
 
-    entry_ref = (entry_from + entry_to) / 2
     side = detect_side(entry_ref, sl, tp1)
     if side is None:
         _inc_fail("fail_invalid_side")
