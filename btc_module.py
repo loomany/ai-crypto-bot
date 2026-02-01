@@ -107,90 +107,98 @@ async def btc_menu_command(message: Message, state: FSMContext):
 async def btc_scan_once(bot) -> None:
     start = time.time()
     BUDGET = 45
-    if not hasattr(btc_scan_once, "state"):
-        btc_scan_once.state = {
-            "last_signature": None,
-            "last_checked_candle_close_time": None,
-            "last_signal_time": None,
-            "symbols": [BTC_SYMBOL],
-            "cursor": 0,
-        }
-
-    state = btc_scan_once.state
-    min_interval = 7 * 60
-    symbols = state["symbols"]
-    cursor = state["cursor"]
-    symbol = symbols[cursor]
-    state["cursor"] = (cursor + 1) % len(symbols)
-
+    print("[BTC] scan_once start")
     try:
-        candles_5m = await asyncio.wait_for(fetch_klines(symbol, "5m", 3), timeout=5)
-    except asyncio.TimeoutError:
-        mark_warn("btc", "klines timeout")
-        return
-    if len(candles_5m) < 2:
-        mark_tick("btc", extra="нет достаточных свечей 5m")
-        return
+        if not hasattr(btc_scan_once, "state"):
+            btc_scan_once.state = {
+                "last_signature": None,
+                "last_checked_candle_close_time": None,
+                "last_signal_time": None,
+                "symbols": [BTC_SYMBOL],
+                "cursor": 0,
+            }
 
-    last_candle = candles_5m[-1]
-    mark_ok("btc", extra=f"last_close={last_candle.close:.2f}")
-    last_checked = state["last_checked_candle_close_time"]
-    if last_checked is not None and last_candle.close_time <= last_checked:
-        return
+        state = btc_scan_once.state
+        min_interval = 7 * 60
+        symbols = state["symbols"]
+        cursor = state["cursor"]
+        symbol = symbols[cursor]
+        state["cursor"] = (cursor + 1) % len(symbols)
 
-    state["last_checked_candle_close_time"] = last_candle.close_time
-    try:
-        signal = await asyncio.wait_for(generate_btc_signal(desired_side=None), timeout=20)
-    except asyncio.TimeoutError:
-        mark_error("btc", "generate timeout")
-        return
-    mark_tick("btc", extra=f"side={signal.side}, prob={signal.probability:.0f}")
-    if signal.side not in ("LONG", "SHORT"):
-        return
-
-    entry_mid = 0.0
-    if signal.entry_from and signal.entry_to:
-        entry_mid = (signal.entry_from + signal.entry_to) / 2.0
-    elif signal.entry_from:
-        entry_mid = signal.entry_from
-
-    signature = (signal.side, int(round(entry_mid)))
-    now = dt.datetime.utcnow()
-    last_signal_time: Optional[dt.datetime] = state["last_signal_time"]
-    interval_ok = last_signal_time is None or (now - last_signal_time).total_seconds() > min_interval
-
-    if signature == state["last_signature"] or not interval_ok:
-        return
-
-    state["last_signature"] = signature
-    state["last_signal_time"] = now
-
-    text = format_signal_message(signal, desired_side=signal.side)
-    user_ids = list_enabled("btc")
-
-    for user_id in user_ids:
-        if time.time() - start > BUDGET:
-            break
         try:
-            if int(signal.probability or 0) < BTC_MIN_PROBABILITY:
-                continue
-            if not pro_is(user_id):
-                trial_ensure_user(user_id, "btc")
-                used_count, paywall_sent = trial_get(user_id, "btc")
-                if used_count >= FREE_TRIAL_LIMIT:
-                    if not paywall_sent:
-                        await bot.send_message(
-                            chat_id=user_id,
-                            text=BTC_PAYWALL_TEXT,
-                            reply_markup=paywall_inline_kb(),
-                        )
-                        disable_notify(user_id, "btc")
-                        trial_mark_paywall(user_id, "btc")
+            candles_5m = await asyncio.wait_for(fetch_klines(symbol, "5m", 3), timeout=5)
+        except asyncio.TimeoutError:
+            mark_warn("btc", "klines timeout")
+            return
+        if len(candles_5m) < 2:
+            mark_tick("btc", extra="нет достаточных свечей 5m")
+            return
+
+        last_candle = candles_5m[-1]
+        mark_ok("btc", extra=f"last_close={last_candle.close:.2f}")
+        last_checked = state["last_checked_candle_close_time"]
+        if last_checked is not None and last_candle.close_time <= last_checked:
+            return
+
+        state["last_checked_candle_close_time"] = last_candle.close_time
+        try:
+            signal = await asyncio.wait_for(generate_btc_signal(desired_side=None), timeout=20)
+        except asyncio.TimeoutError:
+            mark_error("btc", "generate timeout")
+            return
+        mark_tick("btc", extra=f"side={signal.side}, prob={signal.probability:.0f}")
+        if signal.side not in ("LONG", "SHORT"):
+            return
+
+        entry_mid = 0.0
+        if signal.entry_from and signal.entry_to:
+            entry_mid = (signal.entry_from + signal.entry_to) / 2.0
+        elif signal.entry_from:
+            entry_mid = signal.entry_from
+
+        signature = (signal.side, int(round(entry_mid)))
+        now = dt.datetime.utcnow()
+        last_signal_time: Optional[dt.datetime] = state["last_signal_time"]
+        interval_ok = (
+            last_signal_time is None
+            or (now - last_signal_time).total_seconds() > min_interval
+        )
+
+        if signature == state["last_signature"] or not interval_ok:
+            return
+
+        state["last_signature"] = signature
+        state["last_signal_time"] = now
+
+        text = format_signal_message(signal, desired_side=signal.side)
+        user_ids = list_enabled("btc")
+
+        for user_id in user_ids:
+            if time.time() - start > BUDGET:
+                print("[BTC] budget exceeded, stopping early")
+                break
+            try:
+                if int(signal.probability or 0) < BTC_MIN_PROBABILITY:
                     continue
-                trial_inc(user_id, "btc")
-            await bot.send_message(chat_id=user_id, text=text)
-        except Exception:
-            continue
+                if not pro_is(user_id):
+                    trial_ensure_user(user_id, "btc")
+                    used_count, paywall_sent = trial_get(user_id, "btc")
+                    if used_count >= FREE_TRIAL_LIMIT:
+                        if not paywall_sent:
+                            await bot.send_message(
+                                chat_id=user_id,
+                                text=BTC_PAYWALL_TEXT,
+                                reply_markup=paywall_inline_kb(),
+                            )
+                            disable_notify(user_id, "btc")
+                            trial_mark_paywall(user_id, "btc")
+                        continue
+                    trial_inc(user_id, "btc")
+                await bot.send_message(chat_id=user_id, text=text)
+            except Exception:
+                continue
+    finally:
+        print("[BTC] scan_once end")
 
 
 async def btc_realtime_signal_worker(bot):

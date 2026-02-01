@@ -107,7 +107,12 @@ def _macd_signal(closes: List[float]) -> str:
 async def get_ticker_basic(symbol: str) -> Optional[Dict[str, float]]:
     url = f"{BINANCE_BASE_URL}/ticker/24hr"
     params = {"symbol": symbol}
-    data = await _fetch_json(url, params)
+    print(f"[BINANCE] request {symbol} ticker/24hr")
+    try:
+        data = await _fetch_json(url, params)
+    except Exception as exc:
+        print(f"[BINANCE] ERROR {symbol}: {exc}")
+        return None
     if not data or "lastPrice" not in data:
         return None
 
@@ -125,7 +130,12 @@ async def _get_klines(symbol: str, interval: str, limit: int = 100) -> Optional[
         "interval": interval,
         "limit": limit,
     }
-    data = await _fetch_json(url, params)
+    print(f"[BINANCE] request {symbol} klines")
+    try:
+        data = await _fetch_json(url, params)
+    except Exception as exc:
+        print(f"[BINANCE] ERROR {symbol}: {exc}")
+        return None
     if not data:
         return None
 

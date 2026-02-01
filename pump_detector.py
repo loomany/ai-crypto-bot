@@ -34,7 +34,16 @@ async def get_usdt_symbols(session: aiohttp.ClientSession) -> list[str]:
 
 async def get_klines_1m(session: aiohttp.ClientSession, symbol: str, limit: int = 25):
     params = {"symbol": symbol, "interval": "1m", "limit": limit}
-    return await fetch_json(f"{BINANCE_API}/api/v3/klines", params=params, session=session)
+    print(f"[BINANCE] request {symbol} klines")
+    try:
+        return await fetch_json(
+            f"{BINANCE_API}/api/v3/klines",
+            params=params,
+            session=session,
+        )
+    except Exception as exc:
+        print(f"[BINANCE] ERROR {symbol}: {exc}")
+        return None
 
 
 def _format_signed(value: float, decimals: int = 2) -> str:
