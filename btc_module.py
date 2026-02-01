@@ -1,3 +1,4 @@
+import asyncio
 import datetime as dt
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict, Iterable
@@ -49,7 +50,7 @@ from trial_db import (
 
 BTC_SYMBOL = "BTCUSDT"
 TIMEZONE_OFFSET_HOURS = 5  # например, Asia/Almaty (UTC+5)
-BTC_MIN_PROBABILITY = 70
+BTC_MIN_PROBABILITY = 65
 
 router = Router(name="btc_module")
 
@@ -131,7 +132,11 @@ async def btc_scan_once(bot) -> None:
         return
 
     state["last_checked_candle_close_time"] = last_candle.close_time
-    signal = await generate_btc_signal(desired_side=None)
+    try:
+        signal = await asyncio.wait_for(generate_btc_signal(desired_side=None), timeout=20)
+    except asyncio.TimeoutError:
+        mark_error("btc", "generate timeout")
+        return
     mark_tick("btc", extra=f"side={signal.side}, prob={signal.probability:.0f}")
     if signal.side not in ("LONG", "SHORT"):
         return
@@ -284,7 +289,10 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
 
     nearest_high, dist_high = _nearest_level(current_price, key_levels["highs"])
     nearest_low, dist_low = _nearest_level(current_price, key_levels["lows"])
-    threshold_pct = 0.8
+
+    atr_15m = compute_atr(candles_15m[-60:]) if len(candles_15m) >= 15 else None
+    atr_pct = (atr_15m / current_price) * 100 if atr_15m else 0.0
+    threshold_pct = max(0.8, min(2.0, atr_pct * 1.2))
 
     candidate_side: Optional[str] = None
     level_touched: Optional[float] = None
@@ -300,36 +308,81 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
     if desired_side and candidate_side and desired_side.upper() != candidate_side:
         candidate_side = None
 
-    if not candidate_side:
-        return BTCSingal(
-            timestamp=now,
-            side="NO_TRADE",
-            probability=0,
-            explanation="Цена не у ключевого уровня или сторона не совпала с запросом.",
-        )
+    def is_reversal_candle(candles: List[Candle], direction: str) -> bool:
+        if len(candles) < 2:
+            return False
+        last = candles[-1]
+        prev = candles[-2]
+        if direction == "long":
+            return last.close > last.open and prev.close < prev.open and last.close > prev.open
+        return last.close < last.open and prev.close > prev.open and last.close < prev.open
 
-    sweep = is_liquidity_sweep(
-        candles_5m[-6:] if len(candles_5m) >= 6 else candles_5m,
-        level_touched,
-        "long" if candidate_side == "LONG" else "short",
-    )
     volume_spike = is_volume_climax(candles_5m)
 
     closes_15m = [c.close for c in candles_15m]
     closes_5m = [c.close for c in candles_5m]
     rsi_15m = _compute_rsi_series(closes_15m)
     rsi_5m = _compute_rsi_series(closes_5m)
+
+    # EMA50/EMA200 на 1H
+    closes_1h = [c.close for c in candles_1h]
+    ema50_1h = compute_ema(closes_1h, 50) if len(closes_1h) >= 50 else None
+    ema200_1h = compute_ema(closes_1h, 200) if len(closes_1h) >= 200 else None
+
+    pullback_setup = False
+    pullback_reversal = False
+    rsi_15m_value = rsi_15m[-1] if rsi_15m else 50.0
+    if not candidate_side and ema50_1h and ema200_1h:
+        pullback_threshold = max(0.3, min(1.2, atr_pct if atr_pct else 0.6))
+        pullback_distance = abs(current_price - ema50_1h) / current_price * 100
+        reversal_long = is_reversal_candle(candles_5m, "long") or is_reversal_candle(candles_15m, "long")
+        reversal_short = is_reversal_candle(candles_5m, "short") or is_reversal_candle(candles_15m, "short")
+        if current_price >= ema50_1h >= ema200_1h:
+            pullback_reversal = reversal_long
+            if pullback_distance <= pullback_threshold and rsi_15m_value < 45 and pullback_reversal:
+                candidate_side = "LONG"
+                level_touched = ema50_1h
+                pullback_setup = True
+        elif current_price <= ema50_1h <= ema200_1h:
+            pullback_reversal = reversal_short
+            if pullback_distance <= pullback_threshold and rsi_15m_value > 55 and pullback_reversal:
+                candidate_side = "SHORT"
+                level_touched = ema50_1h
+                pullback_setup = True
+
+    if not candidate_side:
+        return BTCSingal(
+            timestamp=now,
+            side="NO_TRADE",
+            probability=0,
+            explanation="Цена не у ключевого уровня и нет трендового отката.",
+        )
+
+    sweep = False
+    if level_touched is not None:
+        sweep = is_liquidity_sweep(
+            candles_5m[-6:] if len(candles_5m) >= 6 else candles_5m,
+            level_touched,
+            "long" if candidate_side == "LONG" else "short",
+        )
+
     rsi_div = False
     if candidate_side == "LONG":
         rsi_div = detect_rsi_divergence(closes_15m, rsi_15m, "bullish") or detect_rsi_divergence(
             closes_5m, rsi_5m, "bullish"
         )
-    else:
+    elif candidate_side == "SHORT":
         rsi_div = detect_rsi_divergence(closes_15m, rsi_15m, "bearish") or detect_rsi_divergence(
             closes_5m, rsi_5m, "bearish"
         )
 
-    atr_15m = compute_atr(candles_15m[-60:]) if len(candles_15m) >= 15 else None
+    ma_trend_ok = False
+    if ema50_1h and ema200_1h:
+        if candidate_side == "LONG" and current_price >= ema50_1h >= ema200_1h:
+            ma_trend_ok = True
+        if candidate_side == "SHORT" and current_price <= ema50_1h <= ema200_1h:
+            ma_trend_ok = True
+
     stop_buffer = atr_15m * 0.8 if atr_15m else current_price * 0.003
 
     if candidate_side == "LONG":
@@ -364,17 +417,6 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
     )
     bb_extreme = bb_extreme_15 or bb_extreme_5
 
-    # EMA50/EMA200 на 1H
-    closes_1h = [c.close for c in candles_1h]
-    ema50_1h = compute_ema(closes_1h, 50) if len(closes_1h) >= 50 else None
-    ema200_1h = compute_ema(closes_1h, 200) if len(closes_1h) >= 200 else None
-    ma_trend_ok = False
-    if ema50_1h and ema200_1h:
-        if candidate_side == "LONG" and current_price >= ema50_1h >= ema200_1h:
-            ma_trend_ok = True
-        if candidate_side == "SHORT" and current_price <= ema50_1h <= ema200_1h:
-            ma_trend_ok = True
-
     # Ордерфлоу / киты (заглушка, Codex реализует внутри analyze_orderflow)
     orderflow = await analyze_orderflow(BTC_SYMBOL)
 
@@ -386,7 +428,7 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
         "candidate_side": candidate_side,
         "global_trend": global_trend,
         "local_trend": local_trend,
-        "near_key_level": True,
+        "near_key_level": not pullback_setup,
         "liquidity_sweep": sweep,
         "volume_climax": volume_spike,
         "rsi_divergence": rsi_div,
@@ -401,18 +443,26 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
         "market_regime": market_info.get("regime", "neutral"),
     }
 
-    raw_score = compute_score(context)
+    if pullback_setup:
+        rsi_strength = (
+            min(15, max(0, int(45 - rsi_15m_value)))
+            if candidate_side == "LONG"
+            else min(15, max(0, int(rsi_15m_value - 55)))
+        )
+        raw_score = (60 + rsi_strength) if candidate_side == "LONG" else -(60 + rsi_strength)
+    else:
+        raw_score = compute_score(context)
 
-    if abs(raw_score) < 70:
+    if abs(raw_score) < 60:
         return BTCSingal(
             timestamp=now,
             side="NO_TRADE",
             probability=0,
-            explanation="Сильного разворотного сетапа нет (score < 70).",
+            explanation="Сильного разворотного сетапа нет (score < 60).",
             raw_score=raw_score,
         )
 
-    side = "LONG" if raw_score >= 70 else "SHORT"
+    side = "LONG" if raw_score >= 60 else "SHORT"
     score_for_message = min(100, abs(raw_score))
     entry_mid = (entry_from + entry_to) / 2
     rr = abs((tp1 - entry_mid) / (entry_mid - sl)) if (entry_mid - sl) != 0 else None
@@ -427,7 +477,11 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
 
     explanation_parts = [
         f"1D/4H тренд: {global_trend}, 1H локально: {local_trend}",
-        f"Цена у уровня {level_touched:.2f}, поиск {side}",
+        (
+            f"Откат к EMA50 1H ({ema50_1h:.2f}), поиск {side}"
+            if pullback_setup and ema50_1h
+            else f"Цена у уровня {level_touched:.2f}, поиск {side}"
+        ),
         "Liquidity sweep присутствует" if sweep else "Снос ликвидности не подтверждён",
         "Объёмный всплеск на закрытии" if volume_spike else "Без объёмного климакса",
         "RSI дивергенция обнаружена" if rsi_div else "Дивергенция не подтверждена",
@@ -435,6 +489,9 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
         "Bollinger: экстремум + возврат внутрь" if bb_extreme else "Bollinger: явного экстремума нет",
         "EMA50/EMA200 в сторону сделки" if ma_trend_ok else "EMA50/EMA200 не подтверждают тренд",
     ]
+
+    if pullback_setup:
+        explanation_parts.append("Трендовый pullback с RSI и разворотной свечой.")
 
     if orderflow.get("orderflow_bullish") or orderflow.get("orderflow_bearish"):
         explanation_parts.append(
