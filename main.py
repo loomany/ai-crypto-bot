@@ -406,7 +406,6 @@ def _cooldown_ready(
 def _format_signal(signal: Dict[str, Any], tier: str) -> str:
     entry_low, entry_high = signal["entry_zone"]
     is_long = signal.get("direction") == "long"
-    direction_text = "ЛОНГ" if is_long else "ШОРТ"
     symbol = signal["symbol"]
     if symbol.endswith("USDT"):
         base = symbol[:-4]
@@ -421,11 +420,6 @@ def _format_signal(signal: Dict[str, Any], tier: str) -> str:
     tp2_pct = (signal["tp2"] / entry_mid - 1) * 100
     sl_pct = (signal["sl"] / entry_mid - 1) * 100
 
-    base_capital = 100
-    tp1_usdt = base_capital * tp1_pct / 100
-    tp2_usdt = base_capital * tp2_pct / 100
-    sl_usdt = base_capital * sl_pct / 100
-
     raw_reason = signal.get("reason")
     reason = raw_reason if isinstance(raw_reason, dict) else {}
     trend_1d = _trend_short_text(reason.get("trend_1d", "neutral"))
@@ -437,50 +431,47 @@ def _format_signal(signal: Dict[str, Any], tier: str) -> str:
     rr = reason.get("rr", 0.0)
 
     short_block = (
-        "Кратко:\n"
-        f"• 1D тренд: {trend_1d}\n"
-        f"• 4H тренд: {trend_4h}\n"
+        "Краткий рыночный контекст:\n"
+        f"• 1D тренд: {trend_1d} (оценка направления)\n"
+        f"• 4H тренд: {trend_4h} (оценка направления)\n"
         f"• RSI 1H: {rsi_1h:.1f} ({rsi_zone})\n"
         f"• Объём: {volume_ratio:.2f}x от среднего {volume_avg:.2f}\n"
-        f"• R:R: {rr:.2f} : 1"
+        f"• R:R: {rr:.2f} : 1 (расчётный ориентир)"
     )
 
-    tier_title = "🔥 AI-сигнал (FREE)" if tier == "free" else "🧊 AI-сигнал (PRO)"
-    prob = int(signal.get("score", 0))
-    if tier == "free":
-        probability_line = (
-            f"Вероятность (оценка модели): {prob}%\n"
-            f"FREE порог: {FREE_MIN_SCORE}%\n"
-            "⚠️ Оценка модели, не гарантия."
-        )
-    else:
-        probability_line = f"📌 Вероятность: {prob}%"
-
-    direction_block = (
-        f"📈 Тип: {direction_text}\nВход: ниже\nSL: ниже входа\nTP: выше входа"
+    tier_title = "🔥 AI-сценарий"
+    score = int(signal.get("score", 0))
+    scenario_text = "LONG" if is_long else "SHORT"
+    scenario_line = f"📈 Сценарий: возможный {scenario_text}" if is_long else f"📉 Сценарий: возможный {scenario_text}"
+    timeframe_line = "⏱ Таймфрейм анализа: 1H"
+    condition_line = (
+        "• сценарий актуален, если цена не закрепляется ниже зоны"
         if is_long
-        else f"📉 Тип: {direction_text}\nВход: выше\nSL: выше входа\nTP: ниже входа"
+        else "• сценарий актуален, если цена не закрепляется выше зоны"
     )
+    stop_condition = "ниже" if is_long else "выше"
 
     text = (
         f"{tier_title}\n\n"
         f"Монета: {symbol_text}\n"
-        f"{direction_block}\n\n"
-        "Зона входа:\n"
+        f"{scenario_line}\n"
+        f"{timeframe_line}\n\n"
+        "Зона интереса (POI):\n"
         f"• {entry_low:.4f} – {entry_high:.4f}\n"
-        "Стоп (SL):\n"
-        f"• {signal['sl']:.4f}  ({_format_signed_number(sl_pct)}%)\n\n"
-        "Цели:\n"
-        f"• TP1: {signal['tp1']:.4f}  ({_format_signed_number(tp1_pct)}%)\n"
-        f"• TP2: {signal['tp2']:.4f}  ({_format_signed_number(tp2_pct)}%)\n\n"
-        "Пример для позиции 100 USDT:\n"
-        f"• До TP1: {_format_signed_number(tp1_usdt)} USDT\n"
-        f"• До TP2: {_format_signed_number(tp2_usdt)} USDT\n"
-        f"• До SL: {_format_signed_number(sl_usdt)} USDT\n\n"
-        f"{probability_line}\n\n"
+        "Условие реализации сценария:\n"
+        f"{condition_line}\n"
+        "• рекомендуется дождаться подтверждения на 5–15m\n\n"
+        "Уровень отмены сценария (Stop):\n"
+        f"• {signal['sl']:.4f}  ({_format_signed_number(sl_pct)}%) — закрепление {stop_condition} на 1H\n\n"
+        "Потенциальные цели движения:\n"
+        f"• 🎯 Цель 1: {signal['tp1']:.4f}  ({_format_signed_number(tp1_pct)}%)\n"
+        f"• 🎯 Цель 2: {signal['tp2']:.4f}  ({_format_signed_number(tp2_pct)}%)\n\n"
+        "Оценка модели:\n"
+        f"🧠 Score: {score} / 100\n\n"
         f"{short_block}\n\n"
-        "⚠️ Бот не знает твоего депозита и не даёт размер позиции.\n"
-        "Решение по объёму входа принимаешь сам.\n"
+        "⚠️ Бот не знает твой депозит и не управляет рисками. "
+        "Решение о входе, объёме позиции и уровне риска ты принимаешь самостоятельно.\n\n"
+        "📌 Данный сценарий предназначен для аналитики рынка и не является инвестиционной рекомендацией.\n\n"
         "Источник данных: Binance"
     )
     return text
