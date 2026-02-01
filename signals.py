@@ -438,7 +438,7 @@ async def _prepare_signal(
         "sl": round(sl, 4),
         "tp1": round(tp1, 4),
         "tp2": round(tp2, 4),
-        "score": min(95, abs(raw_score)),
+        "score": min(100, abs(raw_score)),
         "reason": {
             "trend_1d": global_trend,
             "trend_4h": h4_structure["trend"],

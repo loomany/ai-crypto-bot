@@ -488,4 +488,5 @@ def compute_score(context: Dict) -> int:
     elif regime in ("risk_on", "risk_off"):
         score -= 5
 
-    return int(round(score))
+    final_score = int(round(score))
+    return max(-100, min(100, final_score))
