@@ -158,7 +158,15 @@ async def _gather_klines(symbol: str) -> Optional[Dict[str, List[Candle]]]:
 
 
 async def _get_hourly_snapshot(symbol: str) -> Optional[Dict[str, float]]:
-    data = await fetch_json(KLINES_URL, params={"symbol": symbol, "interval": "1h", "limit": 2})
+    print(f"[BINANCE] request {symbol} klines")
+    try:
+        data = await fetch_json(
+            KLINES_URL,
+            params={"symbol": symbol, "interval": "1h", "limit": 2},
+        )
+    except Exception as exc:
+        print(f"[BINANCE] ERROR {symbol}: {exc}")
+        return None
     if not data or len(data) < 1:
         return None
 

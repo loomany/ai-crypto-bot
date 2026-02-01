@@ -34,11 +34,17 @@ async def _fetch_agg_trades(
     else:
         base_url = f"{BINANCE_FAPI_BASE}/fapi/v1/aggTrades"
     params = {"symbol": symbol, "startTime": start_ms, "endTime": end_ms, "limit": 1000}
-    data = await fetch_json(
-        base_url,
-        params=params,
-        session=session,
-    )
+    endpoint = "aggTrades spot" if market == "spot" else "aggTrades futures"
+    print(f"[BINANCE] request {symbol} {endpoint}")
+    try:
+        data = await fetch_json(
+            base_url,
+            params=params,
+            session=session,
+        )
+    except Exception as exc:
+        print(f"[BINANCE] ERROR {symbol}: {exc}")
+        return None
     if isinstance(data, list):
         return data
     return None
@@ -94,11 +100,21 @@ async def _get_quote_volumes(session: aiohttp.ClientSession) -> Dict[str, float]
     if cached and now - float(_whales_state.get("quote_volume_ts", 0.0)) < 300:
         return cached
 
-    spot_data = await fetch_json(f"{BINANCE_SPOT_BASE}/ticker/24hr", session=session)
-    futures_data = await fetch_json(
-        f"{BINANCE_FAPI_BASE}/fapi/v1/ticker/24hr",
-        session=session,
-    )
+    print("[BINANCE] request ALL ticker/24hr spot")
+    try:
+        spot_data = await fetch_json(f"{BINANCE_SPOT_BASE}/ticker/24hr", session=session)
+    except Exception as exc:
+        print(f"[BINANCE] ERROR ALL: {exc}")
+        spot_data = None
+    print("[BINANCE] request ALL ticker/24hr futures")
+    try:
+        futures_data = await fetch_json(
+            f"{BINANCE_FAPI_BASE}/fapi/v1/ticker/24hr",
+            session=session,
+        )
+    except Exception as exc:
+        print(f"[BINANCE] ERROR ALL: {exc}")
+        futures_data = None
 
     volumes: Dict[str, float] = {}
     for row in spot_data or []:
@@ -133,126 +149,134 @@ def _threshold_for_volume(quote_volume: float) -> float:
 async def whales_scan_once(bot) -> None:
     start = time.time()
     BUDGET = 45
+    print("[WHALE] scan_once start")
     cycle_start = time.time()
-    subscribers = pro_list()
-    mark_tick("whales_flow", extra=f"подписчиков: {len(subscribers)}")
-    if not subscribers:
-        return
+    try:
+        subscribers = pro_list()
+        mark_tick("whales_flow", extra=f"подписчиков: {len(subscribers)}")
+        if not subscribers:
+            return
 
-    if not hasattr(whales_scan_once, "state"):
-        whales_scan_once.state = {
-            "pairs": [],
-            "cursor": 0,
-        }
-    state = whales_scan_once.state
+        if not hasattr(whales_scan_once, "state"):
+            whales_scan_once.state = {
+                "pairs": [],
+                "cursor": 0,
+            }
+        state = whales_scan_once.state
 
-    session = await get_shared_session()
-    pairs = state["pairs"]
-    cursor = state["cursor"]
-    if not pairs or cursor >= len(pairs):
-        pairs = await _get_usdt_pairs(session)
-        cursor = 0
-        state["pairs"] = pairs
-    if not pairs:
-        mark_error("whales_flow", "no symbols to scan")
-        return
+        session = await get_shared_session()
+        pairs = state["pairs"]
+        cursor = state["cursor"]
+        if not pairs or cursor >= len(pairs):
+            pairs = await _get_usdt_pairs(session)
+            cursor = 0
+            state["pairs"] = pairs
+        if not pairs:
+            mark_error("whales_flow", "no symbols to scan")
+            return
 
-    chunk = pairs[cursor : cursor + CHUNK_SIZE]
-    state["cursor"] = cursor + len(chunk)
+        chunk = pairs[cursor : cursor + CHUNK_SIZE]
+        state["cursor"] = cursor + len(chunk)
 
-    quote_volumes = await _get_quote_volumes(session)
+        quote_volumes = await _get_quote_volumes(session)
 
-    now = time.time()
-    start_ms = int((now - FLOW_WINDOW_SEC) * 1000)
-    end_ms = int(now * 1000)
+        now = time.time()
+        start_ms = int((now - FLOW_WINDOW_SEC) * 1000)
+        end_ms = int(now * 1000)
 
-    flow_buffer: Dict[str, Dict[str, float]] = {}
-    for batch in _chunked(chunk, SCAN_BATCH_SIZE):
-        if time.time() - start > BUDGET:
-            break
-        tasks = [
-            asyncio.create_task(
-                _fetch_agg_trades(
-                    session,
-                    pair["symbol"],
-                    start_ms,
-                    end_ms,
-                    pair["market"],
-                )
-            )
-            for pair in batch
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        for pair, trades in zip(batch, results):
+        flow_buffer: Dict[str, Dict[str, float]] = {}
+        for batch in _chunked(chunk, SCAN_BATCH_SIZE):
             if time.time() - start > BUDGET:
+                print("[WHALE] budget exceeded, stopping early")
                 break
-            if isinstance(trades, Exception) or not trades:
-                continue
-            flow = _calc_flow(trades)
-            if not flow:
-                continue
-            symbol = pair["symbol"]
-            existing = flow_buffer.get(symbol, {"buy": 0.0, "sell": 0.0})
-            existing["buy"] += flow["buy"]
-            existing["sell"] += flow["sell"]
-            flow_buffer[symbol] = existing
+            tasks = [
+                asyncio.create_task(
+                    _fetch_agg_trades(
+                        session,
+                        pair["symbol"],
+                        start_ms,
+                        end_ms,
+                        pair["market"],
+                    )
+                )
+                for pair in batch
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    top_in: List[tuple[str, float]] = []
-    top_out: List[tuple[str, float]] = []
-    for symbol, flow in flow_buffer.items():
-        quote_volume = quote_volumes.get(symbol, 0.0)
-        threshold = _threshold_for_volume(quote_volume)
-        if flow["buy"] >= threshold:
-            top_in.append((symbol, flow["buy"]))
-        if flow["sell"] >= threshold:
-            top_out.append((symbol, flow["sell"]))
+            for pair, trades in zip(batch, results):
+                if time.time() - start > BUDGET:
+                    print("[WHALE] budget exceeded, stopping early")
+                    break
+                if isinstance(trades, Exception) or not trades:
+                    continue
+                flow = _calc_flow(trades)
+                if not flow:
+                    continue
+                symbol = pair["symbol"]
+                existing = flow_buffer.get(symbol, {"buy": 0.0, "sell": 0.0})
+                existing["buy"] += flow["buy"]
+                existing["sell"] += flow["sell"]
+                flow_buffer[symbol] = existing
 
-    top_in.sort(key=lambda item: item[1], reverse=True)
-    top_out.sort(key=lambda item: item[1], reverse=True)
-    top_in = top_in[:5]
-    top_out = top_out[:5]
+        top_in: List[tuple[str, float]] = []
+        top_out: List[tuple[str, float]] = []
+        for symbol, flow in flow_buffer.items():
+            quote_volume = quote_volumes.get(symbol, 0.0)
+            threshold = _threshold_for_volume(quote_volume)
+            if flow["buy"] >= threshold:
+                top_in.append((symbol, flow["buy"]))
+            if flow["sell"] >= threshold:
+                top_out.append((symbol, flow["sell"]))
 
-    found = len(top_in) + len(top_out)
-    sent = 0
-    if found:
-        lines = [
-            f"🐳 Whale Flow ({FLOW_WINDOW_SEC} сек)",
-            "",
-            "ВХОД:",
-        ]
-        if top_in:
-            lines.extend(
-                f"{_format_symbol(symbol)} — {_fmt_usd(amount)}" for symbol, amount in top_in
-            )
-        else:
-            lines.append("—")
+        top_in.sort(key=lambda item: item[1], reverse=True)
+        top_out.sort(key=lambda item: item[1], reverse=True)
+        top_in = top_in[:5]
+        top_out = top_out[:5]
 
-        lines.extend(["", "ВЫХОД:"])
-        if top_out:
-            lines.extend(
-                f"{_format_symbol(symbol)} — {_fmt_usd(amount)}" for symbol, amount in top_out
-            )
-        else:
-            lines.append("—")
+        found = len(top_in) + len(top_out)
+        sent = 0
+        if found:
+            lines = [
+                f"🐳 Whale Flow ({FLOW_WINDOW_SEC} сек)",
+                "",
+                "ВХОД:",
+            ]
+            if top_in:
+                lines.extend(
+                    f"{_format_symbol(symbol)} — {_fmt_usd(amount)}"
+                    for symbol, amount in top_in
+                )
+            else:
+                lines.append("—")
 
-        text = "\n".join(lines)
+            lines.extend(["", "ВЫХОД:"])
+            if top_out:
+                lines.extend(
+                    f"{_format_symbol(symbol)} — {_fmt_usd(amount)}"
+                    for symbol, amount in top_out
+                )
+            else:
+                lines.append("—")
 
-        for chat_id in subscribers:
-            try:
-                await bot.send_message(chat_id=chat_id, text=text)
-            except Exception:
-                continue
+            text = "\n".join(lines)
 
-        sent = 1
+            for chat_id in subscribers:
+                try:
+                    await bot.send_message(chat_id=chat_id, text=text)
+                except Exception:
+                    continue
 
-    cycle_sec = time.time() - cycle_start
-    mark_ok(
-        "whales_flow",
-        extra=(
-            f"checked={len(chunk)} found={found} sent={sent} cycle={cycle_sec:.1f}s"
-        ),
-    )
+            sent = 1
+
+        cycle_sec = time.time() - cycle_start
+        mark_ok(
+            "whales_flow",
+            extra=(
+                f"checked={len(chunk)} found={found} sent={sent} cycle={cycle_sec:.1f}s"
+            ),
+        )
+    finally:
+        print("[WHALE] scan_once end")
 
 
 async def whales_market_flow_worker(bot):

@@ -165,7 +165,13 @@ async def evaluate_open_signals(
                 "startTime": start_ms,
                 "limit": 1000,
             }
-            data = await fetch_json(KLINES_URL, params=params)
+            symbol = signal["symbol"]
+            print(f"[BINANCE] request {symbol} klines")
+            try:
+                data = await fetch_json(KLINES_URL, params=params)
+            except Exception as exc:
+                print(f"[BINANCE] ERROR {symbol}: {exc}")
+                continue
             if not data:
                 continue
 

@@ -33,7 +33,12 @@ async def fetch_klines(symbol: str, interval: str, limit: int) -> List[Candle]:
         "interval": interval,
         "limit": limit,
     }
-    raw = await _fetch_json(url, params)
+    print(f"[BINANCE] request {symbol} klines")
+    try:
+        raw = await _fetch_json(url, params)
+    except Exception as exc:
+        print(f"[BINANCE] ERROR {symbol}: {exc}")
+        raise
     candles: List[Candle] = []
     if not raw:
         return candles

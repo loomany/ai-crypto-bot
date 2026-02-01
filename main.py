@@ -710,6 +710,7 @@ def _select_signals_for_cycle(signals: List[Dict[str, Any]]) -> List[Dict[str, A
 async def pump_scan_once(bot: Bot) -> None:
     start = time.time()
     BUDGET = 45
+    print("[PUMP] scan_once start")
     if not hasattr(pump_scan_once, "state"):
         pump_scan_once.state = {
             "last_sent": {},
@@ -717,116 +718,128 @@ async def pump_scan_once(bot: Bot) -> None:
             "cursor": 0,
         }
 
-    state = pump_scan_once.state
-    subscribers = pro_list()
-    mark_tick("pumpdump", extra=f"подписчиков: {len(subscribers)}")
-    if not subscribers:
-        return
-
-    session = await get_shared_session()
-    symbols = state["symbols"]
-    cursor = state["cursor"]
-    if not symbols or cursor >= len(symbols):
-        symbols = await build_pump_symbol_list(session)
-        cursor = 0
-        state["symbols"] = symbols
-
-    if not symbols:
-        mark_error("pumpdump", "no symbols to scan")
-        return
-
-    cycle_start = time.time()
     try:
-        signals, stats, next_cursor = await asyncio.wait_for(
-            scan_pumps_chunk(
-                symbols,
-                start_idx=cursor,
-                session=session,
-                return_stats=True,
-            ),
-            timeout=BUDGET,
-        )
-    except asyncio.TimeoutError:
-        return
-    state["cursor"] = next_cursor
+        state = pump_scan_once.state
+        subscribers = pro_list()
+        mark_tick("pumpdump", extra=f"подписчиков: {len(subscribers)}")
+        if not subscribers:
+            return
 
-    now_min = int(time.time() // 60)
-    sent_count = 0
-    last_sent: dict[str, int] = state["last_sent"]
+        session = await get_shared_session()
+        symbols = state["symbols"]
+        cursor = state["cursor"]
+        if not symbols or cursor >= len(symbols):
+            symbols = await build_pump_symbol_list(session)
+            cursor = 0
+            state["symbols"] = symbols
 
-    for sig in signals:
-        if time.time() - start > BUDGET:
-            break
-        symbol = sig["symbol"]
+        if not symbols:
+            mark_error("pumpdump", "no symbols to scan")
+            return
 
-        if last_sent.get(symbol) == now_min:
-            continue
+        cycle_start = time.time()
+        try:
+            signals, stats, next_cursor = await asyncio.wait_for(
+                scan_pumps_chunk(
+                    symbols,
+                    start_idx=cursor,
+                    session=session,
+                    return_stats=True,
+                ),
+                timeout=BUDGET,
+            )
+        except asyncio.TimeoutError:
+            return
+        state["cursor"] = next_cursor
 
-        text = format_pump_message(sig)
+        now_min = int(time.time() // 60)
+        sent_count = 0
+        last_sent: dict[str, int] = state["last_sent"]
 
-        last_sent[symbol] = now_min
-        for chat_id in subscribers:
-            try:
-                await bot.send_message(chat_id, text, parse_mode="Markdown")
-                sent_count += 1
-            except Exception:
+        for sig in signals:
+            if time.time() - start > BUDGET:
+                print("[PUMP] budget exceeded, stopping early")
+                break
+            symbol = sig["symbol"]
+
+            if last_sent.get(symbol) == now_min:
                 continue
 
-    cycle_sec = time.time() - cycle_start
-    mark_ok(
-        "pumpdump",
-        extra=(
-            f"checked={stats.get('checked', 0)} found={stats.get('found', 0)} "
-            f"sent={sent_count} cycle={cycle_sec:.1f}s"
-        ),
-    )
+            text = format_pump_message(sig)
+
+            last_sent[symbol] = now_min
+            for chat_id in subscribers:
+                try:
+                    await bot.send_message(chat_id, text, parse_mode="Markdown")
+                    sent_count += 1
+                except Exception:
+                    continue
+
+        cycle_sec = time.time() - cycle_start
+        mark_ok(
+            "pumpdump",
+            extra=(
+                f"checked={stats.get('checked', 0)} found={stats.get('found', 0)} "
+                f"sent={sent_count} cycle={cycle_sec:.1f}s"
+            ),
+        )
+    finally:
+        print("[PUMP] scan_once end")
 
 
 async def ai_scan_once() -> None:
     start = time.time()
     BUDGET = 45
-    mark_tick("ai_signals", extra="сканирую рынок...")
+    print("[AI] scan_once start")
+    try:
+        mark_tick("ai_signals", extra="сканирую рынок...")
 
-    symbols = await get_all_usdt_symbols()
-    if not symbols:
-        mark_error("ai_signals", "no symbols to scan")
-        return
+        symbols = await get_all_usdt_symbols()
+        if not symbols:
+            mark_error("ai_signals", "no symbols to scan")
+            return
 
-    chunks = [
-        symbols[i : i + AI_CHUNK_SIZE] for i in range(0, len(symbols), AI_CHUNK_SIZE)
-    ]
-    if not hasattr(ai_scan_once, "chunk_idx"):
-        ai_scan_once.chunk_idx = 0
-    if ai_scan_once.chunk_idx >= len(chunks):
-        ai_scan_once.chunk_idx = 0
-    chunk = chunks[ai_scan_once.chunk_idx]
-    ai_scan_once.chunk_idx = (ai_scan_once.chunk_idx + 1) % len(chunks)
+        chunks = [
+            symbols[i : i + AI_CHUNK_SIZE] for i in range(0, len(symbols), AI_CHUNK_SIZE)
+        ]
+        if not hasattr(ai_scan_once, "chunk_idx"):
+            ai_scan_once.chunk_idx = 0
+        if ai_scan_once.chunk_idx >= len(chunks):
+            ai_scan_once.chunk_idx = 0
+        chunk = chunks[ai_scan_once.chunk_idx]
+        ai_scan_once.chunk_idx = (ai_scan_once.chunk_idx + 1) % len(chunks)
 
-    signals = await scan_market(
-        symbols=chunk,
-        use_btc_gate=False,
-        free_mode=True,
-        min_score=FREE_MIN_SCORE,
-        return_stats=False,
-        time_budget=BUDGET,
-    )
-    print("SCAN OK", len(signals))
-    sent_count = 0
-    for signal in _select_signals_for_cycle(signals):
-        if time.time() - start > BUDGET:
-            break
-        score = signal.get("score", 0)
-        if score < FREE_MIN_SCORE:
-            continue
-        print(
-            f"[ai_signals] SEND FREE {signal['symbol']} {signal['direction']} score={score}"
+        signals = await scan_market(
+            symbols=chunk,
+            use_btc_gate=False,
+            free_mode=True,
+            min_score=FREE_MIN_SCORE,
+            return_stats=False,
+            time_budget=BUDGET,
         )
-        await send_signal_to_all(signal, "free")
-        sent_count += 1
-    mark_ok(
-        "ai_signals",
-        extra=f"chunk={ai_scan_once.chunk_idx}/{len(chunks)} checked={len(chunk)} sent={sent_count}",
-    )
+        print("SCAN OK", len(signals))
+        sent_count = 0
+        for signal in _select_signals_for_cycle(signals):
+            if time.time() - start > BUDGET:
+                print("[AI] budget exceeded, stopping early")
+                break
+            score = signal.get("score", 0)
+            if score < FREE_MIN_SCORE:
+                continue
+            print(
+                f"[ai_signals] SEND FREE {signal['symbol']} {signal['direction']} score={score}"
+            )
+            await send_signal_to_all(signal, "free")
+            sent_count += 1
+        mark_ok(
+            "ai_signals",
+            extra=(
+                f"chunk={ai_scan_once.chunk_idx}/{len(chunks)} "
+                f"checked={len(chunk)} sent={sent_count}"
+            ),
+        )
+    finally:
+        print("[AI] scan_once end")
 
 
 def _pro_symbol_cooldown_ready(symbol: str) -> bool:

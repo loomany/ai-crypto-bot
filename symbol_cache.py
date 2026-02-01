@@ -79,7 +79,12 @@ async def get_top_usdt_symbols_by_volume(
     *,
     session: aiohttp.ClientSession | None = None,
 ) -> List[str]:
-    data = await fetch_json(f"{BINANCE_SPOT_BASE}/ticker/24hr", session=session)
+    print("[BINANCE] request ALL ticker/24hr")
+    try:
+        data = await fetch_json(f"{BINANCE_SPOT_BASE}/ticker/24hr", session=session)
+    except Exception as exc:
+        print(f"[BINANCE] ERROR ALL: {exc}")
+        return []
     if not data:
         return []
 

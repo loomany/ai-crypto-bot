@@ -90,17 +90,25 @@ def mark_warn(key: str, warn: str):
 async def safe_worker_loop(module_name: str, scan_once_coro):
     while True:
         cycle_start = time.time()
+        timeout_s = 55
+        print(f"[{module_name}] cycle start")
 
         # 🔴 HEARTBEAT — ВСЕГДА, СРАЗУ
         mark_tick(module_name, extra="cycle heartbeat")
 
+        t0 = time.time()
         try:
             # ❗ Ограничиваем ВЕСЬ scan_once по времени
-            await asyncio.wait_for(scan_once_coro(), timeout=55)
+            await asyncio.wait_for(scan_once_coro(), timeout=timeout_s)
+            print(f"[{module_name}] cycle ok, dt={time.time() - t0:.1f}s")
         except asyncio.TimeoutError:
-            mark_warn(module_name, "timeout >55s")
+            print(
+                f"[{module_name}] TIMEOUT >{timeout_s}s, dt={time.time() - t0:.1f}s"
+            )
+            mark_warn(module_name, f"timeout >{timeout_s}s")
         except Exception as e:
-            mark_error(module_name, f"{type(e).__name__}: {e}")
+            print(f"[{module_name}] ERROR {type(e).__name__}: {e}")
+            mark_error(module_name, str(e))
 
         elapsed = time.time() - cycle_start
         mark_tick(module_name, extra=f"cycle={int(elapsed)}s")
