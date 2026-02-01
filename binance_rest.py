@@ -17,6 +17,8 @@ _SHARED_LOCK = asyncio.Lock()
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 _KLINES_CACHE: dict[tuple[str, str, int], tuple[float, list]] = {}
+_AGGTRADES_CACHE: dict[tuple[str, str, int, int], tuple[float, list]] = {}
+
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name)
     if value is None:
@@ -29,13 +31,15 @@ def _env_int(name: str, default: int) -> int:
 
 _KLINES_CACHE_TTL_SEC_DEFAULT = 20
 _KLINES_CACHE_TTL_BY_INTERVAL = {
-    "1d": _env_int("KLINES_TTL_1D", 60 * 15),
-    "4h": _env_int("KLINES_TTL_4H", 60 * 5),
-    "1h": _env_int("KLINES_TTL_1H", 60 * 2),
-    "15m": _env_int("KLINES_TTL_15M", 30),
-    "5m": _env_int("KLINES_TTL_5M", 15),
+    "1d": _env_int("KLINES_TTL_1D", 60 * 30),
+    "4h": _env_int("KLINES_TTL_4H", 60 * 15),
+    "1h": _env_int("KLINES_TTL_1H", 60 * 7),
+    "15m": _env_int("KLINES_TTL_15M", 60 * 3),
+    "5m": _env_int("KLINES_TTL_5M", 60),
 }
 _KLINES_CACHE_LOCK = asyncio.Lock()
+_AGGTRADES_CACHE_LOCK = asyncio.Lock()
+_AGGTRADES_CACHE_TTL_SEC = _env_int("AGGTRADES_TTL_SEC", 10)
 _BINANCE_REQUEST_MODULE = ContextVar("binance_request_module", default=None)
 
 
@@ -60,6 +64,8 @@ async def close_shared_session() -> None:
 # ---- optional concurrency gate (reduces socket spikes) ----
 # One more layer in addition to rate limiter/weight tracker.
 BINANCE_SEM = asyncio.Semaphore(int(os.getenv("BINANCE_HTTP_CONCURRENCY", "10")))
+KLINES_SEM = asyncio.Semaphore(int(os.getenv("BINANCE_KLINES_CONCURRENCY", "6")))
+AGGTRADES_SEM = asyncio.Semaphore(int(os.getenv("BINANCE_AGGTRADES_CONCURRENCY", "8")))
 
 
 @contextmanager
@@ -188,9 +194,49 @@ async def fetch_klines(symbol: str, interval: str, limit: int) -> Optional[list]
         "limit": limit,
     }
     _track_klines_request()
-    data = await fetch_json(url, params)
+    async with KLINES_SEM:
+        data = await fetch_json(url, params)
     if not isinstance(data, list):
         return None
     async with _KLINES_CACHE_LOCK:
         _KLINES_CACHE[cache_key] = (now, data)
+    return data
+
+
+async def fetch_agg_trades(
+    symbol: str,
+    market: str,
+    start_ms: int,
+    end_ms: int,
+    limit: int,
+    *,
+    window_sec: int,
+) -> Optional[list]:
+    cache_key = (symbol, market, window_sec, limit)
+    now = time.time()
+    async with _AGGTRADES_CACHE_LOCK:
+        cached = _AGGTRADES_CACHE.get(cache_key)
+        if cached and now - cached[0] < _AGGTRADES_CACHE_TTL_SEC:
+            print(
+                f"[binance_rest] aggTrades {symbol} {market} (cache_hit=True)"
+            )
+            return cached[1]
+
+    print(f"[binance_rest] aggTrades {symbol} {market} (cache_hit=False)")
+    if market == "spot":
+        url = f"{BINANCE_BASE_URL}/aggTrades"
+    else:
+        url = "https://fapi.binance.com/fapi/v1/aggTrades"
+    params = {
+        "symbol": symbol,
+        "startTime": start_ms,
+        "endTime": end_ms,
+        "limit": limit,
+    }
+    async with AGGTRADES_SEM:
+        data = await fetch_json(url, params)
+    if not isinstance(data, list):
+        return None
+    async with _AGGTRADES_CACHE_LOCK:
+        _AGGTRADES_CACHE[cache_key] = (now, data)
     return data

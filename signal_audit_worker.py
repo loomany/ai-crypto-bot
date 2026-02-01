@@ -1,7 +1,7 @@
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from binance_rest import fetch_json
+from binance_rest import binance_request_context, fetch_klines
 from health import (
     MODULES,
     mark_ok,
@@ -12,8 +12,6 @@ from health import (
 )
 from signal_audit_db import fetch_open_signals, mark_signal_closed
 
-BINANCE_BASE_URL = "https://api.binance.com/api/v3"
-KLINES_URL = f"{BINANCE_BASE_URL}/klines"
 MAX_SIGNAL_AGE_SEC = 60 * 60 * 24
 
 
@@ -164,28 +162,17 @@ async def evaluate_open_signals(
         if start_ts is not None and time.time() - start_ts > budget_sec:
             break
         try:
-            sent_at = int(signal["sent_at"])
-            start_ms = sent_at * 1000
-            params = {
-                "symbol": signal["symbol"],
-                "interval": "5m",
-                "startTime": start_ms,
-                "limit": 1000,
-            }
             symbol = signal["symbol"]
-            print(f"[BINANCE] request {symbol} klines")
-            try:
-                data = await fetch_json(KLINES_URL, params=params)
-            except Exception as exc:
-                print(f"[BINANCE] ERROR {symbol}: {exc}")
-                continue
+            sent_at = int(signal["sent_at"])
+            with binance_request_context("signal_audit"):
+                data = await fetch_klines(symbol, "5m", 1000)
             if not data:
                 continue
 
             candles = []
             for item in data:
                 parsed = _parse_kline(item)
-                if parsed:
+                if parsed and parsed["open_time"] >= sent_at * 1000:
                     candles.append(parsed)
 
             if not candles:

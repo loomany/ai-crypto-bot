@@ -5,7 +5,11 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from binance_rest import binance_request_context, fetch_json, get_shared_session
+from binance_rest import (
+    binance_request_context,
+    fetch_agg_trades,
+    get_shared_session,
+)
 from health import (
     MODULES,
     get_request_count,
@@ -20,9 +24,6 @@ from health import (
 from market_cache import get_futures_24h, get_spot_24h
 from pro_db import pro_list
 from symbol_cache import get_futures_usdt_symbols, get_spot_usdt_symbols
-
-BINANCE_FAPI_BASE = "https://fapi.binance.com"
-BINANCE_SPOT_BASE = "https://api.binance.com/api/v3"
 
 FLOW_WINDOW_SEC = 60
 SCAN_BATCH_SIZE = 12
@@ -45,27 +46,15 @@ async def _fetch_agg_trades(
     end_ms: int,
     market: str,
 ) -> Optional[List[Dict[str, Any]]]:
-    if market == "spot":
-        base_url = f"{BINANCE_SPOT_BASE}/aggTrades"
-    else:
-        base_url = f"{BINANCE_FAPI_BASE}/fapi/v1/aggTrades"
-    params = {
-        "symbol": symbol,
-        "startTime": start_ms,
-        "endTime": end_ms,
-        "limit": WHALE_AGGTRADES_LIMIT,
-    }
-    cache_hit = False
-    print(f"[whales_flow] aggTrades {symbol} {market} (cache_hit={cache_hit})")
-    try:
-        data = await fetch_json(
-            base_url,
-            params=params,
-            session=session,
-        )
-    except Exception as exc:
-        print(f"[BINANCE] ERROR {symbol}: {exc}")
-        return None
+    _ = session
+    data = await fetch_agg_trades(
+        symbol,
+        market,
+        start_ms,
+        end_ms,
+        WHALE_AGGTRADES_LIMIT,
+        window_sec=FLOW_WINDOW_SEC,
+    )
     if isinstance(data, list):
         return data
     return None

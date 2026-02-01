@@ -166,28 +166,28 @@ def get_klines_request_count(key: str) -> int:
 
 async def safe_worker_loop(module_name: str, scan_once_coro):
     while True:
-        cycle_start = time.time()
+        cycle_start = time.perf_counter()
         timeout_s = 55
         print(f"[{module_name}] cycle start")
 
         # 🔴 HEARTBEAT — ВСЕГДА, СРАЗУ
         mark_tick(module_name, extra="cycle heartbeat")
 
-        t0 = time.time()
+        t0 = time.perf_counter()
         try:
             # ❗ Ограничиваем ВЕСЬ scan_once по времени
             await asyncio.wait_for(scan_once_coro(), timeout=timeout_s)
-            print(f"[{module_name}] cycle ok, dt={time.time() - t0:.1f}s")
+            print(f"[{module_name}] cycle ok, dt={time.perf_counter() - t0:.2f}s")
         except asyncio.TimeoutError:
             print(
-                f"[{module_name}] TIMEOUT >{timeout_s}s, dt={time.time() - t0:.1f}s"
+                f"[{module_name}] TIMEOUT >{timeout_s}s, dt={time.perf_counter() - t0:.2f}s"
             )
             mark_warn(module_name, f"timeout >{timeout_s}s")
         except Exception as e:
             print(f"[{module_name}] ERROR {type(e).__name__}: {e}")
             mark_error(module_name, str(e))
 
-        elapsed = time.time() - cycle_start
+        elapsed = time.perf_counter() - cycle_start
         module_state = MODULES.get(module_name)
         if module_state and module_state.extra:
             mark_tick(module_name)
