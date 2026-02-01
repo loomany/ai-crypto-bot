@@ -16,7 +16,7 @@ from btc_module import (
     router as btc_router,
     btc_realtime_signal_worker,
 )
-from binance_rest import close_shared_session, get_shared_session
+from binance_rest import binance_request_context, close_shared_session, get_shared_session
 from whales_module import whales_market_flow_worker
 from pro_modules import (
     router as pro_router,
@@ -32,9 +32,11 @@ from symbol_cache import get_all_usdt_symbols, get_top_usdt_symbols_by_volume
 from market_regime import get_market_regime
 from health import (
     MODULES,
+    get_request_count,
     mark_tick,
     mark_ok,
     mark_error,
+    reset_request_count,
     safe_worker_loop,
     watchdog,
     SCAN_INTERVAL,
@@ -277,7 +279,7 @@ PRO_MIN_VOLUME_RATIO = 1.3
 PRO_SYMBOL_COOLDOWN_SEC = 60 * 60 * 6
 MAX_PRO_SIGNALS_PER_DAY = 4
 MAX_PRO_SIGNALS_PER_CYCLE = 2
-AI_CHUNK_SIZE = 8
+AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "20"))
 PRO_CHUNK_SIZE = 20
 
 LAST_PRO_SYMBOL_SENT: Dict[str, float] = {}
@@ -816,6 +818,7 @@ async def ai_scan_once() -> None:
     BUDGET = 35
     print("[AI] scan_once start")
     try:
+        reset_request_count("ai_signals")
         mark_tick("ai_signals", extra="сканирую рынок...")
 
         symbols = await get_all_usdt_symbols()
@@ -838,14 +841,15 @@ async def ai_scan_once() -> None:
         if chunk:
             update_current_symbol("ai_signals", chunk[0])
 
-        signals = await scan_market(
-            symbols=chunk,
-            use_btc_gate=False,
-            free_mode=True,
-            min_score=FREE_MIN_SCORE,
-            return_stats=False,
-            time_budget=BUDGET,
-        )
+        with binance_request_context("ai_signals"):
+            signals = await scan_market(
+                symbols=chunk,
+                use_btc_gate=False,
+                free_mode=True,
+                min_score=FREE_MIN_SCORE,
+                return_stats=False,
+                time_budget=BUDGET,
+            )
         print("SCAN OK", len(signals))
         sent_count = 0
         for signal in _select_signals_for_cycle(signals):
@@ -862,12 +866,14 @@ async def ai_scan_once() -> None:
             await send_signal_to_all(signal, "free")
             sent_count += 1
         current_symbol = MODULES.get("ai_signals").current_symbol if "ai_signals" in MODULES else None
+        req_count = get_request_count("ai_signals")
         mark_ok(
             "ai_signals",
             extra=(
                 f"progress={new_cursor}/{total} "
                 f"checked={len(chunk)}/{len(chunk)} "
-                f"current={current_symbol or '-'} cycle={int(time.time() - start)}s"
+                f"current={current_symbol or '-'} cycle={int(time.time() - start)}s "
+                f"req={req_count}"
             ),
         )
     finally:
@@ -950,18 +956,20 @@ async def pro_ai_scan_once() -> None:
     if chunk:
         update_current_symbol("pro_ai", chunk[0])
 
+    reset_request_count("pro_ai")
     try:
-        signals = await asyncio.wait_for(
-            scan_market(
-                symbols=chunk,
-                batch_size=5,
-                use_btc_gate=True,
-                free_mode=False,
-                min_score=PRO_MIN_SCORE,
-                return_stats=False,
-            ),
-            timeout=BUDGET,
-        )
+        with binance_request_context("pro_ai"):
+            signals = await asyncio.wait_for(
+                scan_market(
+                    symbols=chunk,
+                    batch_size=5,
+                    use_btc_gate=True,
+                    free_mode=False,
+                    min_score=PRO_MIN_SCORE,
+                    return_stats=False,
+                ),
+                timeout=BUDGET,
+            )
     except asyncio.TimeoutError:
         return
     now = time.time()
@@ -1003,12 +1011,14 @@ async def pro_ai_scan_once() -> None:
         buffer.pop(symbol, None)
         buffer_timestamps.pop(symbol, None)
     current_symbol = MODULES.get("pro_ai").current_symbol if "pro_ai" in MODULES else None
+    req_count = get_request_count("pro_ai")
     mark_ok(
         "pro_ai",
         extra=(
             f"progress={new_cursor}/{total} "
             f"checked={len(chunk)}/{len(chunk)} "
-            f"current={current_symbol or '-'} cycle={int(time.time() - start)}s"
+            f"current={current_symbol or '-'} cycle={int(time.time() - start)}s "
+            f"req={req_count}"
         ),
     )
 

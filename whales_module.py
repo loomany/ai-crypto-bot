@@ -1,15 +1,18 @@
 import asyncio
+import os
 import time
 from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from binance_rest import fetch_json, get_shared_session
+from binance_rest import binance_request_context, fetch_json, get_shared_session
 from health import (
     MODULES,
+    get_request_count,
     mark_tick,
     mark_ok,
     mark_error,
+    reset_request_count,
     safe_worker_loop,
     update_module_progress,
     update_current_symbol,
@@ -25,6 +28,9 @@ FLOW_WINDOW_SEC = 60
 SCAN_BATCH_SIZE = 12
 CHUNK_SIZE = 50
 PRIORITY_TOP_N = 50
+WHALE_UNIVERSE_TOP_N = int(os.getenv("WHALE_UNIVERSE_TOP_N", "300"))
+WHALE_SCAN_TAIL_EVERY = int(os.getenv("WHALE_SCAN_TAIL_EVERY", "10"))
+WHALE_AGGTRADES_LIMIT = int(os.getenv("WHALE_AGGTRADES_LIMIT", "500"))
 
 _whales_state = {
     "quote_volume": {},
@@ -43,7 +49,12 @@ async def _fetch_agg_trades(
         base_url = f"{BINANCE_SPOT_BASE}/aggTrades"
     else:
         base_url = f"{BINANCE_FAPI_BASE}/fapi/v1/aggTrades"
-    params = {"symbol": symbol, "startTime": start_ms, "endTime": end_ms, "limit": 1000}
+    params = {
+        "symbol": symbol,
+        "startTime": start_ms,
+        "endTime": end_ms,
+        "limit": WHALE_AGGTRADES_LIMIT,
+    }
     cache_hit = False
     print(f"[whales_flow] aggTrades {symbol} {market} (cache_hit={cache_hit})")
     try:
@@ -99,8 +110,13 @@ def _chunked(items: List[Dict[str, str]], size: int) -> List[List[Dict[str, str]
 async def _get_usdt_pairs(session: aiohttp.ClientSession) -> List[Dict[str, str]]:
     spot_symbols = await get_spot_usdt_symbols(session)
     futures_symbols = await get_futures_usdt_symbols(session)
-    pairs = [{"symbol": symbol, "market": "spot"} for symbol in spot_symbols]
-    pairs.extend({"symbol": symbol, "market": "futures"} for symbol in futures_symbols)
+    futures_set = set(futures_symbols)
+    pairs = [{"symbol": symbol, "market": "futures"} for symbol in futures_symbols]
+    pairs.extend(
+        {"symbol": symbol, "market": "spot"}
+        for symbol in spot_symbols
+        if symbol not in futures_set
+    )
     return pairs
 
 
@@ -155,12 +171,29 @@ def _prioritize_pairs(
     return top_pairs + rest_pairs
 
 
+def _select_universe(
+    pairs: List[Dict[str, str]],
+    quote_volumes: Dict[str, float],
+    *,
+    top_n: int,
+    include_tail: bool,
+) -> List[Dict[str, str]]:
+    ranked = sorted(quote_volumes.items(), key=lambda item: item[1], reverse=True)
+    top_symbols = {symbol for symbol, _ in ranked[:top_n]}
+    top_pairs = [pair for pair in pairs if pair["symbol"] in top_symbols]
+    if not include_tail:
+        return top_pairs
+    tail_pairs = [pair for pair in pairs if pair["symbol"] not in top_symbols]
+    return top_pairs + tail_pairs
+
+
 async def whales_scan_once(bot) -> None:
     start = time.time()
     BUDGET = 35
     print("[WHALE] scan_once start")
     cycle_start = time.time()
     try:
+        reset_request_count("whales_flow")
         subscribers = pro_list()
         mark_tick("whales_flow", extra=f"подписчиков: {len(subscribers)}")
         if not subscribers:
@@ -170,23 +203,32 @@ async def whales_scan_once(bot) -> None:
             whales_scan_once.state = {
                 "pairs": [],
                 "cursor": 0,
+                "cycle": 0,
             }
         state = whales_scan_once.state
 
         session = await get_shared_session()
         pairs = state["pairs"]
         cursor = state["cursor"]
+        state["cycle"] += 1
+        include_tail = WHALE_SCAN_TAIL_EVERY > 0 and state["cycle"] % WHALE_SCAN_TAIL_EVERY == 0
         if not pairs or cursor >= len(pairs):
             pairs = await _get_usdt_pairs(session)
             cursor = 0
             state["pairs"] = pairs
-        if not pairs:
-            mark_error("whales_flow", "no symbols to scan")
-            return
 
         quote_volumes = await _get_quote_volumes(session)
         if cursor == 0:
-            pairs = _prioritize_pairs(pairs, quote_volumes)
+            universe = _select_universe(
+                pairs,
+                quote_volumes,
+                top_n=WHALE_UNIVERSE_TOP_N,
+                include_tail=include_tail,
+            )
+            if not universe:
+                mark_error("whales_flow", "no symbols to scan")
+                return
+            pairs = _prioritize_pairs(universe, quote_volumes)
             state["pairs"] = pairs
 
         chunk = pairs[cursor : cursor + CHUNK_SIZE]
@@ -202,39 +244,40 @@ async def whales_scan_once(bot) -> None:
         end_ms = int(now * 1000)
 
         flow_buffer: Dict[str, Dict[str, float]] = {}
-        for batch in _chunked(chunk, SCAN_BATCH_SIZE):
-            if time.time() - start > BUDGET:
-                print("[WHALE] budget exceeded, stopping early")
-                break
-            tasks = [
-                asyncio.create_task(
-                    _fetch_agg_trades(
-                        session,
-                        pair["symbol"],
-                        start_ms,
-                        end_ms,
-                        pair["market"],
-                    )
-                )
-                for pair in batch
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for pair, trades in zip(batch, results):
+        with binance_request_context("whales_flow"):
+            for batch in _chunked(chunk, SCAN_BATCH_SIZE):
                 if time.time() - start > BUDGET:
                     print("[WHALE] budget exceeded, stopping early")
                     break
-                if isinstance(trades, Exception) or not trades:
-                    continue
-                flow = _calc_flow(trades)
-                if not flow:
-                    continue
-                symbol = pair["symbol"]
-                update_current_symbol("whales_flow", symbol)
-                existing = flow_buffer.get(symbol, {"buy": 0.0, "sell": 0.0})
-                existing["buy"] += flow["buy"]
-                existing["sell"] += flow["sell"]
-                flow_buffer[symbol] = existing
+                tasks = [
+                    asyncio.create_task(
+                        _fetch_agg_trades(
+                            session,
+                            pair["symbol"],
+                            start_ms,
+                            end_ms,
+                            pair["market"],
+                        )
+                    )
+                    for pair in batch
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for pair, trades in zip(batch, results):
+                    if time.time() - start > BUDGET:
+                        print("[WHALE] budget exceeded, stopping early")
+                        break
+                    if isinstance(trades, Exception) or not trades:
+                        continue
+                    flow = _calc_flow(trades)
+                    if not flow:
+                        continue
+                    symbol = pair["symbol"]
+                    update_current_symbol("whales_flow", symbol)
+                    existing = flow_buffer.get(symbol, {"buy": 0.0, "sell": 0.0})
+                    existing["buy"] += flow["buy"]
+                    existing["sell"] += flow["sell"]
+                    flow_buffer[symbol] = existing
 
         top_in: List[tuple[str, float]] = []
         top_out: List[tuple[str, float]] = []
@@ -290,12 +333,14 @@ async def whales_scan_once(bot) -> None:
         current_symbol = (
             MODULES.get("whales_flow").current_symbol if "whales_flow" in MODULES else None
         )
+        req_count = get_request_count("whales_flow")
         mark_ok(
             "whales_flow",
             extra=(
                 f"progress={new_cursor}/{total} "
                 f"checked={len(chunk)}/{len(chunk)} "
-                f"current={current_symbol or '-'} cycle={int(cycle_sec)}s"
+                f"current={current_symbol or '-'} cycle={int(cycle_sec)}s "
+                f"req={req_count}"
             ),
         )
     finally:

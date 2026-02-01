@@ -17,6 +17,7 @@ class ModuleStatus:
     checked_last_cycle: int = 0
     current_symbol: Optional[str] = None
     last_progress_ts: float = 0.0
+    requests_last_cycle: int = 0
 
     def as_text(self) -> str:
         now = time.time()
@@ -118,6 +119,27 @@ def update_current_symbol(
     if now - st.last_progress_ts >= throttle_sec:
         st.current_symbol = symbol
         st.last_progress_ts = now
+
+
+def reset_request_count(key: str) -> None:
+    st = MODULES.get(key)
+    if not st:
+        return
+    st.requests_last_cycle = 0
+
+
+def increment_request_count(key: str, count: int = 1) -> None:
+    st = MODULES.get(key)
+    if not st:
+        return
+    st.requests_last_cycle += count
+
+
+def get_request_count(key: str) -> int:
+    st = MODULES.get(key)
+    if not st:
+        return 0
+    return st.requests_last_cycle
 
 
 async def safe_worker_loop(module_name: str, scan_once_coro):
