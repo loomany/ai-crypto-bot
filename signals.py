@@ -36,6 +36,7 @@ EMA50_NEAR_PCT_WEAK = float(os.getenv("EMA50_NEAR_PCT_WEAK", "1.5"))
 EMA50_NEAR_PCT_MID = float(os.getenv("EMA50_NEAR_PCT_MID", "2.5"))
 EMA50_SCORE_WEAK = int(os.getenv("EMA50_SCORE_WEAK", "72"))
 EMA50_SCORE_MID = int(os.getenv("EMA50_SCORE_MID", "78"))
+MIN_PRE_SCORE = float(os.getenv("MIN_PRE_SCORE", "70"))
 REQUIRE_15M_CONFIRM_ON_EXPANDED = os.getenv("REQUIRE_15M_CONFIRM_ON_EXPANDED", "true").lower() in (
     "1",
     "true",
@@ -446,18 +447,13 @@ async def _prepare_signal(
                 allowed_dist_pct = EMA50_NEAR_PCT_MID
 
             if score_pre < EMA50_SCORE_MID:
+                ema_penalty = 0.0
                 if dist_to_ema50_pct > allowed_dist_pct:
-                    _inc_fail("fail_not_near_ema50_weak")
-                    _log_fail_debug(
-                        "fail_not_near_ema50_weak",
-                        score_pre=score_pre,
-                        dist_to_ema50_pct=dist_to_ema50_pct,
-                        allowed_dist_pct=allowed_dist_pct,
-                        strict_pct=EMA50_NEAR_PCT_STRICT,
-                        ema50_value=ema50_1h,
-                        last_price=current_price,
-                        scenario=candidate_side,
-                    )
+                    ema_penalty = min(8.0, dist_to_ema50_pct * 2.0)
+
+                score_pre -= ema_penalty
+                if score_pre < MIN_PRE_SCORE:
+                    _inc_fail("fail_pre_score")
                     return None
 
                 is_expanded_pass = (
