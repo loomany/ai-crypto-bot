@@ -1,6 +1,6 @@
 import sqlite3
-from datetime import datetime
-from typing import List
+from datetime import datetime, timedelta
+from typing import List, Optional
 
 from db_path import get_db_path
 
@@ -11,8 +11,26 @@ def init_pro_tables() -> None:
     conn = sqlite3.connect(DB_PATH)
     try:
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS pro_subscribers (chat_id INTEGER PRIMARY KEY)"
+            """
+            CREATE TABLE IF NOT EXISTS pro_subscribers (
+                chat_id INTEGER PRIMARY KEY,
+                expires_at TEXT
+            )
+            """
         )
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(pro_subscribers)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "expires_at" not in cols:
+            conn.execute("ALTER TABLE pro_subscribers ADD COLUMN expires_at TEXT")
+        cur.execute("SELECT chat_id FROM pro_subscribers WHERE expires_at IS NULL")
+        missing = [row[0] for row in cur.fetchall()]
+        if missing:
+            expires_at = (datetime.utcnow() + timedelta(days=30)).isoformat()
+            conn.executemany(
+                "UPDATE pro_subscribers SET expires_at=? WHERE chat_id=?",
+                [(expires_at, chat_id) for chat_id in missing],
+            )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS pro_daily_limits (
@@ -28,15 +46,19 @@ def init_pro_tables() -> None:
         conn.close()
 
 
-def pro_add(chat_id: int) -> bool:
+def pro_activate(chat_id: int, days: int) -> str:
+    expires_at = (datetime.utcnow() + timedelta(days=days)).isoformat()
     conn = sqlite3.connect(DB_PATH)
     try:
-        cur = conn.cursor()
-        cur.execute("INSERT OR IGNORE INTO pro_subscribers (chat_id) VALUES (?)", (chat_id,))
+        conn.execute(
+            "INSERT INTO pro_subscribers(chat_id, expires_at) VALUES (?, ?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET expires_at=excluded.expires_at",
+            (chat_id, expires_at),
+        )
         conn.commit()
-        return cur.rowcount > 0
     finally:
         conn.close()
+    return expires_at
 
 
 def pro_remove(chat_id: int) -> bool:
@@ -50,12 +72,43 @@ def pro_remove(chat_id: int) -> bool:
         conn.close()
 
 
+def pro_get_expires(chat_id: int) -> Optional[str]:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT expires_at FROM pro_subscribers WHERE chat_id=?", (chat_id,))
+        row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def pro_is(chat_id: int) -> bool:
+    exp = pro_get_expires(chat_id)
+    if not exp:
+        return False
+    try:
+        return datetime.fromisoformat(exp) > datetime.utcnow()
+    except ValueError:
+        return False
+
+
 def pro_list() -> List[int]:
     conn = sqlite3.connect(DB_PATH)
     try:
         cur = conn.cursor()
-        cur.execute("SELECT chat_id FROM pro_subscribers")
-        return [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT chat_id, expires_at FROM pro_subscribers")
+        now = datetime.utcnow()
+        result = []
+        for chat_id, expires_at in cur.fetchall():
+            if not expires_at:
+                continue
+            try:
+                if datetime.fromisoformat(expires_at) > now:
+                    result.append(int(chat_id))
+            except ValueError:
+                continue
+        return result
     finally:
         conn.close()
 
