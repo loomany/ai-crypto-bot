@@ -75,21 +75,23 @@ def mark_error(key: str, err: str):
     st.last_error = err[:200]
 
 
-async def safe_worker_loop(
-    module_name: str,
-    scan_once_coro: Callable[[], Awaitable[None]],
-) -> None:
+async def safe_worker_loop(module_name: str, scan_once_coro):
     while True:
         cycle_start = time.time()
-        mark_tick(module_name)
+
+        # 🔴 HEARTBEAT — ВСЕГДА, СРАЗУ
+        mark_tick(module_name, extra="cycle heartbeat")
 
         try:
-            await scan_once_coro()
-        except Exception as exc:
-            mark_error(module_name, f"{type(exc).__name__}: {exc}")
+            # ❗ Ограничиваем ВЕСЬ scan_once по времени
+            await asyncio.wait_for(scan_once_coro(), timeout=50)
+        except asyncio.TimeoutError:
+            mark_error(module_name, "scan_once timeout >50s")
+        except Exception as e:
+            mark_error(module_name, f"{type(e).__name__}: {e}")
 
         elapsed = time.time() - cycle_start
-        await asyncio.sleep(max(0.0, SCAN_INTERVAL - elapsed))
+        await asyncio.sleep(max(0, SCAN_INTERVAL - elapsed))
 
 
 async def watchdog() -> None:
