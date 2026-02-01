@@ -32,10 +32,12 @@ from symbol_cache import get_all_usdt_symbols, get_top_usdt_symbols_by_volume
 from market_regime import get_market_regime
 from health import (
     MODULES,
+    get_klines_request_count,
     get_request_count,
     mark_tick,
     mark_ok,
     mark_error,
+    reset_klines_request_count,
     reset_request_count,
     safe_worker_loop,
     watchdog,
@@ -871,6 +873,7 @@ async def ai_scan_once() -> None:
     print("[AI] scan_once start")
     try:
         reset_request_count("ai_signals")
+        reset_klines_request_count("ai_signals")
         mark_tick("ai_signals", extra="сканирую рынок...")
 
         symbols = await get_all_usdt_symbols()
@@ -920,13 +923,14 @@ async def ai_scan_once() -> None:
             sent_count += 1
         current_symbol = MODULES.get("ai_signals").current_symbol if "ai_signals" in MODULES else None
         req_count = get_request_count("ai_signals")
+        klines_count = get_klines_request_count("ai_signals")
         mark_ok(
             "ai_signals",
             extra=(
                 f"progress={new_cursor}/{total} "
                 f"checked={len(chunk)}/{len(chunk)} "
                 f"current={current_symbol or '-'} cycle={int(time.time() - start)}s "
-                f"req={req_count}"
+                f"req={req_count} klines={klines_count}"
             ),
         )
     finally:
@@ -1010,6 +1014,7 @@ async def pro_ai_scan_once() -> None:
         update_current_symbol("pro_ai", chunk[0])
 
     reset_request_count("pro_ai")
+    reset_klines_request_count("pro_ai")
     try:
         with binance_request_context("pro_ai"):
             signals = await asyncio.wait_for(
@@ -1065,13 +1070,14 @@ async def pro_ai_scan_once() -> None:
         buffer_timestamps.pop(symbol, None)
     current_symbol = MODULES.get("pro_ai").current_symbol if "pro_ai" in MODULES else None
     req_count = get_request_count("pro_ai")
+    klines_count = get_klines_request_count("pro_ai")
     mark_ok(
         "pro_ai",
         extra=(
             f"progress={new_cursor}/{total} "
             f"checked={len(chunk)}/{len(chunk)} "
             f"current={current_symbol or '-'} cycle={int(time.time() - start)}s "
-            f"req={req_count}"
+            f"req={req_count} klines={klines_count}"
         ),
     )
 

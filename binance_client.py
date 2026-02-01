@@ -6,7 +6,7 @@ from typing import List, Optional
 from binance_rest import fetch_klines as fetch_klines_raw
 
 _KLINES_SEM = asyncio.Semaphore(
-    int(os.environ.get("BINANCE_KLINES_PER_SYMBOL_CONCURRENCY", "3"))
+    int(os.environ.get("BINANCE_KLINES_PER_SYMBOL_CONCURRENCY", "5"))
 )
 KLINES_5M_LIMIT = int(os.environ.get("KLINES_5M_LIMIT", "200"))
 KLINES_15M_LIMIT = int(os.environ.get("KLINES_15M_LIMIT", "160"))
