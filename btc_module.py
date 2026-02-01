@@ -31,9 +31,18 @@ from trading_core import (
     compute_score,
 )
 from health import mark_tick, mark_ok, mark_error
-from notifications_db import disable_notify, enable_notify, list_enabled
+from notifications_db import disable_notify, list_enabled
 from message_templates import format_scenario_message
-from keyboards import main_menu_kb
+from keyboards import btc_inline_kb, paywall_inline_kb
+from pro_db import pro_is
+from texts import BTC_PAYWALL_TEXT
+from trial_db import (
+    FREE_TRIAL_LIMIT,
+    trial_ensure_user,
+    trial_get,
+    trial_inc,
+    trial_mark_paywall,
+)
 
 # ============================================================
 # Константы и базовые настройки
@@ -85,38 +94,8 @@ async def btc_menu_command(message: Message, state: FSMContext):
         "• Автоматические сигналы LONG/SHORT\n"
         "• Сигнал приходит сразу, как только появляется сетап\n"
         "• Горизонт сделок: внутри 24 часов\n\n"
-        "Выбери действие:",
-        reply_markup=main_menu_kb(),
-    )
-
-
-# ============================================================
-# Хендлеры включения / отключения уведомлений
-# ============================================================
-
-@router.message(F.text == "🔔 Включить уведомления по BTC")
-async def handle_btc_notify_on_message(message: Message):
-    user_id = message.from_user.id
-    changed = enable_notify(user_id, "btc")
-
-    await message.answer(
-        "✅ Уведомления по BTC включены.\n\n"
-        "Бот будет автоматически присылать сигналы LONG/SHORT по BTCUSDT, "
-        "как только появляется новый сильный сетап (интрадей, внутри 24 часов)."
-        if changed
-        else "✅ Уведомления по BTC уже включены.",
-        reply_markup=main_menu_kb(),
-    )
-
-
-@router.message(F.text == "🚫 Отключить уведомления по BTC")
-async def handle_btc_notify_off_message(message: Message):
-    user_id = message.from_user.id
-    changed = disable_notify(user_id, "btc")
-
-    await message.answer(
-        "❌ Уведомления по BTC отключены." if changed else "✅ Уведомления по BTC уже отключены.",
-        reply_markup=main_menu_kb(),
+        "🔔 Авто-сигналы включаются кнопками ниже.",
+        reply_markup=btc_inline_kb(),
     )
 
 
@@ -192,6 +171,20 @@ async def btc_realtime_signal_worker(bot):
                             try:
                                 if int(signal.probability or 0) < BTC_MIN_PROBABILITY:
                                     continue
+                                if not pro_is(user_id):
+                                    trial_ensure_user(user_id, "btc")
+                                    used_count, paywall_sent = trial_get(user_id, "btc")
+                                    if used_count >= FREE_TRIAL_LIMIT:
+                                        if not paywall_sent:
+                                            await bot.send_message(
+                                                chat_id=user_id,
+                                                text=BTC_PAYWALL_TEXT,
+                                                reply_markup=paywall_inline_kb(),
+                                            )
+                                            disable_notify(user_id, "btc")
+                                            trial_mark_paywall(user_id, "btc")
+                                        continue
+                                    trial_inc(user_id, "btc")
                                 await bot.send_message(chat_id=user_id, text=text)
                             except Exception:
                                 continue
