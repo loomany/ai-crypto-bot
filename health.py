@@ -12,6 +12,11 @@ class ModuleStatus:
     last_error: Optional[str] = None
     last_warn: Optional[str] = None
     extra: str = ""
+    total_symbols: int = 0
+    cursor: int = 0
+    checked_last_cycle: int = 0
+    current_symbol: Optional[str] = None
+    last_progress_ts: float = 0.0
 
     def as_text(self) -> str:
         now = time.time()
@@ -87,6 +92,34 @@ def mark_warn(key: str, warn: str):
     st.last_warn = warn[:200]
 
 
+def update_module_progress(
+    key: str,
+    total_symbols: int,
+    cursor: int,
+    checked_last_cycle: int,
+) -> None:
+    st = MODULES.get(key)
+    if not st:
+        return
+    st.total_symbols = total_symbols
+    st.cursor = cursor
+    st.checked_last_cycle = checked_last_cycle
+
+
+def update_current_symbol(
+    key: str,
+    symbol: str,
+    throttle_sec: float = 3.0,
+) -> None:
+    st = MODULES.get(key)
+    if not st or not symbol:
+        return
+    now = time.time()
+    if now - st.last_progress_ts >= throttle_sec:
+        st.current_symbol = symbol
+        st.last_progress_ts = now
+
+
 async def safe_worker_loop(module_name: str, scan_once_coro):
     while True:
         cycle_start = time.time()
@@ -111,7 +144,11 @@ async def safe_worker_loop(module_name: str, scan_once_coro):
             mark_error(module_name, str(e))
 
         elapsed = time.time() - cycle_start
-        mark_tick(module_name, extra=f"cycle={int(elapsed)}s")
+        module_state = MODULES.get(module_name)
+        if module_state and module_state.extra:
+            mark_tick(module_name)
+        else:
+            mark_tick(module_name, extra=f"cycle={int(elapsed)}s")
         await asyncio.sleep(max(0, SCAN_INTERVAL - elapsed))
 
 

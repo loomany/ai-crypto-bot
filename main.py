@@ -21,11 +21,26 @@ from whales_module import whales_market_flow_worker
 from pro_modules import (
     router as pro_router,
 )
-from pump_detector import build_pump_symbol_list, scan_pumps_chunk, format_pump_message
+from pump_detector import (
+    PUMP_CHUNK_SIZE,
+    build_pump_symbol_list,
+    scan_pumps_chunk,
+    format_pump_message,
+)
 from signals import scan_market, is_pro_strict_signal
 from symbol_cache import get_all_usdt_symbols, get_top_usdt_symbols_by_volume
 from market_regime import get_market_regime
-from health import MODULES, mark_tick, mark_ok, mark_error, safe_worker_loop, watchdog, SCAN_INTERVAL
+from health import (
+    MODULES,
+    mark_tick,
+    mark_ok,
+    mark_error,
+    safe_worker_loop,
+    watchdog,
+    SCAN_INTERVAL,
+    update_module_progress,
+    update_current_symbol,
+)
 from db_path import get_db_path
 from alert_dedup_db import init_alert_dedup, can_send
 from notifications_db import init_notify_table, enable_notify, disable_notify, list_enabled
@@ -736,6 +751,8 @@ async def pump_scan_once(bot: Bot) -> None:
         if not symbols:
             mark_error("pumpdump", "no symbols to scan")
             return
+        total = len(symbols)
+        update_current_symbol("pumpdump", symbols[cursor] if cursor < total else "")
 
         cycle_start = time.time()
         try:
@@ -752,6 +769,9 @@ async def pump_scan_once(bot: Bot) -> None:
         except asyncio.TimeoutError:
             return
         state["cursor"] = next_cursor
+        chunk_len = min(PUMP_CHUNK_SIZE, total - cursor) if total else 0
+        checked = stats.get("checked", 0)
+        update_module_progress("pumpdump", total, next_cursor, checked)
 
         now_min = int(time.time() // 60)
         sent_count = 0
@@ -762,6 +782,7 @@ async def pump_scan_once(bot: Bot) -> None:
                 print("[PUMP] budget exceeded, stopping early")
                 break
             symbol = sig["symbol"]
+            update_current_symbol("pumpdump", symbol)
 
             if last_sent.get(symbol) == now_min:
                 continue
@@ -777,11 +798,13 @@ async def pump_scan_once(bot: Bot) -> None:
                     continue
 
         cycle_sec = time.time() - cycle_start
+        current_symbol = MODULES.get("pumpdump").current_symbol if "pumpdump" in MODULES else None
         mark_ok(
             "pumpdump",
             extra=(
-                f"checked={stats.get('checked', 0)} found={stats.get('found', 0)} "
-                f"sent={sent_count} cycle={cycle_sec:.1f}s"
+                f"progress={next_cursor}/{total} "
+                f"checked={checked}/{chunk_len} "
+                f"current={current_symbol or '-'} cycle={int(cycle_sec)}s"
             ),
         )
     finally:
@@ -799,16 +822,21 @@ async def ai_scan_once() -> None:
         if not symbols:
             mark_error("ai_signals", "no symbols to scan")
             return
+        total = len(symbols)
 
-        chunks = [
-            symbols[i : i + AI_CHUNK_SIZE] for i in range(0, len(symbols), AI_CHUNK_SIZE)
-        ]
-        if not hasattr(ai_scan_once, "chunk_idx"):
-            ai_scan_once.chunk_idx = 0
-        if ai_scan_once.chunk_idx >= len(chunks):
-            ai_scan_once.chunk_idx = 0
-        chunk = chunks[ai_scan_once.chunk_idx]
-        ai_scan_once.chunk_idx = (ai_scan_once.chunk_idx + 1) % len(chunks)
+        if not hasattr(ai_scan_once, "cursor"):
+            ai_scan_once.cursor = 0
+        cursor = ai_scan_once.cursor
+        if cursor >= total:
+            cursor = 0
+        chunk = symbols[cursor : cursor + AI_CHUNK_SIZE]
+        new_cursor = cursor + len(chunk)
+        if new_cursor >= total:
+            new_cursor = 0
+        ai_scan_once.cursor = new_cursor
+        update_module_progress("ai_signals", total, new_cursor, len(chunk))
+        if chunk:
+            update_current_symbol("ai_signals", chunk[0])
 
         signals = await scan_market(
             symbols=chunk,
@@ -827,16 +855,19 @@ async def ai_scan_once() -> None:
             score = signal.get("score", 0)
             if score < FREE_MIN_SCORE:
                 continue
+            update_current_symbol("ai_signals", signal.get("symbol", ""))
             print(
                 f"[ai_signals] SEND FREE {signal['symbol']} {signal['direction']} score={score}"
             )
             await send_signal_to_all(signal, "free")
             sent_count += 1
+        current_symbol = MODULES.get("ai_signals").current_symbol if "ai_signals" in MODULES else None
         mark_ok(
             "ai_signals",
             extra=(
-                f"chunk={ai_scan_once.chunk_idx}/{len(chunks)} "
-                f"checked={len(chunk)} sent={sent_count}"
+                f"progress={new_cursor}/{total} "
+                f"checked={len(chunk)}/{len(chunk)} "
+                f"current={current_symbol or '-'} cycle={int(time.time() - start)}s"
             ),
         )
     finally:
@@ -903,12 +934,21 @@ async def pro_ai_scan_once() -> None:
     if not symbols:
         mark_error("pro_ai", "no symbols to scan")
         return
+    total = len(symbols)
 
     chunks = [symbols[i : i + PRO_CHUNK_SIZE] for i in range(0, len(symbols), PRO_CHUNK_SIZE)]
-    if state["chunk_idx"] >= len(chunks):
-        state["chunk_idx"] = 0
-    chunk = chunks[state["chunk_idx"]]
-    state["chunk_idx"] = (state["chunk_idx"] + 1) % len(chunks)
+    chunk_idx = state["chunk_idx"]
+    if chunk_idx >= len(chunks):
+        chunk_idx = 0
+    chunk = chunks[chunk_idx]
+    state["chunk_idx"] = (chunk_idx + 1) % len(chunks)
+    cursor = chunk_idx * PRO_CHUNK_SIZE
+    new_cursor = cursor + len(chunk)
+    if new_cursor >= total:
+        new_cursor = 0
+    update_module_progress("pro_ai", total, new_cursor, len(chunk))
+    if chunk:
+        update_current_symbol("pro_ai", chunk[0])
 
     try:
         signals = await asyncio.wait_for(
@@ -954,18 +994,23 @@ async def pro_ai_scan_once() -> None:
 
     candidates = sorted(buffer.values(), key=lambda item: item.get("score", 0), reverse=True)
 
-    if candidates:
-        mark_ok("pro_ai", extra=f"кандидатов: {len(candidates)}")
-    else:
-        mark_tick("pro_ai", extra="кандидатов: 0")
-
     for signal in candidates[:MAX_PRO_SIGNALS_PER_CYCLE]:
         if time.time() - start > BUDGET:
             break
+        update_current_symbol("pro_ai", signal.get("symbol", ""))
         await _send_pro_signal(signal, subscribers)
         symbol = signal.get("symbol", "")
         buffer.pop(symbol, None)
         buffer_timestamps.pop(symbol, None)
+    current_symbol = MODULES.get("pro_ai").current_symbol if "pro_ai" in MODULES else None
+    mark_ok(
+        "pro_ai",
+        extra=(
+            f"progress={new_cursor}/{total} "
+            f"checked={len(chunk)}/{len(chunk)} "
+            f"current={current_symbol or '-'} cycle={int(time.time() - start)}s"
+        ),
+    )
 
 
 # ===== ТОЧКА ВХОДА =====

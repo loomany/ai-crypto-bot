@@ -2,7 +2,14 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 from binance_rest import fetch_json
-from health import mark_ok, mark_tick, safe_worker_loop
+from health import (
+    MODULES,
+    mark_ok,
+    mark_tick,
+    safe_worker_loop,
+    update_module_progress,
+    update_current_symbol,
+)
 from signal_audit_db import fetch_open_signals, mark_signal_closed
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
@@ -217,13 +224,28 @@ async def signal_audit_worker_loop() -> None:
         if cursor >= len(open_signals):
             cursor = 0
         chunk = open_signals[cursor : cursor + chunk_size]
-        _scan_once.cursor = cursor + len(chunk)
+        new_cursor = cursor + len(chunk)
+        _scan_once.cursor = new_cursor
+        total = len(open_signals)
+        update_module_progress("signal_audit", total, new_cursor, len(chunk))
+        if chunk:
+            update_current_symbol("signal_audit", chunk[0].get("symbol", ""))
 
         await evaluate_open_signals(
             chunk,
             start_ts=start,
             budget_sec=BUDGET,
         )
-        mark_ok("signal_audit", extra="audit cycle")
+        current_symbol = (
+            MODULES.get("signal_audit").current_symbol if "signal_audit" in MODULES else None
+        )
+        mark_ok(
+            "signal_audit",
+            extra=(
+                f"progress={new_cursor}/{total} "
+                f"checked={len(chunk)}/{len(chunk)} "
+                f"current={current_symbol or '-'} cycle={int(time.time() - start)}s"
+            ),
+        )
 
     await safe_worker_loop("signal_audit", _scan_once)
