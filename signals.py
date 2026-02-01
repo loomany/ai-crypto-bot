@@ -13,7 +13,7 @@ from binance_client import (
     get_required_candles,
 )
 from binance_limits import BINANCE_WEIGHT_TRACKER
-from binance_rest import fetch_json
+from binance_rest import binance_request_context, fetch_klines
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
 from market_regime import get_market_regime
@@ -32,9 +32,6 @@ from trading_core import (
     is_volume_climax,
 )
 
-BINANCE_BASE_URL = "https://api.binance.com/api/v3"
-
-KLINES_URL = f"{BINANCE_BASE_URL}/klines"
 BTC_SYMBOL = "BTCUSDT"
 LEVEL_NEAR_PCT_FREE = 1.2
 MIN_VOLUME_RATIO_FREE = 1.15
@@ -195,15 +192,8 @@ def _quick_score(candles: Dict[str, List[Candle]]) -> float:
 
 
 async def _get_hourly_snapshot(symbol: str) -> Optional[Dict[str, float]]:
-    print(f"[BINANCE] request {symbol} klines")
-    try:
-        data = await fetch_json(
-            KLINES_URL,
-            params={"symbol": symbol, "interval": "1h", "limit": 2},
-        )
-    except Exception as exc:
-        print(f"[BINANCE] ERROR {symbol}: {exc}")
-        return None
+    with binance_request_context("ai_signals"):
+        data = await fetch_klines(symbol, "1h", 2)
     if not data or len(data) < 1:
         return None
 
