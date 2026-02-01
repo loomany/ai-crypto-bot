@@ -8,7 +8,7 @@ from typing import Any, Optional
 import aiohttp
 
 from binance_limits import BINANCE_WEIGHT_TRACKER, calc_backoff_seconds
-from health import increment_request_count
+from health import increment_request_count, increment_klines_request_count
 from rate_limiter import BINANCE_RATE_LIMITER
 
 # ---- shared session (one per process) ----
@@ -75,6 +75,12 @@ def _track_request() -> None:
     module = _BINANCE_REQUEST_MODULE.get()
     if module:
         increment_request_count(module)
+
+
+def _track_klines_request() -> None:
+    module = _BINANCE_REQUEST_MODULE.get()
+    if module:
+        increment_klines_request_count(module)
 
 
 async def fetch_json(
@@ -181,6 +187,7 @@ async def fetch_klines(symbol: str, interval: str, limit: int) -> Optional[list]
         "interval": interval,
         "limit": limit,
     }
+    _track_klines_request()
     data = await fetch_json(url, params)
     if not isinstance(data, list):
         return None

@@ -18,6 +18,7 @@ class ModuleStatus:
     current_symbol: Optional[str] = None
     last_progress_ts: float = 0.0
     requests_last_cycle: int = 0
+    klines_requests_last_cycle: int = 0
 
     def as_text(self) -> str:
         now = time.time()
@@ -128,6 +129,13 @@ def reset_request_count(key: str) -> None:
     st.requests_last_cycle = 0
 
 
+def reset_klines_request_count(key: str) -> None:
+    st = MODULES.get(key)
+    if not st:
+        return
+    st.klines_requests_last_cycle = 0
+
+
 def increment_request_count(key: str, count: int = 1) -> None:
     st = MODULES.get(key)
     if not st:
@@ -135,11 +143,25 @@ def increment_request_count(key: str, count: int = 1) -> None:
     st.requests_last_cycle += count
 
 
+def increment_klines_request_count(key: str, count: int = 1) -> None:
+    st = MODULES.get(key)
+    if not st:
+        return
+    st.klines_requests_last_cycle += count
+
+
 def get_request_count(key: str) -> int:
     st = MODULES.get(key)
     if not st:
         return 0
     return st.requests_last_cycle
+
+
+def get_klines_request_count(key: str) -> int:
+    st = MODULES.get(key)
+    if not st:
+        return 0
+    return st.klines_requests_last_cycle
 
 
 async def safe_worker_loop(module_name: str, scan_once_coro):

@@ -5,7 +5,13 @@ import time
 from statistics import mean
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from binance_client import Candle, get_quick_candles, get_required_candles
+from binance_client import (
+    Candle,
+    KLINES_15M_LIMIT,
+    KLINES_1H_LIMIT,
+    get_quick_candles,
+    get_required_candles,
+)
 from binance_limits import BINANCE_WEIGHT_TRACKER
 from binance_rest import fetch_json
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
@@ -36,8 +42,8 @@ MIN_RR_FREE = 1.8
 EMA50_NEAR_PCT_FREE = 1.0
 EMA50_GATE_SCORE = int(os.getenv("EMA50_GATE_SCORE", "78"))
 AI_STAGE_A_TOP_K = int(os.getenv("AI_STAGE_A_TOP_K", "10"))
-AI_STAGE_A_LIMIT_1H = int(os.getenv("AI_STAGE_A_LIMIT_1H", "120"))
-AI_STAGE_A_LIMIT_15M = int(os.getenv("AI_STAGE_A_LIMIT_15M", "120"))
+AI_STAGE_A_LIMIT_1H = int(os.getenv("AI_STAGE_A_LIMIT_1H", str(KLINES_1H_LIMIT)))
+AI_STAGE_A_LIMIT_15M = int(os.getenv("AI_STAGE_A_LIMIT_15M", str(KLINES_15M_LIMIT)))
 
 
 def is_pro_strict_signal(
@@ -547,7 +553,7 @@ async def _prepare_signal(
 
 
 async def scan_market(
-    batch_size: int = 5,
+    batch_size: Optional[int] = None,
     *,
     symbols: List[str] | None = None,
     use_btc_gate: bool = True,
@@ -559,6 +565,9 @@ async def scan_market(
     """
     Сканирует весь рынок Binance по спотовым USDT-парам и возвращает сигналы.
     """
+    if batch_size is None:
+        batch_size = int(os.getenv("AI_SCAN_BATCH_SIZE", "8"))
+
     if symbols is None:
         symbols = await get_spot_usdt_symbols()
 
