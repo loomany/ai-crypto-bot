@@ -193,9 +193,7 @@ async def fetch_klines(
                 )
                 return cached[1]
 
-    print(
-        f"[binance_rest] klines {symbol} {interval} {limit} (cache_hit=False)"
-    )
+    print(f"[binance_rest] MISS klines {symbol} {interval} {limit}")
     url = f"{BINANCE_BASE_URL}/klines"
     params = {
         "symbol": symbol,
