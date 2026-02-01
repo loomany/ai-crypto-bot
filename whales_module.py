@@ -6,6 +6,7 @@ import aiohttp
 
 from binance_rest import fetch_json, get_shared_session
 from health import mark_tick, mark_ok, mark_error, safe_worker_loop
+from market_cache import get_futures_24h, get_spot_24h
 from pro_db import pro_list
 from symbol_cache import get_futures_usdt_symbols, get_spot_usdt_symbols
 
@@ -100,21 +101,8 @@ async def _get_quote_volumes(session: aiohttp.ClientSession) -> Dict[str, float]
     if cached and now - float(_whales_state.get("quote_volume_ts", 0.0)) < 300:
         return cached
 
-    print("[BINANCE] request ALL ticker/24hr spot")
-    try:
-        spot_data = await fetch_json(f"{BINANCE_SPOT_BASE}/ticker/24hr", session=session)
-    except Exception as exc:
-        print(f"[BINANCE] ERROR ALL: {exc}")
-        spot_data = None
-    print("[BINANCE] request ALL ticker/24hr futures")
-    try:
-        futures_data = await fetch_json(
-            f"{BINANCE_FAPI_BASE}/fapi/v1/ticker/24hr",
-            session=session,
-        )
-    except Exception as exc:
-        print(f"[BINANCE] ERROR ALL: {exc}")
-        futures_data = None
+    spot_data = await get_spot_24h()
+    futures_data = await get_futures_24h()
 
     volumes: Dict[str, float] = {}
     for row in spot_data or []:
