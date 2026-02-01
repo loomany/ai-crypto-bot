@@ -491,12 +491,11 @@ async def _prepare_signal(
                     and dist_to_ema50_pct <= allowed_dist_pct
                 )
                 if REQUIRE_15M_CONFIRM_ON_EXPANDED and is_expanded_pass:
-                    with binance_request_context("ai_signals"):
-                        confirm_candles = await fetch_candles(symbol, "15m", 60)
+                    confirm_candles = candles_15m
                     if len(confirm_candles) < 3:
                         confirmed = False
                     else:
-                        last_closed = confirm_candles[-2]
+                        last_closed = confirm_candles[-2]  # последняя закрытая
                         prev_closed = confirm_candles[-3]
                         if candidate_side == "SHORT":
                             confirmed = last_closed.close < last_closed.open and last_closed.close < prev_closed.close
