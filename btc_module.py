@@ -13,7 +13,7 @@ from aiogram.types import (
 )
 from aiogram.fsm.context import FSMContext
 
-from binance_client import Candle, fetch_klines, get_required_candles
+from binance_client import Candle, get_required_candles
 from ai_patterns import analyze_ai_patterns
 from market_regime import get_market_regime
 from trading_core import (
@@ -126,10 +126,11 @@ async def btc_scan_once(bot) -> None:
         state["cursor"] = (cursor + 1) % len(symbols)
 
         try:
-            candles_5m = await asyncio.wait_for(fetch_klines(symbol, "5m", 3), timeout=5)
+            candles = await asyncio.wait_for(get_required_candles(symbol), timeout=20)
         except asyncio.TimeoutError:
             mark_warn("btc", "klines timeout")
             return
+        candles_5m = candles.get("5m", [])
         if len(candles_5m) < 2:
             mark_tick("btc", extra="нет достаточных свечей 5m")
             return
@@ -142,7 +143,10 @@ async def btc_scan_once(bot) -> None:
 
         state["last_checked_candle_close_time"] = last_candle.close_time
         try:
-            signal = await asyncio.wait_for(generate_btc_signal(desired_side=None), timeout=20)
+            signal = await asyncio.wait_for(
+                generate_btc_signal(desired_side=None, candles=candles),
+                timeout=20,
+            )
         except asyncio.TimeoutError:
             mark_error("btc", "generate timeout")
             return
@@ -223,7 +227,10 @@ async def btc_realtime_signal_worker(bot):
 # ЯДРО: генерация сигнала (структура, Codex → реализовать)
 # ============================================================
 
-async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
+async def generate_btc_signal(
+    desired_side: Optional[str],
+    candles: Optional[Dict[str, List[Candle]]] = None,
+) -> BTCSingal:
     """
     Главная функция генерации сигнала по BTC.
 
@@ -267,7 +274,8 @@ async def generate_btc_signal(desired_side: Optional[str]) -> BTCSingal:
 
     now = dt.datetime.utcnow() + dt.timedelta(hours=TIMEZONE_OFFSET_HOURS)
 
-    candles = await get_required_candles(BTC_SYMBOL)
+    if candles is None:
+        candles = await get_required_candles(BTC_SYMBOL)
     candles_1d = candles.get("1d", [])
     candles_4h = candles.get("4h", [])
     candles_1h = candles.get("1h", [])

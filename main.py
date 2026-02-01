@@ -709,7 +709,7 @@ def _select_signals_for_cycle(signals: List[Dict[str, Any]]) -> List[Dict[str, A
 
 async def pump_scan_once(bot: Bot) -> None:
     start = time.time()
-    BUDGET = 45
+    BUDGET = 30
     print("[PUMP] scan_once start")
     if not hasattr(pump_scan_once, "state"):
         pump_scan_once.state = {
@@ -744,6 +744,7 @@ async def pump_scan_once(bot: Bot) -> None:
                     symbols,
                     start_idx=cursor,
                     session=session,
+                    time_budget_sec=BUDGET,
                     return_stats=True,
                 ),
                 timeout=BUDGET,

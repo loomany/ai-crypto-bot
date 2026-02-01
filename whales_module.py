@@ -15,7 +15,8 @@ BINANCE_SPOT_BASE = "https://api.binance.com/api/v3"
 
 FLOW_WINDOW_SEC = 60
 SCAN_BATCH_SIZE = 12
-CHUNK_SIZE = 100
+CHUNK_SIZE = 50
+PRIORITY_TOP_N = 50
 
 _whales_state = {
     "quote_volume": {},
@@ -134,9 +135,21 @@ def _threshold_for_volume(quote_volume: float) -> float:
     return max(500_000.0, min(5_000_000.0, 0.005 * quote_volume))
 
 
+def _prioritize_pairs(
+    pairs: List[Dict[str, str]],
+    quote_volumes: Dict[str, float],
+    top_n: int = PRIORITY_TOP_N,
+) -> List[Dict[str, str]]:
+    ranked = sorted(quote_volumes.items(), key=lambda item: item[1], reverse=True)
+    top_symbols = {symbol for symbol, _ in ranked[:top_n]}
+    top_pairs = [pair for pair in pairs if pair["symbol"] in top_symbols]
+    rest_pairs = [pair for pair in pairs if pair["symbol"] not in top_symbols]
+    return top_pairs + rest_pairs
+
+
 async def whales_scan_once(bot) -> None:
     start = time.time()
-    BUDGET = 45
+    BUDGET = 30
     print("[WHALE] scan_once start")
     cycle_start = time.time()
     try:
@@ -163,10 +176,13 @@ async def whales_scan_once(bot) -> None:
             mark_error("whales_flow", "no symbols to scan")
             return
 
+        quote_volumes = await _get_quote_volumes(session)
+        if cursor == 0:
+            pairs = _prioritize_pairs(pairs, quote_volumes)
+            state["pairs"] = pairs
+
         chunk = pairs[cursor : cursor + CHUNK_SIZE]
         state["cursor"] = cursor + len(chunk)
-
-        quote_volumes = await _get_quote_volumes(session)
 
         now = time.time()
         start_ms = int((now - FLOW_WINDOW_SEC) * 1000)
