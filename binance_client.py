@@ -5,9 +5,6 @@ from typing import List, Optional
 
 from binance_rest import fetch_klines as fetch_klines_raw
 
-_KLINES_SEM = asyncio.Semaphore(
-    int(os.environ.get("BINANCE_KLINES_PER_SYMBOL_CONCURRENCY", "5"))
-)
 KLINES_5M_LIMIT = int(os.environ.get("KLINES_5M_LIMIT", "200"))
 KLINES_15M_LIMIT = int(os.environ.get("KLINES_15M_LIMIT", "160"))
 KLINES_1H_LIMIT = int(os.environ.get("KLINES_1H_LIMIT", "168"))
@@ -26,9 +23,15 @@ class Candle:
     close_time: int
 
 
-async def fetch_klines(symbol: str, interval: str, limit: int) -> List[Candle]:
+async def fetch_klines(
+    symbol: str,
+    interval: str,
+    limit: int,
+    *,
+    start_ms: int | None = None,
+) -> List[Candle]:
     try:
-        raw = await fetch_klines_raw(symbol, interval, limit)
+        raw = await fetch_klines_raw(symbol, interval, limit, start_ms=start_ms)
     except Exception as exc:
         print(f"[BINANCE] ERROR {symbol}: {exc}")
         raise
@@ -53,12 +56,10 @@ async def fetch_klines(symbol: str, interval: str, limit: int) -> List[Candle]:
 
 async def get_required_candles(symbol: str):
     async def _safe(interval: str, limit: int) -> List[Candle]:
-        # per-symbol limiter: at most N parallel TF requests for this symbol
-        async with _KLINES_SEM:
-            try:
-                return await fetch_klines(symbol, interval, limit)
-            except Exception:
-                return []
+        try:
+            return await fetch_klines(symbol, interval, limit)
+        except Exception:
+            return []
 
     tasks = {
         "1d": asyncio.create_task(_safe("1d", KLINES_1D_LIMIT)),
@@ -86,11 +87,10 @@ async def get_quick_candles(
     limit_15m: int = 120,
 ) -> dict[str, List[Candle]]:
     async def _safe(interval: str, limit: int) -> List[Candle]:
-        async with _KLINES_SEM:
-            try:
-                return await fetch_klines(symbol, interval, limit)
-            except Exception:
-                return []
+        try:
+            return await fetch_klines(symbol, interval, limit)
+        except Exception:
+            return []
 
     tasks = {
         "1h": asyncio.create_task(_safe("1h", limit_1h)),

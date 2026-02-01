@@ -174,32 +174,44 @@ async def fetch_json(
     return None
 
 
-async def fetch_klines(symbol: str, interval: str, limit: int) -> Optional[list]:
-    cache_key = (symbol, interval, limit)
+async def fetch_klines(
+    symbol: str,
+    interval: str,
+    limit: int,
+    *,
+    start_ms: int | None = None,
+) -> Optional[list]:
     now = time.time()
     ttl_sec = _KLINES_CACHE_TTL_BY_INTERVAL.get(interval, _KLINES_CACHE_TTL_SEC_DEFAULT)
-    async with _KLINES_CACHE_LOCK:
-        cached = _KLINES_CACHE.get(cache_key)
-        if cached and now - cached[0] < ttl_sec:
-            print(
-                f"[binance_rest] klines {symbol} {interval} {limit} (cache_hit=True)"
-            )
-            return cached[1]
+    cache_key = None if start_ms is not None else (symbol, interval, limit)
+    if cache_key is not None:
+        async with _KLINES_CACHE_LOCK:
+            cached = _KLINES_CACHE.get(cache_key)
+            if cached and now - cached[0] < ttl_sec:
+                print(
+                    f"[binance_rest] klines {symbol} {interval} {limit} (cache_hit=True)"
+                )
+                return cached[1]
 
-    print(f"[binance_rest] klines {symbol} {interval} {limit} (cache_hit=False)")
+    print(
+        f"[binance_rest] klines {symbol} {interval} {limit} (cache_hit=False)"
+    )
     url = f"{BINANCE_BASE_URL}/klines"
     params = {
         "symbol": symbol,
         "interval": interval,
         "limit": limit,
     }
+    if start_ms is not None:
+        params["startTime"] = start_ms
     _track_klines_request()
     async with KLINES_SEM:
         data = await fetch_json(url, params)
     if not isinstance(data, list):
         return None
-    async with _KLINES_CACHE_LOCK:
-        _KLINES_CACHE[cache_key] = (now, data)
+    if cache_key is not None:
+        async with _KLINES_CACHE_LOCK:
+            _KLINES_CACHE[cache_key] = (now, data)
     return data
 
 
