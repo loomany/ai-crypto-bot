@@ -205,8 +205,6 @@ async def get_alt_watch_symbol(limit: int = 80, batch_size: int = 10) -> Optiona
                 best_change = change_pct
                 best_volume = volume_usdt
 
-        await asyncio.sleep(0.1)
-
     if not best_symbol:
         return None
 
@@ -459,7 +457,6 @@ async def _prepare_signal(
 
 
 async def scan_market(
-    batch_delay: float = 0.2,
     batch_size: int = 5,
     *,
     symbols: List[str] | None = None,
@@ -508,17 +505,6 @@ async def scan_market(
             )
             if signal:
                 signals.append(signal)
-
-        # Adaptive throttle when we're close to Binance 1m weight limit.
-        used = BINANCE_WEIGHT_TRACKER.used_weight_1m
-        soft = int(BINANCE_WEIGHT_TRACKER.limit_1m * BINANCE_WEIGHT_TRACKER.soft_ratio)
-        extra = 0.0
-        if BINANCE_WEIGHT_TRACKER.limit_1m > 0 and used >= soft:
-            denom = max(BINANCE_WEIGHT_TRACKER.limit_1m - soft, 1)
-            ratio = min(max((used - soft) / denom, 0.0), 1.0)
-            extra = 0.5 + 2.5 * ratio  # up to ~3s extra
-
-        await asyncio.sleep(batch_delay + extra)
 
     if return_stats:
         return signals, {"checked": checked, "candidates": len(signals)}

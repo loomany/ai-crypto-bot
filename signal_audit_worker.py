@@ -1,13 +1,12 @@
-import asyncio
 import time
 from typing import Any, Dict, Optional, Tuple
 
 from binance_rest import fetch_json
+from health import mark_ok, mark_tick, safe_worker_loop
 from signal_audit_db import fetch_open_signals, mark_signal_closed
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 KLINES_URL = f"{BINANCE_BASE_URL}/klines"
-WORKER_INTERVAL_SEC = 60 * 5
 MAX_SIGNAL_AGE_SEC = 60 * 60 * 24
 
 
@@ -188,9 +187,9 @@ async def evaluate_open_signals() -> None:
 
 
 async def signal_audit_worker_loop() -> None:
-    while True:
-        try:
-            await evaluate_open_signals()
-        except Exception as exc:
-            print(f"[signal_audit] Worker error: {exc}")
-        await asyncio.sleep(WORKER_INTERVAL_SEC)
+    async def _scan_once() -> None:
+        mark_tick("signal_audit", extra="audit cycle")
+        await evaluate_open_signals()
+        mark_ok("signal_audit", extra="audit cycle")
+
+    await safe_worker_loop("signal_audit", _scan_once)

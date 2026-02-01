@@ -20,7 +20,7 @@ MIN_PRICE_USDT = 0.0005
 MIN_VOLUME_5M_USDT = 10_000
 PRIORITY_LIMIT = 250
 BATCH_SIZE = 20
-BATCH_DELAY_SEC = 0.2
+PUMP_CHUNK_SIZE = 100
 MAX_CYCLE_SEC = 60
 _last_signals: dict[str, Dict[str, Any]] = {}
 
@@ -146,9 +146,67 @@ def _calc_signal_from_klines(symbol: str, klines: list[list[str]]) -> Dict[str, 
     return signal
 
 
+async def build_pump_symbol_list(
+    session: aiohttp.ClientSession,
+    *,
+    priority_limit: int = PRIORITY_LIMIT,
+) -> list[str]:
+    symbols = await get_usdt_symbols(session)
+    top_symbols = await get_top_usdt_symbols_by_volume(priority_limit, session=session)
+    priority = [sym for sym in top_symbols if sym in symbols]
+    rest = [sym for sym in symbols if sym not in set(priority)]
+    return priority + rest
+
+
+async def scan_pumps_chunk(
+    symbols: list[str],
+    *,
+    start_idx: int = 0,
+    batch_size: int = BATCH_SIZE,
+    max_symbols: int = PUMP_CHUNK_SIZE,
+    session: aiohttp.ClientSession | None = None,
+    return_stats: bool = False,
+) -> Tuple[List[Dict[str, Any]], Dict[str, int], int]:
+    results: list[Dict[str, Any]] = []
+    checked = 0
+    if not symbols:
+        return results, {"checked": 0, "found": 0}, start_idx
+
+    end_idx = min(start_idx + max_symbols, len(symbols))
+    close_session = False
+    if session is None:
+        session = aiohttp.ClientSession()
+        close_session = True
+
+    try:
+        for i in range(start_idx, end_idx, batch_size):
+            batch = symbols[i : i + batch_size]
+            tasks = [
+                asyncio.create_task(get_klines_1m(session, symbol, limit=25))
+                for symbol in batch
+            ]
+            klines_list = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for symbol, klines in zip(batch, klines_list):
+                checked += 1
+                if isinstance(klines, Exception):
+                    continue
+                sig = _calc_signal_from_klines(symbol, klines)
+                if sig:
+                    results.append(sig)
+    finally:
+        if close_session:
+            await session.close()
+
+    stats = {"checked": checked, "found": len(results)}
+    next_idx = end_idx if end_idx < len(symbols) else 0
+    if return_stats:
+        return results, stats, next_idx
+    return results, stats, next_idx
+
+
 async def scan_pumps(
     batch_size: int = BATCH_SIZE,
-    batch_delay: float = BATCH_DELAY_SEC,
     priority_limit: int = PRIORITY_LIMIT,
     max_cycle_sec: int = MAX_CYCLE_SEC,
     *,
@@ -162,11 +220,7 @@ async def scan_pumps(
     start_ts = time.time()
 
     async with aiohttp.ClientSession() as session:
-        symbols = await get_usdt_symbols(session)
-        top_symbols = await get_top_usdt_symbols_by_volume(priority_limit, session=session)
-        priority = [sym for sym in top_symbols if sym in symbols]
-        rest = [sym for sym in symbols if sym not in set(priority)]
-        ordered_symbols = priority + rest
+        ordered_symbols = await build_pump_symbol_list(session, priority_limit=priority_limit)
 
         for i in range(0, len(ordered_symbols), batch_size):
             if time.time() - start_ts >= max_cycle_sec:
@@ -185,8 +239,6 @@ async def scan_pumps(
                 sig = _calc_signal_from_klines(symbol, klines)
                 if sig:
                     results.append(sig)
-
-            await asyncio.sleep(batch_delay)
 
     stats = {"checked": checked, "found": len(results)}
     if return_stats:
