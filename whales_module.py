@@ -14,6 +14,7 @@ BINANCE_SPOT_BASE = "https://api.binance.com/api/v3"
 
 FLOW_WINDOW_SEC = 60
 SCAN_BATCH_SIZE = 12
+CHUNK_SIZE = 100
 
 _whales_state = {
     "quote_volume": {},
@@ -130,17 +131,34 @@ def _threshold_for_volume(quote_volume: float) -> float:
 
 
 async def whales_scan_once(bot) -> None:
+    start = time.time()
+    BUDGET = 45
     cycle_start = time.time()
     subscribers = pro_list()
     mark_tick("whales_flow", extra=f"подписчиков: {len(subscribers)}")
     if not subscribers:
         return
 
+    if not hasattr(whales_scan_once, "state"):
+        whales_scan_once.state = {
+            "pairs": [],
+            "cursor": 0,
+        }
+    state = whales_scan_once.state
+
     session = await get_shared_session()
-    pairs = await _get_usdt_pairs(session)
+    pairs = state["pairs"]
+    cursor = state["cursor"]
+    if not pairs or cursor >= len(pairs):
+        pairs = await _get_usdt_pairs(session)
+        cursor = 0
+        state["pairs"] = pairs
     if not pairs:
         mark_error("whales_flow", "no symbols to scan")
         return
+
+    chunk = pairs[cursor : cursor + CHUNK_SIZE]
+    state["cursor"] = cursor + len(chunk)
 
     quote_volumes = await _get_quote_volumes(session)
 
@@ -149,7 +167,9 @@ async def whales_scan_once(bot) -> None:
     end_ms = int(now * 1000)
 
     flow_buffer: Dict[str, Dict[str, float]] = {}
-    for batch in _chunked(pairs, SCAN_BATCH_SIZE):
+    for batch in _chunked(chunk, SCAN_BATCH_SIZE):
+        if time.time() - start > BUDGET:
+            break
         tasks = [
             asyncio.create_task(
                 _fetch_agg_trades(
@@ -165,6 +185,8 @@ async def whales_scan_once(bot) -> None:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for pair, trades in zip(batch, results):
+            if time.time() - start > BUDGET:
+                break
             if isinstance(trades, Exception) or not trades:
                 continue
             flow = _calc_flow(trades)
@@ -228,7 +250,7 @@ async def whales_scan_once(bot) -> None:
     mark_ok(
         "whales_flow",
         extra=(
-            f"checked={len(pairs)} found={found} sent={sent} cycle={cycle_sec:.1f}s"
+            f"checked={len(chunk)} found={found} sent={sent} cycle={cycle_sec:.1f}s"
         ),
     )
 
