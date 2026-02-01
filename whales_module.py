@@ -5,7 +5,15 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 from binance_rest import fetch_json, get_shared_session
-from health import mark_tick, mark_ok, mark_error, safe_worker_loop
+from health import (
+    MODULES,
+    mark_tick,
+    mark_ok,
+    mark_error,
+    safe_worker_loop,
+    update_module_progress,
+    update_current_symbol,
+)
 from market_cache import get_futures_24h, get_spot_24h
 from pro_db import pro_list
 from symbol_cache import get_futures_usdt_symbols, get_spot_usdt_symbols
@@ -182,7 +190,12 @@ async def whales_scan_once(bot) -> None:
             state["pairs"] = pairs
 
         chunk = pairs[cursor : cursor + CHUNK_SIZE]
-        state["cursor"] = cursor + len(chunk)
+        new_cursor = cursor + len(chunk)
+        state["cursor"] = new_cursor
+        total = len(pairs)
+        update_module_progress("whales_flow", total, new_cursor, len(chunk))
+        if chunk:
+            update_current_symbol("whales_flow", chunk[0]["symbol"])
 
         now = time.time()
         start_ms = int((now - FLOW_WINDOW_SEC) * 1000)
@@ -217,6 +230,7 @@ async def whales_scan_once(bot) -> None:
                 if not flow:
                     continue
                 symbol = pair["symbol"]
+                update_current_symbol("whales_flow", symbol)
                 existing = flow_buffer.get(symbol, {"buy": 0.0, "sell": 0.0})
                 existing["buy"] += flow["buy"]
                 existing["sell"] += flow["sell"]
@@ -273,10 +287,15 @@ async def whales_scan_once(bot) -> None:
             sent = 1
 
         cycle_sec = time.time() - cycle_start
+        current_symbol = (
+            MODULES.get("whales_flow").current_symbol if "whales_flow" in MODULES else None
+        )
         mark_ok(
             "whales_flow",
             extra=(
-                f"checked={len(chunk)} found={found} sent={sent} cycle={cycle_sec:.1f}s"
+                f"progress={new_cursor}/{total} "
+                f"checked={len(chunk)}/{len(chunk)} "
+                f"current={current_symbol or '-'} cycle={int(cycle_sec)}s"
             ),
         )
     finally:
