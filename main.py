@@ -22,18 +22,14 @@ from binance_rest import (
     close_shared_session,
     get_shared_session,
 )
-from whales_module import whales_market_flow_worker
-from pro_modules import (
-    router as pro_router,
-)
 from pump_detector import (
     PUMP_CHUNK_SIZE,
     build_pump_symbol_list,
     scan_pumps_chunk,
     format_pump_message,
 )
-from signals import scan_market, is_pro_strict_signal
-from symbol_cache import get_all_usdt_symbols, get_top_usdt_symbols_by_volume
+from signals import scan_market
+from symbol_cache import get_all_usdt_symbols
 from market_regime import get_market_regime
 from market_hub import MARKET_HUB
 from health import (
@@ -47,35 +43,14 @@ from health import (
     reset_request_count,
     safe_worker_loop,
     watchdog,
-    SCAN_INTERVAL,
     update_module_progress,
     update_current_symbol,
 )
 from db_path import get_db_path
 from alert_dedup_db import init_alert_dedup, can_send
 from notifications_db import init_notify_table, enable_notify, disable_notify, list_enabled
-from status_utils import get_user_plan, get_usage_today, is_notify_enabled
+from status_utils import is_notify_enabled
 from message_templates import format_scenario_message
-from pro_db import (
-    init_pro_tables,
-    pro_activate,
-    pro_get_expires,
-    pro_is,
-    pro_list,
-    pro_remove,
-    pro_can_send,
-    pro_inc_sent,
-)
-from trial_db import (
-    FREE_TRIAL_LIMIT,
-    init_trial_tables,
-    trial_ensure_user,
-    trial_get,
-    trial_inc,
-    trial_mark_paywall,
-    trial_remaining,
-    trial_reset,
-)
 from signal_audit_db import init_signal_audit_tables, insert_signal_audit, get_public_stats
 from signal_audit_worker import signal_audit_worker_loop
 from keyboards import (
@@ -83,9 +58,8 @@ from keyboards import (
     btc_inline_kb,
     main_menu_kb,
     pumpdump_inline_kb,
-    paywall_inline_kb,
 )
-from texts import AI_PAYWALL_TEXT, AI_SIGNALS_TEXT, PUMPDUMP_TEXT, START_TEXT
+from texts import AI_SIGNALS_TEXT, PUMPDUMP_TEXT, START_TEXT
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -108,7 +82,7 @@ def is_admin(user_id: int) -> bool:
 
 
 def _hidden_status_modules() -> set[str]:
-    raw = os.getenv("STATUS_HIDE_MODULES", "pro,market_pulse,signal_audit")
+    raw = os.getenv("STATUS_HIDE_MODULES", "market_pulse,signal_audit")
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
@@ -133,7 +107,7 @@ def is_trading_time() -> bool:
     return True
 
 
-# ===== РАБОТА С ПОДПИСКАМИ =====
+# ===== БАЗА ДАННЫХ =====
 
 
 def init_db():
@@ -162,8 +136,6 @@ def init_db():
 
     init_notify_table()
     init_alert_dedup()
-    init_pro_tables()
-    init_trial_tables()
     init_signal_audit_tables()
     migrate_ai_subscribers_to_notify()
 
@@ -275,22 +247,12 @@ ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 bot: Bot | None = None
 dp = Dispatcher()
 dp.include_router(btc_router)
-dp.include_router(pro_router)
 FREE_MIN_SCORE = 70
 COOLDOWN_FREE_SEC = 60 * 45
 MAX_SIGNALS_PER_CYCLE = 3
 MAX_BTC_PER_CYCLE = 1
 PULSE_INTERVAL_SEC = 60 * 60
-PRO_MIN_SCORE = 88
-PRO_MIN_RR = 2.5
-PRO_MIN_VOLUME_RATIO = 1.3
-PRO_SYMBOL_COOLDOWN_SEC = 60 * 60 * 6
-MAX_PRO_SIGNALS_PER_DAY = 4
-MAX_PRO_SIGNALS_PER_CYCLE = 2
 AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "40"))
-PRO_CHUNK_SIZE = 20
-
-LAST_PRO_SYMBOL_SENT: Dict[str, float] = {}
 LAST_PULSE_SENT_AT = 0.0
 
 
@@ -320,9 +282,6 @@ async def cmd_start(message: Message):
                 f"Язык: {language}"
             )
             await message.bot.send_message(ADMIN_CHAT_ID, admin_text)
-    trial_ensure_user(message.chat.id, "ai_signals")
-    trial_ensure_user(message.chat.id, "btc")
-
     await message.answer(START_TEXT, reply_markup=main_menu_kb())
     await message.answer(f"Ваш ID: {message.chat.id}")
 
@@ -349,15 +308,10 @@ async def ai_notify_on(callback: CallbackQuery):
         return
     chat_id = callback.from_user.id
     enable_notify(chat_id, "ai_signals")
-    trial_ensure_user(chat_id, "ai_signals")
-    remaining = trial_remaining(chat_id, "ai_signals")
     await callback.answer()
     if callback.message:
         await callback.message.answer(
-            "✅ AI-уведомления включены.\n\n"
-            "🎁 Вам доступно 3 бесплатных AI-сигнала.\n"
-            f"Осталось: {remaining}/3\n\n"
-            "После лимита бот предложит PRO (39$ / 30 дней)."
+            "✅ AI-уведомления включены."
         )
 
 
@@ -377,15 +331,10 @@ async def btc_notify_on(callback: CallbackQuery):
         return
     chat_id = callback.from_user.id
     enable_notify(chat_id, "btc")
-    trial_ensure_user(chat_id, "btc")
-    remaining = trial_remaining(chat_id, "btc")
     await callback.answer()
     if callback.message:
         await callback.message.answer(
-            "✅ BTC-уведомления включены.\n\n"
-            "🎁 Вам доступно 3 бесплатных BTC-сигнала.\n"
-            f"Осталось: {remaining}/3\n\n"
-            "После лимита бот предложит PRO (39$ / 30 дней)."
+            "✅ BTC-уведомления включены."
         )
 
 
@@ -424,8 +373,9 @@ async def pumpdump_notify_off(callback: CallbackQuery):
 
 @dp.message(F.text == "/testadmin")
 async def test_admin(message: Message):
-    pro_subscribers = pro_list()
     ai_subscribers = list_ai_subscribers()
+    btc_subscribers = list_enabled("btc")
+    pump_subscribers = list_enabled("pumpdump")
     ai_extra = MODULES.get("ai_signals").extra if "ai_signals" in MODULES else ""
     ai_extra = ai_extra.strip()
 
@@ -438,22 +388,16 @@ async def test_admin(message: Message):
             return base
         return f"{base}; {'; '.join(extra_items)}"
 
-    pro_subscribers_count = len(pro_subscribers)
     ai_subscribers_count = len(ai_subscribers)
-    if "pro" in MODULES:
-        MODULES["pro"].extra = f"подписчиков: {pro_subscribers_count}"
     if "ai_signals" in MODULES:
         base = f"подписчиков: {ai_subscribers_count}"
         MODULES["ai_signals"].extra = _merge_extra(base, ai_extra)
     if "pumpdump" in MODULES:
-        base = f"подписчиков: {pro_subscribers_count}"
+        base = f"подписчиков: {len(pump_subscribers)}"
         MODULES["pumpdump"].extra = _merge_extra(base, MODULES["pumpdump"].extra)
-    if "whales_flow" in MODULES:
-        base = f"подписчиков: {pro_subscribers_count}"
-        MODULES["whales_flow"].extra = _merge_extra(base, MODULES["whales_flow"].extra)
-    if "pro_ai" in MODULES:
-        base = f"подписчиков: {pro_subscribers_count}"
-        MODULES["pro_ai"].extra = _merge_extra(base, MODULES["pro_ai"].extra)
+    if "btc" in MODULES:
+        base = f"подписчиков: {len(btc_subscribers)}"
+        MODULES["btc"].extra = _merge_extra(base, MODULES["btc"].extra)
 
     lines = ["🛠 Статус модулей:\n"]
     now = time.time()
@@ -500,71 +444,15 @@ async def my_id_cmd(message: Message):
     await message.answer(f"user_id={user_id}\nchat_id={message.chat.id}")
 
 
-@dp.message(Command("pro_add"))
-async def pro_add_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) < 3:
-        await message.answer("Формат: /pro_add <chat_id> <days>")
-        return
-    _, chat_id, days = parts[:3]
-    expires = pro_activate(int(chat_id), int(days))
-    await message.answer(f"✅ PRO включен до {expires}")
-
-
-@dp.message(Command("pro_remove"))
-async def pro_remove_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.answer("Формат: /pro_remove <chat_id>")
-        return
-    _, chat_id = parts[:2]
-    pro_remove(int(chat_id))
-    await message.answer("❌ PRO отключен")
-
-
-@dp.message(Command("pro_status"))
-async def pro_status_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.answer("Формат: /pro_status <chat_id>")
-        return
-    _, chat_id = parts[:2]
-    active = pro_is(int(chat_id))
-    exp = pro_get_expires(int(chat_id))
-    await message.answer(f"PRO: {'ACTIVE' if active else 'OFF'}\nДо: {exp}")
-
-
-@dp.message(Command("trial_reset"))
-async def trial_reset_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.answer("Формат: /trial_reset <chat_id>")
-        return
-    _, chat_id = parts[:2]
-    trial_reset(int(chat_id))
-    await message.answer("♻️ Trial сброшен (3 сигнала снова доступны)")
-
-
 def _format_feature_status(chat_id: int, feature: str, label: str) -> str:
     notify = "ON" if is_notify_enabled(chat_id, feature) else "OFF"
-    used, limit = get_usage_today(chat_id, feature)
-    return f"{label}: notify={notify}, использовано {used}/{limit}"
+    return f"{label}: notify={notify}"
 
 
 @dp.message(Command("status"))
 async def status_cmd(message: Message):
     chat_id = message.chat.id
-    plan = get_user_plan(chat_id)
     lines = [
-        f"👤 План: {plan}",
         _format_feature_status(chat_id, "ai_signals", "AI-сигналы"),
         _format_feature_status(chat_id, "btc", "BTC"),
         _format_feature_status(chat_id, "pumpdump", "Pump/Dump"),
@@ -661,7 +549,7 @@ def _format_signed_number(value: float, decimals: int = 1) -> str:
     sign = "−" if value < 0 else "+"
     return f"{sign}{abs(value):.{decimals}f}"
 
-def _format_signal(signal: Dict[str, Any], tier: str) -> str:
+def _format_signal(signal: Dict[str, Any]) -> str:
     entry_low, entry_high = signal["entry_zone"]
     symbol = signal["symbol"]
     if symbol.endswith("USDT"):
@@ -700,23 +588,18 @@ def _format_signal(signal: Dict[str, Any], tier: str) -> str:
     )
 
 
-async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
-    """
-    Отправляет FREE/PRO сигнал всем подписчикам без блокировки event loop.
-    """
+async def send_signal_to_all(signal_dict: Dict[str, Any]):
+    """Отправляет сигнал всем подписчикам без блокировки event loop."""
     if bot is None:
         print("[ai_signals] Bot is not initialized; skipping send.")
         return
 
     skipped_dedup = 0
-    skipped_paywall = 0
     skipped_no_subs = 0
     subscribers = list_ai_subscribers()
     if not subscribers:
         skipped_no_subs += 1
-        print(
-            "[ai_signals] deliver: subs=0 queued=0 dedup=0 paywall=0"
-        )
+        print("[ai_signals] deliver: subs=0 queued=0 dedup=0")
         return
 
     # dedup ключ: символ + направление + зона входа (округление чтобы не шумело)
@@ -728,8 +611,8 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
         f"{round(float(entry_low), 6)}-{round(float(entry_high), 6)}"
     )
 
-    text = _format_signal(signal_dict, tier)
-    insert_signal_audit(signal_dict, tier=tier, module="ai_signals")
+    text = _format_signal(signal_dict)
+    insert_signal_audit(signal_dict, tier="free", module="ai_signals")
 
     tasks = []
     recipients = []
@@ -738,28 +621,13 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], tier: str):
         if not can_send(chat_id, "ai_signals", dedup_key, COOLDOWN_FREE_SEC):
             skipped_dedup += 1
             continue
-        if tier == "free" and not pro_is(chat_id):
-            trial_ensure_user(chat_id, "ai_signals")
-            used_count, paywall_sent = trial_get(chat_id, "ai_signals")
-            if used_count >= FREE_TRIAL_LIMIT:
-                if not paywall_sent:
-                    await bot.send_message(
-                        chat_id,
-                        AI_PAYWALL_TEXT,
-                        reply_markup=paywall_inline_kb(),
-                    )
-                    disable_notify(chat_id, "ai_signals")
-                    trial_mark_paywall(chat_id, "ai_signals")
-                    skipped_paywall += 1
-                continue
-            trial_inc(chat_id, "ai_signals")
         tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
         recipients.append(chat_id)
 
     print(
         "[ai_signals] deliver: "
         f"subs={len(subscribers)} queued={len(tasks)} "
-        f"dedup={skipped_dedup} paywall={skipped_paywall}"
+        f"dedup={skipped_dedup}"
     )
     if not tasks:
         return
@@ -876,14 +744,10 @@ async def pump_scan_once(bot: Bot) -> None:
     try:
         state = pump_scan_once.state
 
-        notify_subs = list_enabled("pumpdump")
-        pro_subs = pro_list()
-        subscribers = notify_subs
+        subscribers = list_enabled("pumpdump")
 
         if log_level >= 1:
-            print(
-                f"[pumpdump] subs: pro={len(pro_subs)} notify={len(notify_subs)} using=notify"
-            )
+            print(f"[pumpdump] subs: notify={len(subscribers)}")
 
         mark_tick("pumpdump", extra=f"подписчиков: {len(subscribers)}")
 
@@ -1032,9 +896,9 @@ async def ai_scan_once() -> None:
                 continue
             update_current_symbol("ai_signals", signal.get("symbol", ""))
             print(
-                f"[ai_signals] SEND FREE {signal['symbol']} {signal['direction']} score={score}"
+                f"[ai_signals] SEND {signal['symbol']} {signal['direction']} score={score}"
             )
-            await send_signal_to_all(signal, "free")
+            await send_signal_to_all(signal)
             sent_count += 1
         current_symbol = MODULES.get("ai_signals").current_symbol if "ai_signals" in MODULES else None
         req_count = get_request_count("ai_signals")
@@ -1050,151 +914,6 @@ async def ai_scan_once() -> None:
         )
     finally:
         print("[AI] scan_once end")
-
-
-def _pro_symbol_cooldown_ready(symbol: str) -> bool:
-    now = time.time()
-    last = LAST_PRO_SYMBOL_SENT.get(symbol)
-    if last and now - last < PRO_SYMBOL_COOLDOWN_SEC:
-        return False
-    return True
-
-
-def _mark_pro_symbol_sent(symbol: str) -> None:
-    if symbol:
-        LAST_PRO_SYMBOL_SENT[symbol] = time.time()
-
-
-async def _send_pro_signal(signal_dict: Dict[str, Any], subscribers: List[int]):
-    if bot is None:
-        print("[pro_ai] Bot is not initialized; skipping send.")
-        return
-
-    text = _format_signal(signal_dict, "pro")
-    insert_signal_audit(signal_dict, tier="pro", module="pro_ai")
-    for chat_id in subscribers:
-        if not pro_can_send(chat_id, MAX_PRO_SIGNALS_PER_DAY):
-            continue
-        try:
-            await bot.send_message(chat_id, text)
-            pro_inc_sent(chat_id)
-        except Exception:
-            continue
-
-    _mark_pro_symbol_sent(signal_dict.get("symbol", ""))
-
-
-async def pro_ai_scan_once() -> None:
-    start = time.time()
-    BUDGET = 45
-    if not hasattr(pro_ai_scan_once, "state"):
-        pro_ai_scan_once.state = {
-            "buffer": {},
-            "buffer_timestamps": {},
-            "buffer_ttl_sec": 60 * 60 * 6,
-            "chunk_idx": 0,
-        }
-
-    state = pro_ai_scan_once.state
-    buffer: Dict[str, Dict[str, Any]] = state["buffer"]
-    buffer_timestamps: Dict[str, float] = state["buffer_timestamps"]
-    buffer_ttl_sec: float = state["buffer_ttl_sec"]
-
-    subscribers = pro_list()
-    mark_tick("pro_ai", extra=f"подписчиков: {len(subscribers)}")
-    mark_tick("pro", extra=f"подписчиков: {len(subscribers)}")
-    if not subscribers:
-        return
-
-    top_n = int(os.getenv("PRO_SCAN_TOP_N", "250"))
-    symbols = await get_top_usdt_symbols_by_volume(top_n)
-
-    if not symbols:
-        mark_error("pro_ai", "no symbols to scan")
-        return
-    total = len(symbols)
-
-    chunks = [symbols[i : i + PRO_CHUNK_SIZE] for i in range(0, len(symbols), PRO_CHUNK_SIZE)]
-    chunk_idx = state["chunk_idx"]
-    if chunk_idx >= len(chunks):
-        chunk_idx = 0
-    chunk = chunks[chunk_idx]
-    state["chunk_idx"] = (chunk_idx + 1) % len(chunks)
-    cursor = chunk_idx * PRO_CHUNK_SIZE
-    new_cursor = cursor + len(chunk)
-    if new_cursor >= total:
-        new_cursor = 0
-    update_module_progress("pro_ai", total, new_cursor, len(chunk))
-    if chunk:
-        update_current_symbol("pro_ai", chunk[0])
-
-    reset_request_count("pro_ai")
-    reset_klines_request_count("pro_ai")
-    try:
-        with binance_request_context("pro_ai"):
-            signals = await asyncio.wait_for(
-                scan_market(
-                    symbols=chunk,
-                    batch_size=5,
-                    use_btc_gate=True,
-                    free_mode=False,
-                    min_score=PRO_MIN_SCORE,
-                    return_stats=False,
-                ),
-                timeout=BUDGET,
-            )
-    except asyncio.TimeoutError:
-        return
-    now = time.time()
-    for sig in signals:
-        if time.time() - start > BUDGET:
-            break
-        if not is_pro_strict_signal(
-            sig,
-            min_score=PRO_MIN_SCORE,
-            min_rr=PRO_MIN_RR,
-            min_volume_ratio=PRO_MIN_VOLUME_RATIO,
-        ):
-            continue
-        symbol = sig.get("symbol")
-        if not symbol or not _pro_symbol_cooldown_ready(symbol):
-            continue
-        current = buffer.get(symbol)
-        if not current or sig.get("score", 0) > current.get("score", 0):
-            buffer[symbol] = sig
-            buffer_timestamps[symbol] = now
-
-    stale_symbols = [
-        symbol
-        for symbol, ts in buffer_timestamps.items()
-        if now - ts > buffer_ttl_sec
-    ]
-    for symbol in stale_symbols:
-        buffer.pop(symbol, None)
-        buffer_timestamps.pop(symbol, None)
-
-    candidates = sorted(buffer.values(), key=lambda item: item.get("score", 0), reverse=True)
-
-    for signal in candidates[:MAX_PRO_SIGNALS_PER_CYCLE]:
-        if time.time() - start > BUDGET:
-            break
-        update_current_symbol("pro_ai", signal.get("symbol", ""))
-        await _send_pro_signal(signal, subscribers)
-        symbol = signal.get("symbol", "")
-        buffer.pop(symbol, None)
-        buffer_timestamps.pop(symbol, None)
-    current_symbol = MODULES.get("pro_ai").current_symbol if "pro_ai" in MODULES else None
-    req_count = get_request_count("pro_ai")
-    klines_count = get_klines_request_count("pro_ai")
-    mark_ok(
-        "pro_ai",
-        extra=(
-            f"progress={new_cursor}/{total} "
-            f"checked={len(chunk)}/{len(chunk)} "
-            f"current={current_symbol or '-'} cycle={int(time.time() - start)}s "
-            f"req={req_count} klines={klines_count}"
-        ),
-    )
 
 
 # ===== ТОЧКА ВХОДА =====
@@ -1213,13 +932,9 @@ async def main():
     pump_task = asyncio.create_task(
         _delayed_task(6, safe_worker_loop("pumpdump", lambda: pump_scan_once(bot)))
     )
-    whales_task = asyncio.create_task(_delayed_task(9, whales_market_flow_worker(bot)))
     print(f"[ai_signals] AI_CHUNK_SIZE={AI_CHUNK_SIZE}")
     signals_task = asyncio.create_task(
         _delayed_task(12, safe_worker_loop("ai_signals", ai_scan_once))
-    )
-    pro_ai_task = asyncio.create_task(
-        _delayed_task(15, safe_worker_loop("pro_ai", pro_ai_scan_once))
     )
     audit_task = asyncio.create_task(_delayed_task(18, signal_audit_worker_loop()))
     watchdog_task = asyncio.create_task(watchdog())
@@ -1242,12 +957,6 @@ async def main():
         btc_task.cancel()
         with suppress(asyncio.CancelledError):
             await btc_task
-        whales_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await whales_task
-        pro_ai_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await pro_ai_task
         audit_task.cancel()
         with suppress(asyncio.CancelledError):
             await audit_task
