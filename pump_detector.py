@@ -36,7 +36,7 @@ async def get_usdt_symbols(session: aiohttp.ClientSession) -> list[str]:
 
 async def get_klines_1m(symbol: str, limit: int = 25) -> list[Candle] | None:
     try:
-        with binance_request_context("pump_detector"):
+        with binance_request_context("pumpdump"):
             return await fetch_klines(symbol, "1m", limit)
     except Exception as exc:
         print(f"[BINANCE] ERROR {symbol}: {exc}")

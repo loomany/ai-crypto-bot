@@ -7,17 +7,32 @@ from typing import Any, Optional
 
 import aiohttp
 
-from binance_limits import BINANCE_WEIGHT_TRACKER, calc_backoff_seconds
-from health import increment_request_count, increment_klines_request_count
+from binance_limits import BINANCE_WEIGHT_TRACKER
+from health import (
+    increment_request_count,
+    increment_klines_request_count,
+    update_binance_global_state,
+    update_binance_stage,
+)
 from rate_limiter import BINANCE_RATE_LIMITER
 
 # ---- shared session (one per process) ----
 _SHARED_SESSION: aiohttp.ClientSession | None = None
+_SHARED_CONNECTOR: aiohttp.TCPConnector | None = None
 _SHARED_LOCK = asyncio.Lock()
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 _KLINES_CACHE: dict[tuple[str, str, int], tuple[float, list]] = {}
 _AGGTRADES_CACHE: dict[tuple[str, str, int, int], tuple[float, list]] = {}
+_BINANCE_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
+_MAX_RETRIES = 3
+_RETRY_DELAYS = (1, 2, 4)
+_STATE_LOCK = asyncio.Lock()
+_CONSECUTIVE_TIMEOUTS = 0
+_LAST_SUCCESS_TS = 0.0
+_HAS_SUCCESS = False
+_WATCHDOG_START_TS = time.time()
+_SESSION_RESTARTS = 0
 
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name)
@@ -44,21 +59,84 @@ _BINANCE_REQUEST_MODULE = ContextVar("binance_request_module", default=None)
 
 
 async def get_shared_session() -> aiohttp.ClientSession:
-    global _SHARED_SESSION
+    global _SHARED_SESSION, _SHARED_CONNECTOR
     async with _SHARED_LOCK:
         if _SHARED_SESSION is None or _SHARED_SESSION.closed:
-            timeout = aiohttp.ClientTimeout(total=5)
-            connector = aiohttp.TCPConnector(ssl=True, limit=100, ttl_dns_cache=300)
-            _SHARED_SESSION = aiohttp.ClientSession(timeout=timeout, connector=connector)
+            _SHARED_CONNECTOR = aiohttp.TCPConnector(
+                ssl=True, limit=100, ttl_dns_cache=300
+            )
+            _SHARED_SESSION = aiohttp.ClientSession(
+                timeout=_BINANCE_TIMEOUT,
+                connector=_SHARED_CONNECTOR,
+            )
         return _SHARED_SESSION
 
 
 async def close_shared_session() -> None:
-    global _SHARED_SESSION
+    global _SHARED_SESSION, _SHARED_CONNECTOR
     async with _SHARED_LOCK:
         if _SHARED_SESSION is not None and not _SHARED_SESSION.closed:
             await _SHARED_SESSION.close()
+        if _SHARED_CONNECTOR is not None and not _SHARED_CONNECTOR.closed:
+            await _SHARED_CONNECTOR.close()
         _SHARED_SESSION = None
+        _SHARED_CONNECTOR = None
+
+
+async def _restart_shared_session(reason: str | None = None) -> None:
+    global _SHARED_SESSION, _SHARED_CONNECTOR, _SESSION_RESTARTS, _CONSECUTIVE_TIMEOUTS
+    async with _SHARED_LOCK:
+        if _SHARED_SESSION is not None and not _SHARED_SESSION.closed:
+            await _SHARED_SESSION.close()
+        if _SHARED_CONNECTOR is not None and not _SHARED_CONNECTOR.closed:
+            await _SHARED_CONNECTOR.close()
+        _SHARED_CONNECTOR = aiohttp.TCPConnector(
+            ssl=True, limit=100, ttl_dns_cache=300
+        )
+        _SHARED_SESSION = aiohttp.ClientSession(
+            timeout=_BINANCE_TIMEOUT,
+            connector=_SHARED_CONNECTOR,
+        )
+    async with _STATE_LOCK:
+        _SESSION_RESTARTS += 1
+        _CONSECUTIVE_TIMEOUTS = 0
+        update_binance_global_state(
+            consecutive_timeouts=_CONSECUTIVE_TIMEOUTS,
+            session_restarts=_SESSION_RESTARTS,
+        )
+    if reason:
+        print(f"[binance_rest] session restarted: {reason}")
+
+
+async def _record_success(module: Optional[str]) -> None:
+    global _CONSECUTIVE_TIMEOUTS, _LAST_SUCCESS_TS, _HAS_SUCCESS
+    now = time.time()
+    async with _STATE_LOCK:
+        _CONSECUTIVE_TIMEOUTS = 0
+        _LAST_SUCCESS_TS = now
+        _HAS_SUCCESS = True
+        update_binance_global_state(
+            last_success_ts=_LAST_SUCCESS_TS,
+            consecutive_timeouts=_CONSECUTIVE_TIMEOUTS,
+        )
+
+
+async def _record_timeout_or_network_error(module: Optional[str]) -> None:
+    global _CONSECUTIVE_TIMEOUTS
+    async with _STATE_LOCK:
+        _CONSECUTIVE_TIMEOUTS += 1
+        update_binance_global_state(consecutive_timeouts=_CONSECUTIVE_TIMEOUTS)
+        should_restart = _CONSECUTIVE_TIMEOUTS >= 3
+    if should_restart:
+        await _restart_shared_session(reason="consecutive timeouts")
+
+
+def get_binance_state() -> dict[str, float | int]:
+    return {
+        "last_success_ts": _LAST_SUCCESS_TS,
+        "consecutive_timeouts": _CONSECUTIVE_TIMEOUTS,
+        "session_restarts": _SESSION_RESTARTS,
+    }
 
 
 # ---- optional concurrency gate (reduces socket spikes) ----
@@ -94,8 +172,7 @@ async def fetch_json(
     params: dict | None = None,
     *,
     session: aiohttp.ClientSession | None = None,
-    timeout: int = 5,
-    retries: int = 2,
+    stage: str = "request",
 ) -> Optional[Any]:
     """
     Safe GET JSON with:
@@ -107,64 +184,65 @@ async def fetch_json(
     if session is None:
         session = await get_shared_session()
 
-    for attempt in range(retries + 1):
+    module = _BINANCE_REQUEST_MODULE.get()
+    if module:
+        update_binance_stage(module, stage)
+
+    for attempt in range(_MAX_RETRIES + 1):
         try:
             await BINANCE_WEIGHT_TRACKER.pre_request_wait()
 
             async def _perform_request():
-                timeout_cfg = aiohttp.ClientTimeout(total=timeout)
                 async with BINANCE_SEM:
                     async with BINANCE_RATE_LIMITER:
                         _track_request()
-                        async with session.get(url, params=params, timeout=timeout_cfg) as resp:
+                        async with session.get(
+                            url,
+                            params=params,
+                            timeout=_BINANCE_TIMEOUT,
+                        ) as resp:
                             await BINANCE_WEIGHT_TRACKER.update_from_headers(resp.headers)
                             status = resp.status
                             headers = resp.headers
-                            if status in (418, 429, 502, 503, 504):
+                            if status in (418, 429) or 500 <= status <= 599:
                                 return status, headers, None
                             resp.raise_for_status()
                             return status, headers, await resp.json()
 
             status, headers, payload = await asyncio.wait_for(
-                _perform_request(), timeout=timeout
+                _perform_request(), timeout=_BINANCE_TIMEOUT.total
             )
 
             # Rate limit / ban protection
-            if status in (418, 429):
-                retry_after = headers.get("Retry-After")
-                backoff = min(
-                    calc_backoff_seconds(
-                        attempt=attempt,
-                        retry_after_header=retry_after,
-                    ),
-                    60.0,
-                )
-                await BINANCE_WEIGHT_TRACKER.block_for(backoff)
-                await asyncio.sleep(backoff)
-                continue
+            if status in (418, 429) or 500 <= status <= 599:
+                if attempt < _MAX_RETRIES:
+                    delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                    if status in (418, 429):
+                        await BINANCE_WEIGHT_TRACKER.block_for(delay)
+                    await asyncio.sleep(delay)
+                    continue
+                return None
 
-            # Binance temporary errors
-            if status in (502, 503, 504):
-                await asyncio.sleep(min(0.4 + 0.2 * attempt, 60.0))
-                continue
-
+            await _record_success(module)
             return payload
 
         except asyncio.TimeoutError:
-            if attempt < retries:
-                await asyncio.sleep(min(0.2 + 0.2 * attempt, 60.0))
+            await _record_timeout_or_network_error(module)
+            if attempt < _MAX_RETRIES:
+                delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                await asyncio.sleep(delay)
                 continue
             return None
 
-        except aiohttp.ClientResponseError as exc:
-            if exc.status in (418, 429):
-                backoff = min(
-                    calc_backoff_seconds(attempt=attempt, retry_after_header=None),
-                    60.0,
-                )
-                await BINANCE_WEIGHT_TRACKER.block_for(backoff)
-                await asyncio.sleep(backoff)
+        except (aiohttp.ClientConnectorError, aiohttp.ClientPayloadError):
+            await _record_timeout_or_network_error(module)
+            if attempt < _MAX_RETRIES:
+                delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                await asyncio.sleep(delay)
                 continue
+            return None
+
+        except aiohttp.ClientResponseError:
             return None
 
         except Exception as exc:
@@ -204,7 +282,7 @@ async def fetch_klines(
         params["startTime"] = start_ms
     _track_klines_request()
     async with KLINES_SEM:
-        data = await fetch_json(url, params)
+        data = await fetch_json(url, params, stage="klines")
     if not isinstance(data, list):
         return None
     if cache_key is not None:
@@ -244,9 +322,19 @@ async def fetch_agg_trades(
         "limit": limit,
     }
     async with AGGTRADES_SEM:
-        data = await fetch_json(url, params)
+        data = await fetch_json(url, params, stage="agg_trades")
     if not isinstance(data, list):
         return None
     async with _AGGTRADES_CACHE_LOCK:
         _AGGTRADES_CACHE[cache_key] = (now, data)
     return data
+
+
+async def binance_watchdog() -> None:
+    while True:
+        now = time.time()
+        age = now - _LAST_SUCCESS_TS if _HAS_SUCCESS else now - _WATCHDOG_START_TS
+        if age > 300:
+            print("[binance_watchdog] CRITICAL: no successful Binance requests >5min")
+            os._exit(1)
+        await asyncio.sleep(45)

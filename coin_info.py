@@ -51,7 +51,7 @@ async def _fetch_from_binance(base_symbol: str) -> str | None:
         return _coin_cache[base_symbol]
 
     params = {"symbol": base_symbol}
-    data = await fetch_json(_BINANCE_INFO_URL, params=params)
+    data = await fetch_json(_BINANCE_INFO_URL, params=params, stage="coin_info")
     if not data:
         return None
 

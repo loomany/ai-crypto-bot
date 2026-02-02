@@ -27,7 +27,11 @@ async def _refresh_spot(ttl_sec: int) -> List[Dict[str, Any]]:
             return _spot_cache["data"] or []
         session = await get_shared_session()
         print("[BINANCE] request ALL ticker/24hr spot")
-        data = await fetch_json(f"{BINANCE_SPOT_BASE}/ticker/24hr", session=session)
+        data = await fetch_json(
+            f"{BINANCE_SPOT_BASE}/ticker/24hr",
+            session=session,
+            stage="ticker",
+        )
         if isinstance(data, list):
             _spot_cache["data"] = data
             _spot_cache["updated_at"] = time.time()
@@ -41,7 +45,11 @@ async def _refresh_futures(ttl_sec: int) -> List[Dict[str, Any]]:
             return _futures_cache["data"] or []
         session = await get_shared_session()
         print("[BINANCE] request ALL ticker/24hr futures")
-        data = await fetch_json(f"{BINANCE_FAPI_BASE}/fapi/v1/ticker/24hr", session=session)
+        data = await fetch_json(
+            f"{BINANCE_FAPI_BASE}/fapi/v1/ticker/24hr",
+            session=session,
+            stage="ticker",
+        )
         if isinstance(data, list):
             _futures_cache["data"] = data
             _futures_cache["updated_at"] = time.time()

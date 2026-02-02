@@ -22,7 +22,11 @@ async def get_spot_usdt_symbols(session: aiohttp.ClientSession | None = None) ->
     if cached and now - float(_spot_cache.get("updated_at", 0.0)) < SPOT_SYMBOLS_REFRESH_SEC:
         return cached
 
-    data = await fetch_json(f"{BINANCE_SPOT_BASE}/exchangeInfo", session=session)
+    data = await fetch_json(
+        f"{BINANCE_SPOT_BASE}/exchangeInfo",
+        session=session,
+        stage="exchangeInfo",
+    )
     if not data or "symbols" not in data:
         return cached
 
@@ -55,7 +59,11 @@ async def get_futures_usdt_symbols(session: aiohttp.ClientSession | None = None)
     if cached and now - float(_futures_cache.get("updated_at", 0.0)) < FUTURES_SYMBOLS_REFRESH_SEC:
         return cached
 
-    data = await fetch_json(f"{BINANCE_FAPI_BASE}/fapi/v1/exchangeInfo", session=session)
+    data = await fetch_json(
+        f"{BINANCE_FAPI_BASE}/fapi/v1/exchangeInfo",
+        session=session,
+        stage="exchangeInfo",
+    )
     if not data:
         return cached
 

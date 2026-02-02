@@ -16,7 +16,12 @@ from btc_module import (
     router as btc_router,
     btc_realtime_signal_worker,
 )
-from binance_rest import binance_request_context, close_shared_session, get_shared_session
+from binance_rest import (
+    binance_request_context,
+    binance_watchdog,
+    close_shared_session,
+    get_shared_session,
+)
 from whales_module import whales_market_flow_worker
 from pro_modules import (
     router as pro_router,
@@ -1218,6 +1223,7 @@ async def main():
     )
     audit_task = asyncio.create_task(_delayed_task(18, signal_audit_worker_loop()))
     watchdog_task = asyncio.create_task(watchdog())
+    binance_watchdog_task = asyncio.create_task(binance_watchdog())
     try:
         await MARKET_HUB.start()
         print("[market_hub] started")
@@ -1248,6 +1254,9 @@ async def main():
         watchdog_task.cancel()
         with suppress(asyncio.CancelledError):
             await watchdog_task
+        binance_watchdog_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await binance_watchdog_task
         await close_shared_session()
 
 
