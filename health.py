@@ -19,6 +19,10 @@ class ModuleStatus:
     last_progress_ts: float = 0.0
     requests_last_cycle: int = 0
     klines_requests_last_cycle: int = 0
+    binance_last_success_ts: float = 0.0
+    binance_consecutive_timeouts: int = 0
+    binance_current_stage: str = ""
+    binance_session_restarts: int = 0
 
     def as_text(self) -> str:
         now = time.time()
@@ -40,6 +44,20 @@ class ModuleStatus:
 
         if self.extra:
             state += f"\n   ℹ️ {self.extra}"
+
+        binance_last_ok = (
+            f"{int(now - self.binance_last_success_ts)}s"
+            if self.binance_last_success_ts
+            else "n/a"
+        )
+        stage = self.binance_current_stage or "-"
+        state += (
+            "\n   🌐 Binance:"
+            f" last_ok={binance_last_ok}"
+            f" | timeouts={self.binance_consecutive_timeouts}"
+            f" | stage={stage}"
+            f" | session_restart={self.binance_session_restarts}"
+        )
 
         return state
 
@@ -148,6 +166,28 @@ def increment_klines_request_count(key: str, count: int = 1) -> None:
     if not st:
         return
     st.klines_requests_last_cycle += count
+
+
+def update_binance_global_state(
+    *,
+    last_success_ts: float | None = None,
+    consecutive_timeouts: int | None = None,
+    session_restarts: int | None = None,
+) -> None:
+    for st in MODULES.values():
+        if last_success_ts is not None:
+            st.binance_last_success_ts = last_success_ts
+        if consecutive_timeouts is not None:
+            st.binance_consecutive_timeouts = consecutive_timeouts
+        if session_restarts is not None:
+            st.binance_session_restarts = session_restarts
+
+
+def update_binance_stage(module: str, stage: str) -> None:
+    st = MODULES.get(module)
+    if not st:
+        return
+    st.binance_current_stage = stage
 
 
 def get_request_count(key: str) -> int:

@@ -25,7 +25,7 @@ async def _fetch_futures_json(url: str, params: Dict) -> Optional[Dict]:
     """
     Универсальный helper для запросов к Binance Futures.
     """
-    data = await fetch_json(url, params)
+    data = await fetch_json(url, params, stage="agg_trades")
     if not data:
         print(f"[analyze_orderflow] fetch error {url}")
         return None
