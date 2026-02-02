@@ -8,8 +8,6 @@ from aiogram import Router, F
 from aiogram.types import (
     Message,
     CallbackQuery,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
 )
 from aiogram.fsm.context import FSMContext
 
@@ -33,18 +31,9 @@ from trading_core import (
     compute_score,
 )
 from health import mark_tick, mark_ok, mark_error, mark_warn, safe_worker_loop
-from notifications_db import disable_notify, list_enabled
+from notifications_db import list_enabled
 from message_templates import format_scenario_message
-from keyboards import btc_inline_kb, paywall_inline_kb
-from pro_db import pro_is
-from texts import BTC_PAYWALL_TEXT
-from trial_db import (
-    FREE_TRIAL_LIMIT,
-    trial_ensure_user,
-    trial_get,
-    trial_inc,
-    trial_mark_paywall,
-)
+from keyboards import btc_inline_kb
 
 # ============================================================
 # Константы и базовые настройки
@@ -195,24 +184,6 @@ async def btc_scan_once(bot) -> None:
             try:
                 if int(signal.probability or 0) < BTC_MIN_PROBABILITY:
                     continue
-                if not pro_is(user_id):
-                    trial_ensure_user(user_id, "btc")
-                    used_count, paywall_sent = trial_get(user_id, "btc")
-                    if used_count >= FREE_TRIAL_LIMIT:
-                        if not paywall_sent:
-                            print(
-                                "[BTC] paywall -> disable_notify "
-                                f"user_id={user_id}"
-                            )
-                            await bot.send_message(
-                                chat_id=user_id,
-                                text=BTC_PAYWALL_TEXT,
-                                reply_markup=paywall_inline_kb(),
-                            )
-                            disable_notify(user_id, "btc")
-                            trial_mark_paywall(user_id, "btc")
-                        continue
-                    trial_inc(user_id, "btc")
                 await bot.send_message(chat_id=user_id, text=text)
             except Exception:
                 continue

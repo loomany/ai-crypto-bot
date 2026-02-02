@@ -64,11 +64,8 @@ class ModuleStatus:
 
 MODULES: Dict[str, ModuleStatus] = {
     "ai_signals": ModuleStatus("🎯 AI-сигналы"),
-    "pro": ModuleStatus("🧠 PRO (комбайн)"),
     "pumpdump": ModuleStatus("🚀 Pump/Dump Scanner"),
     "btc": ModuleStatus("₿ BTC (intraday)"),
-    "whales_flow": ModuleStatus("🐳 Whale Flow Scanner"),
-    "pro_ai": ModuleStatus("🎯 PRO AI-сигналы"),
     "market_pulse": ModuleStatus("📡 Market Pulse"),
     "signal_audit": ModuleStatus("🧾 Signal Audit"),
 }

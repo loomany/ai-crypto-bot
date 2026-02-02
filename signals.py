@@ -49,43 +49,6 @@ AI_STAGE_A_LIMIT_1H = int(os.getenv("AI_STAGE_A_LIMIT_1H", str(KLINES_1H_LIMIT))
 AI_STAGE_A_LIMIT_15M = int(os.getenv("AI_STAGE_A_LIMIT_15M", str(KLINES_15M_LIMIT)))
 
 
-def is_pro_strict_signal(
-    signal: Dict[str, Any],
-    min_score: float = 88,
-    min_rr: float = 2.5,
-    min_volume_ratio: float = 1.3,
-) -> bool:
-    score = float(signal.get("score", 0.0))
-    if score < min_score:
-        return False
-
-    reason = signal.get("reason", {}) if isinstance(signal.get("reason"), dict) else {}
-    rr = float(reason.get("rr", 0.0))
-    volume_ratio = float(reason.get("volume_ratio", 0.0))
-    trend_1d = reason.get("trend_1d")
-    trend_4h = reason.get("trend_4h")
-    direction = signal.get("direction", "long")
-
-    if rr < min_rr:
-        return False
-    if volume_ratio < min_volume_ratio:
-        return False
-
-    def _trend_ok(direction_value: str, trend_value: Any) -> bool:
-        if direction_value == "long":
-            return trend_value in ("up", "bullish")
-        if direction_value == "short":
-            return trend_value in ("down", "bearish")
-        return False
-
-    if not _trend_ok(direction, trend_4h):
-        return False
-    if trend_1d and trend_1d not in ("range", "neutral") and not _trend_ok(direction, trend_1d):
-        return False
-
-    return True
-
-
 async def get_btc_context() -> Dict[str, Any]:
     """
     Анализирует BTCUSDT и возвращает контекст рынка:
