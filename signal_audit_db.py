@@ -259,3 +259,71 @@ def get_public_stats(days: int = 30) -> dict:
         }
     finally:
         conn.close()
+
+
+def get_ai_signal_stats(days: int | None) -> dict:
+    now = int(time.time())
+    params: list[Any] = ["TP1", "TP2", "SL", "EXPIRED"]
+    since_clause = ""
+    if days is not None:
+        since_clause = " AND sent_at >= ?"
+        params.append(now - days * 86400)
+
+    conn = sqlite3.connect(get_db_path())
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT outcome, score
+            FROM signal_audit
+            WHERE status = 'closed'
+              AND outcome IN (?, ?, ?, ?)
+              {since_clause}
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+
+        total = len(rows)
+        tp2 = sum(1 for row in rows if row["outcome"] == "TP2")
+        tp1 = sum(1 for row in rows if row["outcome"] in ("TP1", "TP2"))
+        sl = sum(1 for row in rows if row["outcome"] == "SL")
+        exp = sum(1 for row in rows if row["outcome"] == "EXPIRED")
+        winrate = (tp1 / total * 100) if total else 0.0
+
+        buckets = {
+            "0-69": {"total": 0, "tp1plus": 0},
+            "70-79": {"total": 0, "tp1plus": 0},
+            "80-100": {"total": 0, "tp1plus": 0},
+        }
+        for row in rows:
+            score = row["score"]
+            if score is None:
+                continue
+            score_value = float(score)
+            if score_value < 70:
+                bucket = buckets["0-69"]
+            elif score_value < 80:
+                bucket = buckets["70-79"]
+            else:
+                bucket = buckets["80-100"]
+            bucket["total"] += 1
+            if row["outcome"] in ("TP1", "TP2"):
+                bucket["tp1plus"] += 1
+
+        for bucket in buckets.values():
+            total_bucket = bucket["total"]
+            bucket["winrate"] = (bucket["tp1plus"] / total_bucket * 100) if total_bucket else 0.0
+
+        return {
+            "total": total,
+            "tp1": tp1,
+            "tp2": tp2,
+            "sl": sl,
+            "exp": exp,
+            "winrate": winrate,
+            "buckets": buckets,
+        }
+    finally:
+        conn.close()
