@@ -962,6 +962,7 @@ def _format_signal(signal: Dict[str, Any]) -> str:
 
     side = "LONG" if signal.get("direction") == "long" else "SHORT"
     score = int(signal.get("score", 0))
+    breakdown = signal.get("score_breakdown") or signal.get("breakdown") or []
 
     return format_scenario_message(
         symbol_text=symbol_text,
@@ -979,6 +980,7 @@ def _format_signal(signal: Dict[str, Any]) -> str:
         volume_ratio=volume_ratio,
         rr=rr,
         price_precision=4,
+        score_breakdown=breakdown,
     )
 
 

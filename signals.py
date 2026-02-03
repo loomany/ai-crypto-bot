@@ -585,6 +585,7 @@ async def _prepare_signal(
         "tp1": round(tp1, 4),
         "tp2": round(tp2, 4),
         "score": min(100, abs(raw_score)),
+        "score_raw": int(round(raw_score)),
         "reason": {
             "trend_1d": global_trend,
             "trend_4h": h4_structure["trend"],
@@ -595,6 +596,7 @@ async def _prepare_signal(
             "rr": rr,
         },
         "breakdown": breakdown,
+        "score_breakdown": breakdown,
         "levels": {
             "support": round(support_level or 0.0, 4),
             "resistance": round(resistance_level or 0.0, 4),

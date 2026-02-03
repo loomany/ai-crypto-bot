@@ -44,65 +44,110 @@ def format_scenario_message(
     volume_ratio: float,
     rr: float,
     price_precision: int,
+    score_breakdown: Optional[list[dict]] = None,
 ) -> str:
     is_long = side == "LONG"
     emoji = "📈" if is_long else "📉"
     scenario_text = "LONG" if is_long else "SHORT"
-    condition_line = (
-        "• сценарий актуален, если цена не закрепляется ниже зоны"
-        if is_long
-        else "• сценарий актуален, если цена не закрепляется выше зоны"
-    )
-    confirmation_line = (
-        "• рекомендуется дождаться подтверждения силы на 5–15m"
-        if is_long
-        else "• рекомендуется дождаться подтверждения слабости на 5–15m"
-    )
-    stop_condition = "ниже" if is_long else "выше"
     entry_mid = (entry_from + entry_to) / 2
-    tp1_pct = (tp1 / entry_mid - 1) * 100
-    tp2_pct = (tp2 / entry_mid - 1) * 100
 
     score = max(0, min(100, int(score)))
 
+    holds_rule = "удерживается выше зоны" if is_long else "удерживается ниже зоны"
+    stop_condition = "ниже" if is_long else "выше"
+    invalid_level = _format_price(sl, price_precision)
+
+    tp_candidates = [tp1, tp2]
+    if is_long:
+        tp_candidates = sorted(tp_candidates)
+        targets_invalid = max(tp_candidates) <= entry_mid
+    else:
+        tp_candidates = sorted(tp_candidates, reverse=True)
+        targets_invalid = min(tp_candidates) >= entry_mid
+
+    if targets_invalid:
+        tp_lines = [
+            "🎯 TP1: требуют уточнения",
+            "🎯 TP2: требуют уточнения",
+        ]
+    else:
+        tp1_val, tp2_val = tp_candidates
+        tp1_pct = (tp1_val / entry_mid - 1) * 100
+        tp2_pct = (tp2_val / entry_mid - 1) * 100
+        tp_lines = [
+            f"🎯 TP1: {_format_price(tp1_val, price_precision)} ({_format_pct(tp1_pct)})",
+            f"🎯 TP2: {_format_price(tp2_val, price_precision)} ({_format_pct(tp2_pct)})",
+        ]
+
+    breakdown_items = score_breakdown or []
+    label_map = {
+        "global_trend": "Глобальный тренд (1D)",
+        "local_trend": "Локальный тренд (1H)",
+        "near_key_level": "Реакция на ключевую зону (POI)",
+        "liquidity_sweep": "Снос ликвидности",
+        "volume_climax": "Объём относительно среднего",
+        "rsi_divergence": "RSI-дивергенция",
+        "atr_ok": "Волатильность (ATR)",
+        "bb_extreme": "Экстремум Bollinger",
+        "ma_trend_ok": "EMA-согласование",
+        "orderflow": "Ордерфлоу",
+        "whale_activity": "Китовая активность",
+        "ai_pattern": "AI-паттерны",
+        "market_regime": "Рыночный режим",
+    }
+    breakdown_lines = []
+    for item in breakdown_items:
+        key = item.get("key")
+        label = item.get("label")
+        if key in label_map:
+            label = label_map[key]
+        label = label or key or "Фактор"
+        delta = item.get("points", item.get("delta", 0))
+        try:
+            delta_value = int(round(float(delta)))
+        except (TypeError, ValueError):
+            delta_value = 0
+        sign = "−" if delta_value < 0 else "+"
+        breakdown_lines.append(f"• {label}: {sign}{abs(delta_value)}")
+
     lines = [
-        f"Монета: {symbol_text}",
-        f"{emoji} Сценарий: возможный {scenario_text}",
-        f"⏱ Таймфрейм анализа: {timeframe}",
+        symbol_text,
+        f"{emoji} Возможный {scenario_text}",
+        f"⏱ Таймфрейм сценария: {timeframe} | Вход: 5–15m",
         "",
         "Зона интереса (POI):",
         f"• {_format_price(entry_from, price_precision)} – {_format_price(entry_to, price_precision)}",
         "",
-        "Условие реализации сценария:",
-        condition_line,
-        confirmation_line,
+        "Условия реализации:",
+        f"• сценарий актуален, пока цена {holds_rule}",
+        "• вход рассматривается только после подтверждения на 5–15m",
         "",
-        "Уровень отмены сценария:",
-        f"• {_format_price(sl, price_precision)} (закрепление {stop_condition} на {timeframe} отменяет сценарий)",
+        "🔎 Подтверждение на 5–15m:",
+        (
+            "• закрытие свечи по направлению (выше зоны для LONG / ниже для SHORT)"
+        ),
+        "• цена удерживается вне зоны без быстрого возврата",
         "",
-        "Потенциальные цели движения:",
-        f"• 🎯 Цель 1: {_format_price(tp1, price_precision)} ({_format_pct(tp1_pct)} от зоны)",
-        f"• 🎯 Цель 2: {_format_price(tp2, price_precision)} ({_format_pct(tp2_pct)} от зоны)",
+        "Отмена сценария:",
+        f"• если 1H свеча закроется {stop_condition} {invalid_level}",
         "",
-        "Оценка модели:",
+        "Потенциальные цели:",
+        *tp_lines,
+        "",
+        "Краткий контекст:",
+        f"• Тренд 1D / 4H: {_trend_to_text(trend_1d)} / {_trend_to_text(trend_4h)}",
+        f"• RSI 1H: {rsi_1h:.1f} ({_rsi_zone(rsi_1h)})",
+        f"• Объём: {volume_ratio:.2f}x к среднему",
+        f"• RR ≈ 1 : {rr:.2f}",
+        "",
         f"🧠 Score: {score} / 100",
         "",
-        "Краткий рыночный контекст:",
-        f"• 1D тренд: {_trend_to_text(trend_1d)}",
-        f"• 4H тренд: {_trend_to_text(trend_4h)}",
-        f"• RSI 1H: {rsi_1h:.1f} ({_rsi_zone(rsi_1h)})",
-        f"• Объём: {volume_ratio:.2f}x выше среднего",
-        f"• Соотношение риск/движение: ~{rr:.2f} : 1",
+        "🧩 Детали Score (сумма баллов):",
+        *breakdown_lines,
+        f"= Итоговая оценка: {score}",
         "",
-        "🧾 Шаблон входа (risk-management):",
-        "• Риск на сделку: 1% депозита",
-        "• Формула объёма: position = risk$ / stop%",
-        "• После TP1: 50% фиксация + SL в BE",
-        "",
-        "⚠️ Бот не знает твой депозит и не управляет рисками.",
-        "Решение о входе, объёме позиции и уровне риска ты принимаешь самостоятельно.",
-        "",
-        "📌 Данный сценарий предназначен для аналитики рынка",
-        "и не является инвестиционной рекомендацией.",
+        "ℹ️ Score — внутренняя оценка качества сценария, основанная на рыночных факторах и условиях модели.",
+        "ℹ️ Бот ищет сетапы, не гарантирует прибыль.",
+        "ℹ️ Сценарий требует подтверждения перед входом.",
     ]
     return "\n".join(lines)
