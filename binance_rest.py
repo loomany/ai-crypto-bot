@@ -25,7 +25,7 @@ BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 # cache by (symbol, interval) to reuse across different LIMIT requests
 # value: (ts, data_list, max_len)
 _KLINES_CACHE: dict[tuple[str, str], tuple[float, list, int]] = {}
-_KLINES_INFLIGHT: dict[tuple[str, str, int], asyncio.Task] = {}
+_KLINES_INFLIGHT: dict[tuple[str, str, int, int], asyncio.Task] = {}
 _KLINES_CACHE_HITS: dict[str, int] = {}
 _KLINES_CACHE_MISSES: dict[str, int] = {}
 _KLINES_INFLIGHT_AWAITS: dict[str, int] = {}
@@ -54,10 +54,10 @@ _KLINES_CACHE_TTL_SEC_DEFAULT = 20
 _KLINES_CACHE_TTL_BY_INTERVAL = {
     "1d": _env_int("KLINES_TTL_1D", 60 * 30),
     "4h": _env_int("KLINES_TTL_4H", 60 * 15),
-    "1h": _env_int("KLINES_TTL_1H", 120),
-    "15m": _env_int("KLINES_TTL_15M", 30),
-    "5m": _env_int("KLINES_TTL_5M", 30),
-    "1m": _env_int("KLINES_TTL_1M", 8),
+    "1h": _env_int("KLINES_TTL_1H", 300),
+    "15m": _env_int("KLINES_TTL_15M", 120),
+    "5m": _env_int("KLINES_TTL_5M", 120),
+    "1m": _env_int("KLINES_TTL_1M", 60),
 }
 _KLINES_CACHE_LOCK = asyncio.Lock()
 _KLINES_INFLIGHT_LOCK = asyncio.Lock()
@@ -308,7 +308,7 @@ async def fetch_klines(
                         return cached_data[-limit:]
 
     _increment_stat(_KLINES_CACHE_MISSES, module)
-    inflight_key = (symbol, interval, int(start_ms or 0))
+    inflight_key = (symbol, interval, int(start_ms or 0), limit)
     created = False
     async with _KLINES_INFLIGHT_LOCK:
         task = _KLINES_INFLIGHT.get(inflight_key)
