@@ -1,11 +1,11 @@
 import os
 from pathlib import Path
 
-DATA_DIR = os.getenv("DATA_DIR", "/data")
-DB_FILE = os.getenv("DB_FILE", "kryption.db")
-DB_PATH = Path(DATA_DIR) / DB_FILE
-Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-
 
 def get_db_path() -> str:
-    return str(DB_PATH)
+    db_path = os.getenv("DB_PATH")
+    if db_path:
+        return db_path
+    data_dir = Path("./data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return str(data_dir / "bot.db")
