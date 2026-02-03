@@ -1282,13 +1282,21 @@ async def pump_scan_once(bot: Bot) -> None:
                 f"final={symbol_stats.get('final')}"
             )
         total = len(symbols)
-        update_current_symbol("pumpdump", symbols[0] if symbols else "")
+        try:
+            cursor = int(get_state("pumpdump_cursor", "0") or "0")
+        except Exception:
+            cursor = 0
+        if cursor >= len(symbols):
+            cursor = 0
+
+        update_current_symbol("pumpdump", symbols[cursor] if symbols else "")
 
         cycle_start = time.time()
         try:
-            signals, stats, _next_cursor = await asyncio.wait_for(
+            signals, stats, next_cursor = await asyncio.wait_for(
                 scan_pumps_chunk(
                     symbols,
+                    start_idx=cursor,
                     time_budget_sec=BUDGET,
                     return_stats=True,
                     progress_cb=lambda sym: update_current_symbol("pumpdump", sym),
@@ -1297,6 +1305,7 @@ async def pump_scan_once(bot: Bot) -> None:
             )
         except asyncio.TimeoutError:
             return
+        set_state("pumpdump_cursor", str(next_cursor))
         found = stats.get("found", len(signals) if isinstance(signals, list) else 0)
 
         if log_level >= 1:
@@ -1314,9 +1323,14 @@ async def pump_scan_once(bot: Bot) -> None:
                     f"5m={s.get('change_5m')}% "
                     f"volx={s.get('volume_mul')}"
                 )
-        chunk_len = min(PUMP_CHUNK_SIZE, total) if total else 0
         checked = stats.get("checked", 0)
-        update_module_progress("pumpdump", total, checked, checked)
+        chunk_len = min(PUMP_CHUNK_SIZE, total) if total else 0
+        update_module_progress(
+            "pumpdump",
+            total_symbols=total,
+            cursor=next_cursor,
+            checked_last_cycle=checked,
+        )
 
         now_min = int(time.time() // 60)
         sent_count = 0
@@ -1450,10 +1464,10 @@ async def ai_scan_once() -> None:
         added = 0
         with binance_request_context("ai_signals"):
             for symbol in chunk:
-                update_current_symbol("ai_signals", symbol)
                 if time.time() - start > BUDGET:
                     print("[AI] budget exceeded, stopping early")
                     break
+                update_current_symbol("ai_signals", symbol)
                 score, reason = await _compute_candidate_score(symbol)
                 if score < CANDIDATE_SCORE_MIN:
                     continue
