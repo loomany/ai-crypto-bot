@@ -356,6 +356,7 @@ WATCHLIST_MAX = int(os.getenv("WATCHLIST_MAX", "30"))
 WATCHLIST_TTL_MIN = int(os.getenv("WATCHLIST_TTL_MIN", "30"))
 WATCHLIST_COOLDOWN_MIN = int(os.getenv("WATCHLIST_COOLDOWN_MIN", "45"))
 WATCHLIST_SCAN_EVERY_SEC = int(os.getenv("WATCHLIST_SCAN_EVERY_SEC", "60"))
+AI_DEEP_TOP_K = int(os.getenv("AI_DEEP_TOP_K", os.getenv("AI_MAX_DEEP_PER_CYCLE", "3")))
 CANDIDATE_SCORE_MIN = int(os.getenv("CANDIDATE_SCORE_MIN", "60"))
 
 
@@ -1591,6 +1592,7 @@ async def watchlist_scan_once() -> None:
     now = int(time.time())
     rows = list_watchlist_for_scan(now, WATCHLIST_MAX)
     symbols = [row["symbol"] for row in rows]
+    priority_scores = {row["symbol"]: float(row["score"]) for row in rows}
     if not symbols:
         active_watchlist, total_watchlist = get_watchlist_counts(now)
         mark_ok(
@@ -1608,6 +1610,8 @@ async def watchlist_scan_once() -> None:
             min_score=FREE_MIN_SCORE,
             return_stats=True,
             time_budget=BUDGET,
+            deep_scan_limit=AI_DEEP_TOP_K,
+            priority_scores=priority_scores,
         )
     print("[ai_signals] watchlist stats:", stats)
     module_state = MODULES.get("ai_signals")

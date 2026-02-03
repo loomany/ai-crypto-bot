@@ -165,3 +165,38 @@ async def get_top_usdt_symbols_by_volume(
 
     usdt_rows.sort(key=lambda item: item[1], reverse=True)
     return [symbol for symbol, _ in usdt_rows[:limit]]
+
+
+async def get_top_usdt_symbols_by_movers(
+    gainers_limit: int = 0,
+    losers_limit: int = 0,
+    *,
+    session: aiohttp.ClientSession | None = None,
+) -> tuple[List[str], List[str]]:
+    if gainers_limit <= 0 and losers_limit <= 0:
+        return [], []
+
+    data = await get_spot_24h()
+    if not data:
+        return [], []
+
+    movers: list[tuple[str, float]] = []
+    for row in data:
+        symbol = row.get("symbol")
+        if not symbol or not symbol.endswith("USDT"):
+            continue
+        if not is_tradeable_symbol(symbol, row):
+            continue
+        try:
+            change_pct = float(row.get("priceChangePercent", 0.0))
+        except (TypeError, ValueError):
+            continue
+        movers.append((symbol, change_pct))
+
+    gainers = sorted(movers, key=lambda item: item[1], reverse=True)
+    losers = sorted(movers, key=lambda item: item[1])
+
+    return (
+        [symbol for symbol, _ in gainers[:gainers_limit]] if gainers_limit > 0 else [],
+        [symbol for symbol, _ in losers[:losers_limit]] if losers_limit > 0 else [],
+    )

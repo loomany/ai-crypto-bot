@@ -643,6 +643,8 @@ async def scan_market(
     min_score: float | None = None,
     return_stats: bool = False,
     time_budget: float | None = None,
+    deep_scan_limit: int | None = None,
+    priority_scores: Dict[str, float] | None = None,
 ) -> List[Dict[str, Any]] | Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Сканирует весь рынок Binance по спотовым USDT-парам и возвращает сигналы.
@@ -675,6 +677,7 @@ async def scan_market(
     start_time = time.time()
     debug_state = {"used": 0, "max": MAX_FAIL_DEBUG_LOGS_PER_CYCLE}
     deep_scans_done = 0
+    max_deep_scans = AI_MAX_DEEP_PER_CYCLE if deep_scan_limit is None else deep_scan_limit
 
     if use_btc_gate:
         if not btc_ctx["allow_longs"] and not btc_ctx["allow_shorts"]:
@@ -718,10 +721,17 @@ async def scan_market(
         if not scored:
             continue
 
-        remaining_deep = AI_MAX_DEEP_PER_CYCLE - deep_scans_done
+        remaining_deep = max_deep_scans - deep_scans_done
         if remaining_deep <= 0:
             break
-        candidate_symbols = [symbol for symbol, _ in scored[:remaining_deep]]
+        ranked = scored
+        if priority_scores:
+            ranked = sorted(
+                scored,
+                key=lambda item: (priority_scores.get(item[0], item[1]), item[1]),
+                reverse=True,
+            )
+        candidate_symbols = [symbol for symbol, _ in ranked[:remaining_deep]]
         deep_scans_done += len(candidate_symbols)
 
         tasks = [asyncio.create_task(_gather_klines(symbol)) for symbol in candidate_symbols]
