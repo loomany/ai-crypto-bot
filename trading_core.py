@@ -163,6 +163,37 @@ def _compute_rsi_series(closes: List[float], period: int = 14) -> List[float]:
     return prefix + rsis
 
 
+def _compute_atr_series(
+    highs: List[float], lows: List[float], closes: List[float], period: int = 14
+) -> List[float]:
+    if not closes:
+        return []
+
+    if len(closes) < 2 or len(highs) != len(closes) or len(lows) != len(closes):
+        return [0.0] * len(closes)
+
+    trs: List[float] = []
+    for i in range(1, len(closes)):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        trs.append(tr)
+
+    if len(trs) < period:
+        return [0.0] * len(closes)
+
+    atr = sum(trs[:period]) / period
+    atrs: List[float] = [atr]
+    for tr in trs[period:]:
+        atr = (atr * (period - 1) + tr) / period
+        atrs.append(atr)
+
+    prefix = [0.0] * (len(closes) - len(atrs))
+    return prefix + [round(value, 6) for value in atrs]
+
+
 def detect_rsi_divergence(price_series: List[float], rsi_series: List[float], direction: str) -> bool:
     if len(price_series) < 6 or len(price_series) != len(rsi_series):
         return False
