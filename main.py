@@ -28,7 +28,6 @@ from signals import scan_market
 from market_access import get_quick_with_fallback
 from trading_core import compute_atr, compute_ema
 from symbol_cache import get_all_usdt_symbols, get_top_usdt_symbols_by_volume
-from market_regime import get_market_regime
 from market_hub import MARKET_HUB
 from health import (
     MODULES,
@@ -90,7 +89,7 @@ def is_admin(user_id: int) -> bool:
 
 
 def _hidden_status_modules() -> set[str]:
-    raw = os.getenv("STATUS_HIDE_MODULES", "market_pulse,signal_audit")
+    raw = os.getenv("STATUS_HIDE_MODULES", "signal_audit")
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
@@ -330,7 +329,6 @@ FREE_MIN_SCORE = 70
 COOLDOWN_FREE_SEC = int(os.getenv("AI_SIGNALS_COOLDOWN_SEC", "3600"))
 MAX_SIGNALS_PER_CYCLE = 3
 MAX_BTC_PER_CYCLE = 1
-PULSE_INTERVAL_SEC = 60 * 60
 AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "40"))
 AI_UNIVERSE_TOP_N = int(os.getenv("AI_UNIVERSE_TOP_N", "250"))
 WATCHLIST_MAX = int(os.getenv("WATCHLIST_MAX", "30"))
@@ -338,7 +336,6 @@ WATCHLIST_TTL_MIN = int(os.getenv("WATCHLIST_TTL_MIN", "30"))
 WATCHLIST_COOLDOWN_MIN = int(os.getenv("WATCHLIST_COOLDOWN_MIN", "45"))
 WATCHLIST_SCAN_EVERY_SEC = int(os.getenv("WATCHLIST_SCAN_EVERY_SEC", "60"))
 CANDIDATE_SCORE_MIN = int(os.getenv("CANDIDATE_SCORE_MIN", "60"))
-LAST_PULSE_SENT_AT = 0.0
 
 
 # ===== ХЭНДЛЕРЫ =====
@@ -367,7 +364,12 @@ async def cmd_start(message: Message):
                 f"Язык: {language}"
             )
             await message.bot.send_message(ADMIN_CHAT_ID, admin_text)
-    await message.answer(START_TEXT, reply_markup=main_menu_kb())
+    await message.answer(
+        START_TEXT,
+        reply_markup=main_menu_kb(
+            is_admin=is_admin(message.from_user.id) if message.from_user else False
+        ),
+    )
     await message.answer(f"Ваш ID: {message.chat.id}")
 
 
@@ -458,8 +460,11 @@ async def pumpdump_notify_off(callback: CallbackQuery):
         await callback.message.answer("🚫 Pump/Dump уведомления отключены.")
 
 
-@dp.message(F.text == "/testadmin")
+@dp.message(Command("testadmin"))
 async def test_admin(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        await message.answer("⛔ Нет доступа")
+        return
     ai_subscribers = list_ai_subscribers()
     pump_subscribers = list_user_ids_with_pref("pumpdump_enabled", 1)
     ai_extra = MODULES.get("ai_signals").extra if "ai_signals" in MODULES else ""
@@ -502,6 +507,14 @@ async def test_admin(message: Message):
     await message.answer("\n".join(lines))
 
 
+@dp.message(F.text == "🛠 Диагностика (админ)")
+async def test_admin_button(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        await message.answer("⛔ Нет доступа")
+        return
+    await test_admin(message)
+
+
 @dp.message(Command("test_notify"))
 async def test_notify_cmd(message: Message):
     user_id = message.from_user.id if message.from_user else None
@@ -527,25 +540,94 @@ async def my_id_cmd(message: Message):
     await message.answer(f"user_id={user_id}\nchat_id={message.chat.id}")
 
 
-def _format_feature_status(chat_id: int, feature: str, label: str) -> str:
-    enabled = is_notify_enabled(chat_id, feature)
-    status = "✅ включено" if enabled else "⛔ выключено"
-    return f"{label}: {status}"
+def _human_ago(seconds: int) -> str:
+    if seconds < 0:
+        seconds = 0
+    if seconds < 60:
+        return f"{seconds} сек"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} мин"
+    hours = minutes // 60
+    return f"{hours} ч"
+
+
+def _format_user_bot_status(chat_id: int) -> str:
+    """Понятный для пользователя статус (без тех. мусора)."""
+    now = time.time()
+
+    ai_enabled = is_notify_enabled(chat_id, "ai_signals")
+    pd_enabled = is_notify_enabled(chat_id, "pumpdump")
+
+    ai = MODULES.get("ai_signals")
+    pd = MODULES.get("pumpdump")
+
+    def _module_line(title: str, st) -> str:
+        if not st:
+            return f"• {title}: нет данных"
+        if st.last_tick == 0:
+            return f"• {title}: ещё не запускался"
+        tick_ago = _human_ago(int(now - st.last_tick))
+        ok_part = ""
+        if st.last_ok:
+            ok_part = f", успешный запрос: {_human_ago(int(now - st.last_ok))} назад"
+        return f"• {title}: активен ({tick_ago} назад{ok_part})"
+
+    def _scan_hint(st) -> str:
+        if not st:
+            return ""
+        parts = []
+        if getattr(st, "total_symbols", 0):
+            parts.append(f"рынок: {st.total_symbols} монет")
+        if getattr(st, "checked_last_cycle", 0):
+            parts.append(f"проверено за цикл: {st.checked_last_cycle}")
+        if getattr(st, "current_symbol", ""):
+            parts.append(f"сейчас: {st.current_symbol}")
+        return " | ".join(parts)
+
+    def _binance_hint(st) -> str:
+        ts = getattr(st, "binance_last_success_ts", 0)
+        if not ts:
+            return "Binance: нет свежих данных"
+        return f"Binance: обновление {_human_ago(int(now - ts))} назад"
+
+    lines = [
+        "ℹ️ Статус бота",
+        "",
+        f"🔔 AI-сигналы: {'✅ включены' if ai_enabled else '⛔ выключены'}",
+        f"🔔 Pump/Dump: {'✅ включены' if pd_enabled else '⛔ выключены'}",
+        "",
+        "Что сейчас делает бот:",
+        _module_line("AI-сигналы", ai),
+        (f"  ↳ {_scan_hint(ai)}" if _scan_hint(ai) else ""),
+        _module_line("Pump/Dump", pd),
+        "",
+        _binance_hint(ai or pd),
+        "",
+        "Если хочешь получать сигналы автоматически — включи уведомления в нужном разделе.",
+    ]
+    compact = [x for x in lines if x != ""]
+    return "\n".join(compact)
 
 
 @dp.message(Command("status"))
 async def status_cmd(message: Message):
-    chat_id = message.chat.id
-    lines = [
-        _format_feature_status(chat_id, "ai_signals", "AI-сигналы"),
-        _format_feature_status(chat_id, "pumpdump", "Pump/Dump"),
-    ]
-    await message.answer("\n".join(lines))
+    await message.answer(_format_user_bot_status(message.chat.id))
+
+
+@dp.message(F.text == "ℹ️ Статус бота")
+async def status_button(message: Message):
+    await message.answer(_format_user_bot_status(message.chat.id))
 
 
 @dp.message(F.text == "⬅️ Главное меню")
 async def back_to_main(message: Message):
-    await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_kb())
+    await message.answer(
+        "Возвращаемся в главное меню.",
+        reply_markup=main_menu_kb(
+            is_admin=is_admin(message.from_user.id) if message.from_user else False
+        ),
+    )
 
 
 def _format_stats_message(stats: Dict[str, Any]) -> str:
@@ -596,7 +678,10 @@ async def show_stats(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
         return
     stats = get_public_stats(days=30)
-    await message.answer(_format_stats_message(stats), reply_markup=main_menu_kb())
+    await message.answer(
+        _format_stats_message(stats),
+        reply_markup=main_menu_kb(is_admin=True),
+    )
 
 
 def _trend_short_text(trend: str) -> str:
@@ -711,71 +796,6 @@ async def send_signal_to_all(signal_dict: Dict[str, Any]):
     for chat_id, res in zip(recipients, results):
         if isinstance(res, Exception):
             print(f"[ai_signals] Failed to send to {chat_id}: {res}")
-
-
-async def market_pulse_scan_once() -> None:
-    global LAST_PULSE_SENT_AT
-
-    if bot is None:
-        mark_tick("market_pulse", extra="bot not ready")
-        return
-
-    subscribers = list_ai_subscribers()
-    if not subscribers:
-        mark_tick("market_pulse", extra="нет подписчиков")
-        return
-
-    now = time.time()
-    since_last = now - LAST_PULSE_SENT_AT
-    if since_last < PULSE_INTERVAL_SEC:
-        wait_left = int(PULSE_INTERVAL_SEC - since_last)
-        mark_ok("market_pulse", extra=f"следующий пульс через {wait_left}s")
-        return
-
-    regime_info = await get_market_regime()
-    regime = regime_info.get("regime", "neutral")
-    regime_label = {
-        "risk_on": "RISK-ON",
-        "risk_off": "RISK-OFF",
-        "neutral": "NEUTRAL",
-    }.get(regime, "NEUTRAL")
-
-    trend_1d = regime_info.get("trend_1d", "n/a")
-    trend_4h = regime_info.get("trend_4h", "n/a")
-    trend_1h = regime_info.get("trend_1h", "n/a")
-    ema_fast = regime_info.get("ema_fast")
-    ema_slow = regime_info.get("ema_slow")
-    rsi_15m = regime_info.get("rsi_15m")
-    allow_longs = regime_info.get("allow_longs")
-    allow_shorts = regime_info.get("allow_shorts")
-    reason = regime_info.get("reason") or regime_info.get("description") or "Нет причины."
-
-    def _fmt_ema(value: Any) -> str:
-        return f"{value:.2f}" if isinstance(value, (int, float)) else "n/a"
-
-    def _fmt_bool(value: Any) -> str:
-        if value is True:
-            return "yes"
-        if value is False:
-            return "no"
-        return "n/a"
-
-    rsi_text = f"{rsi_15m:.1f}" if isinstance(rsi_15m, (int, float)) else "n/a"
-
-    text = (
-        "📡 Market Pulse (каждый час)\n"
-        f"BTC режим: {regime_label}\n"
-        f"trend: 1D={trend_1d} 4H={trend_4h} 1H={trend_1h}\n"
-        f"ema_fast={_fmt_ema(ema_fast)} ema_slow={_fmt_ema(ema_slow)}\n"
-        f"rsi15={rsi_text}\n"
-        f"allow_longs={_fmt_bool(allow_longs)} allow_shorts={_fmt_bool(allow_shorts)}\n"
-        f"reason: {reason}"
-    )
-
-    tasks = [asyncio.create_task(bot.send_message(chat_id, text)) for chat_id in subscribers]
-    await asyncio.gather(*tasks, return_exceptions=True)
-    LAST_PULSE_SENT_AT = now
-    mark_ok("market_pulse", extra="пульс отправлен")
 
 
 def _select_signals_for_cycle(signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1160,7 +1180,6 @@ async def main():
         await asyncio.sleep(delay_sec)
         return await coro
 
-    pulse_task = asyncio.create_task(safe_worker_loop("market_pulse", market_pulse_scan_once))
     pump_task = asyncio.create_task(
         _delayed_task(6, safe_worker_loop("pumpdump", lambda: pump_scan_once(bot)))
     )
@@ -1181,9 +1200,6 @@ async def main():
         signals_task.cancel()
         with suppress(asyncio.CancelledError):
             await signals_task
-        pulse_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await pulse_task
         pump_task.cancel()
         with suppress(asyncio.CancelledError):
             await pump_task
