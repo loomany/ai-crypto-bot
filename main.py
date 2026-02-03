@@ -604,6 +604,25 @@ def _parse_extra_kv(extra: str) -> dict:
     return out
 
 
+def _format_fails_top(fails: dict, top_n: int = 5) -> str:
+    if not fails:
+        return ""
+    ordered = sorted(fails.items(), key=lambda item: item[1], reverse=True)[:top_n]
+    lines = ["Причины (топ):"]
+    for reason, count in ordered:
+        lines.append(f"• {reason} — {count}")
+    return "\n".join(lines)
+
+
+def _format_near_miss(near_miss: dict) -> str:
+    if not near_miss:
+        return ""
+    lines = ["Near-miss:"]
+    for reason, count in sorted(near_miss.items(), key=lambda item: item[1], reverse=True):
+        lines.append(f"• {reason} — {count}")
+    return "\n".join(lines)
+
+
 def _format_market_hub_ru(now: float) -> str:
     # MARKET_HUB уже есть в проекте
     if MARKET_HUB.last_ok_at:
@@ -700,6 +719,15 @@ def _format_module_ru(key: str, st, now: float) -> str:
         if cyc:
             lines.append(f"• Время цикла: ~{cyc}")
 
+        if st.fails_top or st.near_miss or st.universe_debug:
+            lines.append("")
+            if st.fails_top:
+                lines.append(st.fails_top)
+            if st.near_miss:
+                lines.append(st.near_miss)
+            if st.universe_debug:
+                lines.append(st.universe_debug)
+
         # запросы
         req = extra.get("req")
         kl = extra.get("klines")
@@ -746,6 +774,13 @@ def _format_module_ru(key: str, st, now: float) -> str:
         cyc = extra.get("cycle")
         if cyc:
             lines.append(f"• Время цикла: ~{cyc}")
+
+        if st.fails_top or st.universe_debug:
+            lines.append("")
+            if st.fails_top:
+                lines.append(st.fails_top)
+            if st.universe_debug:
+                lines.append(st.universe_debug)
         hits = extra.get("klines_hits")
         misses = extra.get("klines_misses")
         inflight = extra.get("klines_inflight")
@@ -1265,15 +1300,32 @@ async def pump_scan_once(bot: Bot) -> None:
         reset_ticker_request_count("pumpdump")
 
         session = await get_shared_session()
+        universe_limit = int(os.getenv("PUMPDUMP_UNIVERSE_LIMIT", "120"))
         with binance_request_context("pumpdump"):
             symbols, symbol_stats = await get_candidate_symbols(
                 session,
-                limit=120,
+                limit=universe_limit,
                 return_stats=True,
             )
         if not symbols:
             mark_error("pumpdump", "no symbols to scan")
             return
+        debug_symbol = os.getenv("DEBUG_SYMBOL", "USUALUSDT").upper()
+        in_universe = debug_symbol in symbols
+        if in_universe:
+            index = symbols.index(debug_symbol)
+            universe_debug = (
+                f"Universe check: {debug_symbol} in universe = yes "
+                f"(index={index} / total={len(symbols)})"
+            )
+        else:
+            universe_debug = (
+                f"Universe check: {debug_symbol} in universe = no "
+                f"(total={len(symbols)})"
+            )
+        module_state = MODULES.get("pumpdump")
+        if module_state:
+            module_state.universe_debug = universe_debug
         if log_level >= 1 and symbol_stats.get("removed"):
             print(
                 "[pumpdump] universe filtered "
@@ -1385,8 +1437,12 @@ async def pump_scan_once(bot: Bot) -> None:
         cache_stats = get_klines_cache_stats("pumpdump")
         ticker_count = get_ticker_request_count("pumpdump")
         fails = stats.get("fails", {}) if isinstance(stats, dict) else {}
+        fails_top_str = _format_fails_top(fails)
         fails_top = sorted(fails.items(), key=lambda x: x[1], reverse=True)[:3]
         fails_str = ",".join([f"{k}={v}" for k, v in fails_top]) if fails_top else "-"
+        if module_state:
+            module_state.last_stats = stats
+            module_state.fails_top = fails_top_str
         if log_level >= 1:
             print(f"[pumpdump] cycle done: found={found} sent={sent_count}")
         mark_ok(
@@ -1422,6 +1478,22 @@ async def ai_scan_once() -> None:
             mark_error("ai_signals", "no symbols to scan")
             return
         total = len(symbols)
+        debug_symbol = os.getenv("DEBUG_SYMBOL", "USUALUSDT").upper()
+        in_universe = debug_symbol in symbols
+        if in_universe:
+            index = symbols.index(debug_symbol)
+            universe_debug = (
+                f"Universe check: {debug_symbol} in universe = yes "
+                f"(index={index} / total={len(symbols)})"
+            )
+        else:
+            universe_debug = (
+                f"Universe check: {debug_symbol} in universe = no "
+                f"(total={len(symbols)})"
+            )
+        module_state = MODULES.get("ai_signals")
+        if module_state:
+            module_state.universe_debug = universe_debug
 
         if not hasattr(ai_scan_once, "cursor"):
             stored_cursor = get_state("ai_cursor", "0")
@@ -1538,6 +1610,11 @@ async def watchlist_scan_once() -> None:
             time_budget=BUDGET,
         )
     print("[ai_signals] watchlist stats:", stats)
+    module_state = MODULES.get("ai_signals")
+    if module_state and isinstance(stats, dict):
+        module_state.last_stats = stats
+        module_state.fails_top = _format_fails_top(stats.get("fails", {}))
+        module_state.near_miss = _format_near_miss(stats.get("near_miss", {}))
     deep_scans_done = stats.get("deep_scans_done", 0) if isinstance(stats, dict) else 0
     sent_count = 0
     for signal in _select_signals_for_cycle(signals):
