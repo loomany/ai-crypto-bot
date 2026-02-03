@@ -12,10 +12,6 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.filters import CommandStart, Command
 from dotenv import load_dotenv
 
-from btc_module import (
-    router as btc_router,
-    btc_realtime_signal_worker,
-)
 from binance_rest import (
     binance_request_context,
     binance_watchdog,
@@ -53,12 +49,7 @@ from status_utils import is_notify_enabled
 from message_templates import format_scenario_message
 from signal_audit_db import init_signal_audit_tables, insert_signal_audit, get_public_stats
 from signal_audit_worker import signal_audit_worker_loop
-from keyboards import (
-    ai_signals_inline_kb,
-    btc_inline_kb,
-    main_menu_kb,
-    pumpdump_inline_kb,
-)
+from keyboards import ai_signals_inline_kb, main_menu_kb, pumpdump_inline_kb
 from texts import AI_SIGNALS_TEXT, PUMPDUMP_TEXT, START_TEXT
 
 
@@ -246,9 +237,8 @@ BOT_TOKEN = load_settings()
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 bot: Bot | None = None
 dp = Dispatcher()
-dp.include_router(btc_router)
 FREE_MIN_SCORE = 70
-COOLDOWN_FREE_SEC = 60 * 45
+COOLDOWN_FREE_SEC = int(os.getenv("AI_SIGNALS_COOLDOWN_SEC", "3600"))
 MAX_SIGNALS_PER_CYCLE = 3
 MAX_BTC_PER_CYCLE = 1
 PULSE_INTERVAL_SEC = 60 * 60
@@ -325,29 +315,6 @@ async def ai_notify_off(callback: CallbackQuery):
         await callback.message.answer("🚫 Уведомления отключены.")
 
 
-@dp.callback_query(F.data == "btc_notify_on")
-async def btc_notify_on(callback: CallbackQuery):
-    if callback.from_user is None:
-        return
-    chat_id = callback.from_user.id
-    enable_notify(chat_id, "btc")
-    await callback.answer()
-    if callback.message:
-        await callback.message.answer(
-            "✅ BTC-уведомления включены."
-        )
-
-
-@dp.callback_query(F.data == "btc_notify_off")
-async def btc_notify_off(callback: CallbackQuery):
-    if callback.from_user is None:
-        return
-    disable_notify(callback.from_user.id, "btc")
-    await callback.answer()
-    if callback.message:
-        await callback.message.answer("🚫 Уведомления отключены.")
-
-
 @dp.callback_query(F.data == "pumpdump_notify_on")
 async def pumpdump_notify_on(callback: CallbackQuery):
     if callback.from_user is None:
@@ -374,7 +341,6 @@ async def pumpdump_notify_off(callback: CallbackQuery):
 @dp.message(F.text == "/testadmin")
 async def test_admin(message: Message):
     ai_subscribers = list_ai_subscribers()
-    btc_subscribers = list_enabled("btc")
     pump_subscribers = list_enabled("pumpdump")
     ai_extra = MODULES.get("ai_signals").extra if "ai_signals" in MODULES else ""
     ai_extra = ai_extra.strip()
@@ -395,9 +361,6 @@ async def test_admin(message: Message):
     if "pumpdump" in MODULES:
         base = f"подписчиков: {len(pump_subscribers)}"
         MODULES["pumpdump"].extra = _merge_extra(base, MODULES["pumpdump"].extra)
-    if "btc" in MODULES:
-        base = f"подписчиков: {len(btc_subscribers)}"
-        MODULES["btc"].extra = _merge_extra(base, MODULES["btc"].extra)
 
     lines = ["🛠 Статус модулей:\n"]
     now = time.time()
@@ -454,7 +417,6 @@ async def status_cmd(message: Message):
     chat_id = message.chat.id
     lines = [
         _format_feature_status(chat_id, "ai_signals", "AI-сигналы"),
-        _format_feature_status(chat_id, "btc", "BTC"),
         _format_feature_status(chat_id, "pumpdump", "Pump/Dump"),
     ]
     await message.answer("\n".join(lines))
@@ -514,19 +476,6 @@ async def show_stats(message: Message):
         return
     stats = get_public_stats(days=30)
     await message.answer(_format_stats_message(stats), reply_markup=main_menu_kb())
-
-
-@dp.message(F.text == "₿ BTC (intraday)")
-async def open_btc_menu(message: Message):
-    await message.answer(
-        "BTC-модуль (интрадей) — только BTCUSDT:\n\n"
-        "• Автоматические сигналы LONG/SHORT\n"
-        "• Сигнал приходит сразу, как только появляется сетап\n"
-        "• Горизонт сделок: внутри 24 часов\n\n"
-        "🔔 Авто-сигналы включаются кнопками ниже.",
-        reply_markup=btc_inline_kb(),
-    )
-
 
 
 def _trend_short_text(trend: str) -> str:
@@ -602,14 +551,19 @@ async def send_signal_to_all(signal_dict: Dict[str, Any]):
         print("[ai_signals] deliver: subs=0 queued=0 dedup=0")
         return
 
-    # dedup ключ: символ + направление + зона входа (округление чтобы не шумело)
     entry_low, entry_high = signal_dict["entry_zone"]
     symbol = signal_dict.get("symbol", "")
     direction = signal_dict.get("direction", "long")
-    dedup_key = (
-        f"{symbol}:{direction}:"
-        f"{round(float(entry_low), 6)}-{round(float(entry_high), 6)}"
-    )
+    time_bucket = int(time.time() // 3600)
+    if symbol == "BTCUSDT":
+        bucket = 50.0
+        e1 = round(float(entry_low) / bucket) * bucket
+        e2 = round(float(entry_high) / bucket) * bucket
+    else:
+        e1 = round(float(entry_low), 4)
+        e2 = round(float(entry_high), 4)
+
+    dedup_key = f"{symbol}:{direction}:1h:{time_bucket}:{e1}-{e2}"
 
     text = _format_signal(signal_dict)
     insert_signal_audit(signal_dict, tier="free", module="ai_signals")
@@ -928,7 +882,6 @@ async def main():
         return await coro
 
     pulse_task = asyncio.create_task(safe_worker_loop("market_pulse", market_pulse_scan_once))
-    btc_task = asyncio.create_task(_delayed_task(3, btc_realtime_signal_worker(bot)))
     pump_task = asyncio.create_task(
         _delayed_task(6, safe_worker_loop("pumpdump", lambda: pump_scan_once(bot)))
     )
@@ -954,9 +907,6 @@ async def main():
         pump_task.cancel()
         with suppress(asyncio.CancelledError):
             await pump_task
-        btc_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await btc_task
         audit_task.cancel()
         with suppress(asyncio.CancelledError):
             await audit_task
