@@ -1,5 +1,6 @@
-from notifications_db import is_notify_enabled as db_is_notify_enabled
+from db import get_user_pref
 
 
 def is_notify_enabled(chat_id: int, feature: str) -> bool:
-    return db_is_notify_enabled(chat_id, feature)
+    key = f"{feature}_enabled"
+    return bool(get_user_pref(chat_id, key, default=0))

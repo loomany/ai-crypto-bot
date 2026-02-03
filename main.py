@@ -25,7 +25,9 @@ from pump_detector import (
     format_pump_message,
 )
 from signals import scan_market
-from symbol_cache import get_all_usdt_symbols
+from market_access import get_quick_with_fallback
+from trading_core import compute_atr, compute_ema
+from symbol_cache import get_all_usdt_symbols, get_top_usdt_symbols_by_volume
 from market_regime import get_market_regime
 from market_hub import MARKET_HUB
 from health import (
@@ -42,9 +44,21 @@ from health import (
     update_module_progress,
     update_current_symbol,
 )
+from db import (
+    init_db as init_storage_db,
+    get_user_pref,
+    set_user_pref,
+    list_user_ids_with_pref,
+    get_state,
+    set_state,
+    upsert_watchlist_candidate,
+    list_watchlist_for_scan,
+    update_watchlist_after_signal,
+    prune_watchlist,
+    get_watchlist_counts,
+)
 from db_path import get_db_path
 from alert_dedup_db import init_alert_dedup, can_send
-from notifications_db import init_notify_table, enable_notify, disable_notify, list_enabled
 from status_utils import is_notify_enabled
 from message_templates import format_scenario_message
 from signal_audit_db import init_signal_audit_tables, insert_signal_audit, get_public_stats
@@ -101,7 +115,7 @@ def is_trading_time() -> bool:
 # ===== БАЗА ДАННЫХ =====
 
 
-def init_db():
+def init_app_db():
     conn = sqlite3.connect(get_db_path())
     try:
         conn.execute(
@@ -125,28 +139,48 @@ def init_db():
     finally:
         conn.close()
 
-    init_notify_table()
+    init_storage_db()
     init_alert_dedup()
     init_signal_audit_tables()
-    migrate_ai_subscribers_to_notify()
+    migrate_legacy_notify_settings()
 
 
-def migrate_ai_subscribers_to_notify() -> None:
+def migrate_legacy_notify_settings() -> None:
     """
-    Разово переносим подписчиков из legacy таблицы ai_signals_subscribers
-    в notify_settings(feature='ai_signals'). Старую таблицу не трогаем.
+    Переносим legacy подписки в user_prefs.
     """
     conn = sqlite3.connect(get_db_path())
     try:
         cur = conn.cursor()
-        cur.execute("SELECT chat_id FROM ai_signals_subscribers")
-        rows = cur.fetchall()
+        try:
+            cur.execute("SELECT chat_id, feature, enabled FROM notify_settings")
+            notify_rows = cur.fetchall()
+        except sqlite3.OperationalError:
+            notify_rows = []
+        try:
+            cur.execute("SELECT chat_id FROM ai_signals_subscribers")
+            legacy_rows = cur.fetchall()
+        except sqlite3.OperationalError:
+            legacy_rows = []
     finally:
         conn.close()
 
-    for (chat_id,) in rows:
+    for chat_id, feature, enabled in notify_rows:
+        key = None
+        if feature == "ai_signals":
+            key = "ai_signals_enabled"
+        elif feature == "pumpdump":
+            key = "pumpdump_enabled"
+        if not key:
+            continue
         try:
-            enable_notify(int(chat_id), "ai_signals")
+            set_user_pref(int(chat_id), key, int(enabled))
+        except Exception:
+            continue
+
+    for (chat_id,) in legacy_rows:
+        try:
+            set_user_pref(int(chat_id), "ai_signals_enabled", 1)
         except Exception:
             continue
 
@@ -213,10 +247,10 @@ def upsert_user(
 def list_ai_subscribers() -> List[int]:
     """
     Единый источник подписчиков AI:
-    - основной: notify_settings(feature='ai_signals', enabled=1)
+    - основной: user_prefs(key='ai_signals_enabled', value=1)
     - legacy: ai_signals_subscribers (на случай старых баз)
     """
-    subs = set(list_enabled("ai_signals"))
+    subs = set(list_user_ids_with_pref("ai_signals_enabled", 1))
 
     # legacy fallback (не мешает после миграции)
     conn = sqlite3.connect(get_db_path())
@@ -243,6 +277,12 @@ MAX_SIGNALS_PER_CYCLE = 3
 MAX_BTC_PER_CYCLE = 1
 PULSE_INTERVAL_SEC = 60 * 60
 AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "40"))
+AI_UNIVERSE_TOP_N = int(os.getenv("AI_UNIVERSE_TOP_N", "250"))
+WATCHLIST_MAX = int(os.getenv("WATCHLIST_MAX", "30"))
+WATCHLIST_TTL_MIN = int(os.getenv("WATCHLIST_TTL_MIN", "30"))
+WATCHLIST_COOLDOWN_MIN = int(os.getenv("WATCHLIST_COOLDOWN_MIN", "45"))
+WATCHLIST_SCAN_EVERY_SEC = int(os.getenv("WATCHLIST_SCAN_EVERY_SEC", "60"))
+CANDIDATE_SCORE_MIN = int(os.getenv("CANDIDATE_SCORE_MIN", "60"))
 LAST_PULSE_SENT_AT = 0.0
 
 
@@ -278,16 +318,18 @@ async def cmd_start(message: Message):
 
 @dp.message(F.text == "🤖 AI-сигналы")
 async def ai_signals_menu(message: Message):
+    status = "✅ включено" if get_user_pref(message.chat.id, "ai_signals_enabled", 0) else "⛔ выключено"
     await message.answer(
-        AI_SIGNALS_TEXT,
+        f"{AI_SIGNALS_TEXT}\n\nСтатус: {status}",
         reply_markup=ai_signals_inline_kb(),
     )
 
 
 @dp.message(F.text == "⚡ Pump/Dump")
 async def pumpdump_menu(message: Message):
+    status = "✅ включено" if get_user_pref(message.chat.id, "pumpdump_enabled", 0) else "⛔ выключено"
     await message.answer(
-        PUMPDUMP_TEXT,
+        f"{PUMPDUMP_TEXT}\n\nСтатус: {status}",
         reply_markup=pumpdump_inline_kb(),
     )
 
@@ -297,7 +339,12 @@ async def ai_notify_on(callback: CallbackQuery):
     if callback.from_user is None:
         return
     chat_id = callback.from_user.id
-    enable_notify(chat_id, "ai_signals")
+    if get_user_pref(chat_id, "ai_signals_enabled", 0):
+        await callback.answer("Уже включено.")
+        if callback.message:
+            await callback.message.answer("ℹ️ AI-уведомления уже включены.")
+        return
+    set_user_pref(chat_id, "ai_signals_enabled", 1)
     await callback.answer()
     if callback.message:
         await callback.message.answer(
@@ -309,7 +356,13 @@ async def ai_notify_on(callback: CallbackQuery):
 async def ai_notify_off(callback: CallbackQuery):
     if callback.from_user is None:
         return
-    disable_notify(callback.from_user.id, "ai_signals")
+    chat_id = callback.from_user.id
+    if not get_user_pref(chat_id, "ai_signals_enabled", 0):
+        await callback.answer("Уже выключено.")
+        if callback.message:
+            await callback.message.answer("ℹ️ AI-уведомления уже выключены.")
+        return
+    set_user_pref(chat_id, "ai_signals_enabled", 0)
     await callback.answer()
     if callback.message:
         await callback.message.answer("🚫 Уведомления отключены.")
@@ -319,7 +372,13 @@ async def ai_notify_off(callback: CallbackQuery):
 async def pumpdump_notify_on(callback: CallbackQuery):
     if callback.from_user is None:
         return
-    enable_notify(callback.from_user.id, "pumpdump")
+    chat_id = callback.from_user.id
+    if get_user_pref(chat_id, "pumpdump_enabled", 0):
+        await callback.answer("Уже включено.")
+        if callback.message:
+            await callback.message.answer("ℹ️ Pump/Dump уведомления уже включены.")
+        return
+    set_user_pref(chat_id, "pumpdump_enabled", 1)
     await callback.answer()
     if callback.message:
         await callback.message.answer(
@@ -332,7 +391,13 @@ async def pumpdump_notify_on(callback: CallbackQuery):
 async def pumpdump_notify_off(callback: CallbackQuery):
     if callback.from_user is None:
         return
-    disable_notify(callback.from_user.id, "pumpdump")
+    chat_id = callback.from_user.id
+    if not get_user_pref(chat_id, "pumpdump_enabled", 0):
+        await callback.answer("Уже выключено.")
+        if callback.message:
+            await callback.message.answer("ℹ️ Pump/Dump уведомления уже выключены.")
+        return
+    set_user_pref(chat_id, "pumpdump_enabled", 0)
     await callback.answer()
     if callback.message:
         await callback.message.answer("🚫 Pump/Dump уведомления отключены.")
@@ -341,7 +406,7 @@ async def pumpdump_notify_off(callback: CallbackQuery):
 @dp.message(F.text == "/testadmin")
 async def test_admin(message: Message):
     ai_subscribers = list_ai_subscribers()
-    pump_subscribers = list_enabled("pumpdump")
+    pump_subscribers = list_user_ids_with_pref("pumpdump_enabled", 1)
     ai_extra = MODULES.get("ai_signals").extra if "ai_signals" in MODULES else ""
     ai_extra = ai_extra.strip()
 
@@ -408,8 +473,9 @@ async def my_id_cmd(message: Message):
 
 
 def _format_feature_status(chat_id: int, feature: str, label: str) -> str:
-    notify = "ON" if is_notify_enabled(chat_id, feature) else "OFF"
-    return f"{label}: notify={notify}"
+    enabled = is_notify_enabled(chat_id, feature)
+    status = "✅ включено" if enabled else "⛔ выключено"
+    return f"{label}: {status}"
 
 
 @dp.message(Command("status"))
@@ -683,6 +749,63 @@ def _select_signals_for_cycle(signals: List[Dict[str, Any]]) -> List[Dict[str, A
     return selected
 
 
+async def _get_ai_universe() -> List[str]:
+    symbols: List[str] = []
+    try:
+        symbols = await get_top_usdt_symbols_by_volume(AI_UNIVERSE_TOP_N)
+    except Exception as exc:
+        print(f"[ai_signals] top-n universe failed: {exc}")
+    if not symbols:
+        symbols = await get_all_usdt_symbols()
+    return symbols
+
+
+async def _compute_candidate_score(symbol: str) -> tuple[int, str]:
+    candles = await get_quick_with_fallback(symbol)
+    if not candles:
+        return 0, ""
+    candles_1h = candles.get("1h") or []
+    candles_15m = candles.get("15m") or []
+    if len(candles_1h) < 2 or len(candles_15m) < 2:
+        return 0, ""
+
+    score = 0
+    reason_scores: dict[str, int] = {}
+
+    vols = [float(c.volume) for c in candles_15m[-21:]]
+    if len(vols) > 1:
+        avg_vol = sum(vols[:-1]) / max(len(vols) - 1, 1)
+        last_vol = vols[-1]
+        volume_ratio = last_vol / avg_vol if avg_vol > 0 else 0.0
+        if volume_ratio >= 1.6:
+            reason_scores["volume_spike"] = 30
+
+    atr_now = compute_atr(candles_1h, 14)
+    atr_prev = compute_atr(candles_1h[:-1], 14) if len(candles_1h) > 15 else None
+    if atr_now and atr_prev and atr_prev > 0 and atr_now >= atr_prev * 1.15:
+        reason_scores["atr"] = 20
+
+    closes_1h = [float(c.close) for c in candles_1h]
+    ema50 = compute_ema(closes_1h, 50)
+    last_close = closes_1h[-1]
+    if ema50 and last_close > 0:
+        distance_pct = abs(last_close - ema50) / last_close * 100
+        if distance_pct <= 1.0:
+            reason_scores["near_poi"] = 20
+
+    last_candle = candles_1h[-1]
+    if float(last_candle.open) > 0:
+        change_pct = abs((float(last_candle.close) - float(last_candle.open)) / float(last_candle.open) * 100)
+        if change_pct >= 3.0:
+            reason_scores["pump"] = 30
+
+    score = sum(reason_scores.values())
+    if not reason_scores:
+        return 0, ""
+    reason = max(reason_scores.items(), key=lambda item: item[1])[0]
+    return min(score, 100), reason
+
+
 async def pump_scan_once(bot: Bot) -> None:
     start = time.time()
     BUDGET = 35
@@ -698,7 +821,7 @@ async def pump_scan_once(bot: Bot) -> None:
     try:
         state = pump_scan_once.state
 
-        subscribers = list_enabled("pumpdump")
+        subscribers = list_user_ids_with_pref("pumpdump_enabled", 1)
 
         if log_level >= 1:
             print(f"[pumpdump] subs: notify={len(subscribers)}")
@@ -809,59 +932,68 @@ async def ai_scan_once() -> None:
         reset_klines_request_count("ai_signals")
         mark_tick("ai_signals", extra="сканирую рынок...")
 
-        symbols = await get_all_usdt_symbols()
+        symbols = await _get_ai_universe()
         if not symbols:
             mark_error("ai_signals", "no symbols to scan")
             return
         total = len(symbols)
 
         if not hasattr(ai_scan_once, "cursor"):
-            ai_scan_once.cursor = 0
+            stored_cursor = get_state("ai_cursor", "0")
+            try:
+                ai_scan_once.cursor = int(stored_cursor) if stored_cursor is not None else 0
+            except (TypeError, ValueError):
+                ai_scan_once.cursor = 0
         cursor = ai_scan_once.cursor
         if cursor >= total:
             cursor = 0
+            set_state("ai_cursor", "0")
         chunk = symbols[cursor : cursor + AI_CHUNK_SIZE]
         new_cursor = cursor + len(chunk)
         if new_cursor >= total:
             new_cursor = 0
         ai_scan_once.cursor = new_cursor
+        set_state("ai_cursor", str(new_cursor))
         update_module_progress("ai_signals", total, new_cursor, len(chunk))
         if chunk:
             update_current_symbol("ai_signals", chunk[0])
 
+        now = int(time.time())
+        added = 0
         with binance_request_context("ai_signals"):
-            signals, stats = await scan_market(
-                symbols=chunk,
-                use_btc_gate=False,
-                free_mode=True,
-                min_score=FREE_MIN_SCORE,
-                return_stats=True,
-                time_budget=BUDGET,
-            )
-        print("SCAN OK", len(signals))
-        print("[ai_signals] stats:", stats)
-        sent_count = 0
-        for signal in _select_signals_for_cycle(signals):
-            if time.time() - start > BUDGET:
-                print("[AI] budget exceeded, stopping early")
-                break
-            score = signal.get("score", 0)
-            if score < FREE_MIN_SCORE:
-                continue
-            update_current_symbol("ai_signals", signal.get("symbol", ""))
-            print(
-                f"[ai_signals] SEND {signal['symbol']} {signal['direction']} score={score}"
-            )
-            await send_signal_to_all(signal)
-            sent_count += 1
+            for symbol in chunk:
+                if time.time() - start > BUDGET:
+                    print("[AI] budget exceeded, stopping early")
+                    break
+                score, reason = await _compute_candidate_score(symbol)
+                if score < CANDIDATE_SCORE_MIN:
+                    continue
+                ttl_until = now + WATCHLIST_TTL_MIN * 60
+                inserted = upsert_watchlist_candidate(
+                    symbol,
+                    score,
+                    reason,
+                    ttl_until,
+                    last_seen=now,
+                )
+                if inserted:
+                    added += 1
+
+        pruned = prune_watchlist(now, WATCHLIST_MAX)
+        active_watchlist, total_watchlist = get_watchlist_counts(now)
         current_symbol = MODULES.get("ai_signals").current_symbol if "ai_signals" in MODULES else None
         req_count = get_request_count("ai_signals")
         klines_count = get_klines_request_count("ai_signals")
+        print(
+            "[AI] "
+            f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
+            f"watchlist={active_watchlist}/{total_watchlist} added={added} pruned={pruned}"
+        )
         mark_ok(
             "ai_signals",
             extra=(
-                f"progress={new_cursor}/{total} "
-                f"checked={len(chunk)}/{len(chunk)} "
+                f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
+                f"watchlist={active_watchlist}/{total_watchlist} added={added} pruned={pruned} "
                 f"current={current_symbol or '-'} cycle={int(time.time() - start)}s "
                 f"req={req_count} klines={klines_count}"
             ),
@@ -870,13 +1002,98 @@ async def ai_scan_once() -> None:
         print("[AI] scan_once end")
 
 
+async def watchlist_scan_once() -> None:
+    start = time.time()
+    BUDGET = 35
+    if bot is None:
+        mark_tick("ai_signals", extra="bot not ready")
+        return
+    now = int(time.time())
+    rows = list_watchlist_for_scan(now, WATCHLIST_MAX)
+    symbols = [row["symbol"] for row in rows]
+    if not symbols:
+        active_watchlist, total_watchlist = get_watchlist_counts(now)
+        mark_ok(
+            "ai_signals",
+            extra=f"watchlist={active_watchlist}/{total_watchlist} symbols=0",
+        )
+        return
+
+    update_current_symbol("ai_signals", symbols[0])
+    with binance_request_context("ai_signals"):
+        signals, stats = await scan_market(
+            symbols=symbols,
+            use_btc_gate=False,
+            free_mode=True,
+            min_score=FREE_MIN_SCORE,
+            return_stats=True,
+            time_budget=BUDGET,
+        )
+    print("[ai_signals] watchlist stats:", stats)
+    sent_count = 0
+    for signal in _select_signals_for_cycle(signals):
+        if time.time() - start > BUDGET:
+            print("[AI] watchlist budget exceeded, stopping early")
+            break
+        score = signal.get("score", 0)
+        if score < FREE_MIN_SCORE:
+            continue
+        update_current_symbol("ai_signals", signal.get("symbol", ""))
+        print(
+            f"[ai_signals] WATCHLIST SEND {signal['symbol']} {signal['direction']} score={score}"
+        )
+        await send_signal_to_all(signal)
+        sent_count += 1
+        ttl_until = now + WATCHLIST_TTL_MIN * 60
+        cooldown_until = now + WATCHLIST_COOLDOWN_MIN * 60
+        update_watchlist_after_signal(
+            signal["symbol"],
+            ttl_until=ttl_until,
+            cooldown_until=cooldown_until,
+            last_seen=now,
+        )
+
+    pruned = prune_watchlist(now, WATCHLIST_MAX)
+    active_watchlist, total_watchlist = get_watchlist_counts(now)
+    mark_ok(
+        "ai_signals",
+        extra=(
+            f"watchlist={active_watchlist}/{total_watchlist} "
+            f"scanned={len(symbols)} sent={sent_count} pruned={pruned} "
+            f"cycle={int(time.time() - start)}s"
+        ),
+    )
+
+
+async def watchlist_worker_loop() -> None:
+    while True:
+        cycle_start = time.perf_counter()
+        timeout_s = max(15, min(55, WATCHLIST_SCAN_EVERY_SEC))
+        print("[ai_signals] watchlist cycle start")
+        mark_tick("ai_signals", extra="watchlist heartbeat")
+        t0 = time.perf_counter()
+        try:
+            await asyncio.wait_for(watchlist_scan_once(), timeout=timeout_s)
+            print(f"[ai_signals] watchlist cycle ok, dt={time.perf_counter() - t0:.2f}s")
+        except asyncio.TimeoutError:
+            print(
+                f"[ai_signals] watchlist TIMEOUT >{timeout_s}s, dt={time.perf_counter() - t0:.2f}s"
+            )
+            mark_error("ai_signals", f"watchlist timeout >{timeout_s}s")
+        except Exception as e:
+            print(f"[ai_signals] watchlist ERROR {type(e).__name__}: {e}")
+            mark_error("ai_signals", str(e))
+        elapsed = time.perf_counter() - cycle_start
+        await asyncio.sleep(max(0, WATCHLIST_SCAN_EVERY_SEC - elapsed))
+
+
 # ===== ТОЧКА ВХОДА =====
 
 async def main():
     global bot
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     print("Бот запущен!")
-    init_db()
+    init_app_db()
     async def _delayed_task(delay_sec: float, coro: Awaitable[Any]):
         await asyncio.sleep(delay_sec)
         return await coro
@@ -889,6 +1106,7 @@ async def main():
     signals_task = asyncio.create_task(
         _delayed_task(12, safe_worker_loop("ai_signals", ai_scan_once))
     )
+    watchlist_task = asyncio.create_task(_delayed_task(14, watchlist_worker_loop()))
     audit_task = asyncio.create_task(_delayed_task(18, signal_audit_worker_loop()))
     watchdog_task = asyncio.create_task(watchdog())
     binance_watchdog_task = asyncio.create_task(binance_watchdog())
@@ -907,6 +1125,9 @@ async def main():
         pump_task.cancel()
         with suppress(asyncio.CancelledError):
             await pump_task
+        watchlist_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await watchlist_task
         audit_task.cancel()
         with suppress(asyncio.CancelledError):
             await audit_task
