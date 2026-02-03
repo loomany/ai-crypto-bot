@@ -709,6 +709,15 @@ async def scan_market(
     klines_ok = 0
     fails: Dict[str, int] = {}
     near_miss: Dict[str, int] = {}
+    pre_score_stats: Dict[str, Any] = {
+        "checked": 0,
+        "passed": 0,
+        "failed": 0,
+        "threshold": float(PRE_SCORE_THRESHOLD),
+        "failed_samples": [],
+        "passed_samples": [],
+        "pass_rate": 0.0,
+    }
     start_time = time.time()
     debug_state = {"used": 0, "max": MAX_FAIL_DEBUG_LOGS_PER_CYCLE}
     deep_scans_done = 0
@@ -719,6 +728,11 @@ async def scan_market(
         async with semaphore:
             return await awaitable(*args, **kwargs)
 
+    def _add_pre_score_sample(samples: list[tuple[str, float]], symbol: str, score: float) -> None:
+        if len(samples) >= 5:
+            return
+        samples.append((symbol, round(score, 2)))
+
     if use_btc_gate:
         if not btc_ctx["allow_longs"] and not btc_ctx["allow_shorts"]:
             if return_stats:
@@ -728,6 +742,7 @@ async def scan_market(
                     "signals_found": 0,
                     "fails": fails,
                     "near_miss": near_miss,
+                    "pre_score": pre_score_stats,
                 }
             return []
     else:
@@ -758,12 +773,20 @@ async def scan_market(
                 fails["fail_no_quick"] = fails.get("fail_no_quick", 0) + 1
                 continue
             pre_score = _pre_score(quick, tf=AI_CHEAP_TF, symbol=symbol)
+            pre_score_stats["checked"] += 1
             if pre_score < PRE_SCORE_THRESHOLD:
                 fails["fail_pre_score"] = fails.get("fail_pre_score", 0) + 1
+                pre_score_stats["failed"] += 1
+                _add_pre_score_sample(pre_score_stats["failed_samples"], symbol, pre_score)
                 continue
+            pre_score_stats["passed"] += 1
+            _add_pre_score_sample(pre_score_stats["passed_samples"], symbol, pre_score)
             scored.append((symbol, pre_score))
 
     if not scored:
+        pre_score_stats["pass_rate"] = pre_score_stats["passed"] / max(
+            1, pre_score_stats["checked"]
+        )
         if return_stats:
             return signals, {
                 "checked": checked,
@@ -772,6 +795,7 @@ async def scan_market(
                 "signals_found": len(signals),
                 "fails": fails,
                 "near_miss": near_miss,
+                "pre_score": pre_score_stats,
             }
         return signals
 
@@ -790,6 +814,9 @@ async def scan_market(
     candidate_symbols = [symbol for symbol, _ in ranked[: max_deep_scans]]
     deep_scans_done = len(candidate_symbols)
     if not candidate_symbols:
+        pre_score_stats["pass_rate"] = pre_score_stats["passed"] / max(
+            1, pre_score_stats["checked"]
+        )
         if return_stats:
             return signals, {
                 "checked": checked,
@@ -798,6 +825,7 @@ async def scan_market(
                 "signals_found": len(signals),
                 "fails": fails,
                 "near_miss": near_miss,
+                "pre_score": pre_score_stats,
             }
         return signals
 
@@ -828,6 +856,9 @@ async def scan_market(
             signals.append(signal)
 
     if return_stats:
+        pre_score_stats["pass_rate"] = pre_score_stats["passed"] / max(
+            1, pre_score_stats["checked"]
+        )
         return signals, {
             "checked": checked,
             "klines_ok": klines_ok,
@@ -835,5 +866,6 @@ async def scan_market(
             "signals_found": len(signals),
             "fails": fails,
             "near_miss": near_miss,
+            "pre_score": pre_score_stats,
         }
     return signals

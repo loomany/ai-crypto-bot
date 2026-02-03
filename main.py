@@ -910,6 +910,18 @@ def _format_db_status() -> str:
 
 def _format_module_ru(key: str, st, now: float) -> str:
     # st — это ModuleStatus из health.py
+    def _short_symbol(symbol: str) -> str:
+        if symbol.endswith("USDT"):
+            return symbol[:-4]
+        return symbol
+
+    def _format_samples(samples: list[tuple[str, float]]) -> str:
+        formatted = []
+        for symbol, score in samples:
+            score_str = f"{score:.2f}".rstrip("0").rstrip(".")
+            formatted.append(f"{_short_symbol(symbol)}({score_str})")
+        return ", ".join(formatted)
+
     if st.last_tick:
         tick = _human_ago_ru(int(now - st.last_tick))
         status_line = "работает"
@@ -997,6 +1009,34 @@ def _format_module_ru(key: str, st, now: float) -> str:
         cyc = extra.get("cycle")
         if cyc:
             lines.append(f"• Время цикла: ~{cyc}")
+
+        pre_score = (st.last_stats or {}).get("pre_score") if st.last_stats else None
+        if pre_score:
+            threshold = pre_score.get("threshold")
+            threshold_str = (
+                f"{threshold:.1f}" if isinstance(threshold, (int, float)) else "-"
+            )
+            checked = pre_score.get("checked", 0)
+            passed = pre_score.get("passed", 0)
+            failed = pre_score.get("failed", 0)
+            pass_rate = pre_score.get("pass_rate")
+            pass_rate_str = None
+            if isinstance(pass_rate, (int, float)):
+                pass_rate_str = f"{int(round(pass_rate * 100))}%"
+
+            failed_samples = pre_score.get("failed_samples") or []
+            passed_samples = pre_score.get("passed_samples") or []
+            lines.append("")
+            lines.append("Pre-score")
+            lines.append(f"• threshold: {threshold_str}")
+            summary = f"• checked: {checked} | passed: {passed} | failed: {failed}"
+            if pass_rate_str:
+                summary += f" | pass rate: {pass_rate_str}"
+            lines.append(summary)
+            if failed_samples:
+                lines.append(f"• failed examples: {_format_samples(failed_samples)}")
+            if passed_samples:
+                lines.append(f"• passed examples: {_format_samples(passed_samples)}")
 
         if st.fails_top or st.near_miss or st.universe_debug:
             lines.append("")
