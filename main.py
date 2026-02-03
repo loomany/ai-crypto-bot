@@ -115,6 +115,13 @@ PUMP_COOLDOWN_GLOBAL_SEC = int(os.getenv("PUMP_COOLDOWN_GLOBAL_SEC", "3600"))  #
 PUMP_DAILY_LIMIT = int(os.getenv("PUMP_DAILY_LIMIT", "6"))
 
 
+def _env_bool(name: str, default: str = "0") -> bool:
+    return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+USE_BTC_GATE = _env_bool("USE_BTC_GATE", "0")
+
+
 def is_admin(user_id: int) -> bool:
     return ADMIN_USER_ID != 0 and user_id == ADMIN_USER_ID
 
@@ -2047,7 +2054,7 @@ async def watchlist_scan_once() -> None:
     with binance_request_context("ai_signals"):
         signals, stats = await scan_market(
             symbols=symbols,
-            use_btc_gate=False,
+            use_btc_gate=USE_BTC_GATE,
             free_mode=True,
             min_score=FREE_MIN_SCORE,
             return_stats=True,
