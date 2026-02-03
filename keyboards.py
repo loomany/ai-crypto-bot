@@ -8,16 +8,25 @@ from aiogram.types import (
 from texts import admin_url
 
 
-def main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
-    """Главное меню. Для админа добавляем диагностику."""
+def build_main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    """Главное меню."""
     keyboard = [
-        [KeyboardButton(text="🤖 AI-сигналы")],
-        [KeyboardButton(text="⚡ Pump/Dump")],
+        [KeyboardButton(text="🎯 AI-сигналы")],
+        [KeyboardButton(text="⚡ Pump / Dump")],
         [KeyboardButton(text="📊 Статистика")],
-        [KeyboardButton(text="ℹ️ Статус бота")],
+        [KeyboardButton(text="ℹ️ О системе")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+def build_system_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    """Системное меню. Диагностика доступна только админу."""
+    keyboard = [
+        [KeyboardButton(text="📡 Статус системы")],
+        [KeyboardButton(text="⬅️ Назад")],
     ]
     if is_admin:
-        keyboard.append([KeyboardButton(text="🛠 Диагностика (админ)")])
+        keyboard.insert(1, [KeyboardButton(text="🛠 Диагностика (админ)")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 

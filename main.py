@@ -74,7 +74,13 @@ from signal_audit_db import (
     insert_signal_audit,
 )
 from signal_audit_worker import signal_audit_worker_loop
-from keyboards import ai_signals_inline_kb, main_menu_kb, pumpdump_inline_kb, stats_inline_kb
+from keyboards import (
+    ai_signals_inline_kb,
+    build_main_menu_kb,
+    build_system_menu_kb,
+    pumpdump_inline_kb,
+    stats_inline_kb,
+)
 from texts import AI_SIGNALS_TEXT, PUMPDUMP_TEXT, START_TEXT
 
 
@@ -380,14 +386,14 @@ async def cmd_start(message: Message):
             await message.bot.send_message(ADMIN_CHAT_ID, admin_text)
     await message.answer(
         START_TEXT,
-        reply_markup=main_menu_kb(
+        reply_markup=build_main_menu_kb(
             is_admin=is_admin(message.from_user.id) if message.from_user else False
         ),
     )
     await message.answer(f"Ваш ID: {message.chat.id}")
 
 
-@dp.message(F.text == "🤖 AI-сигналы")
+@dp.message(F.text == "🎯 AI-сигналы")
 async def ai_signals_menu(message: Message):
     status = "✅ включено" if get_user_pref(message.chat.id, "ai_signals_enabled", 0) else "⛔ выключено"
     await message.answer(
@@ -396,7 +402,7 @@ async def ai_signals_menu(message: Message):
     )
 
 
-@dp.message(F.text == "⚡ Pump/Dump")
+@dp.message(F.text == "⚡ Pump / Dump")
 async def pumpdump_menu(message: Message):
     status = "✅ включено" if get_user_pref(message.chat.id, "pumpdump_enabled", 0) else "⛔ выключено"
     await message.answer(
@@ -912,7 +918,7 @@ def _format_user_bot_status(chat_id: int) -> str:
         return f"Binance: обновление {_human_ago(int(now - ts))} назад"
 
     lines = [
-        "ℹ️ Статус бота",
+        "📡 Статус системы",
         "",
         f"🔔 AI-сигналы: {'✅ включены' if ai_enabled else '⛔ выключены'}",
         f"🔔 Pump/Dump: {'✅ включены' if pd_enabled else '⛔ выключены'}",
@@ -935,16 +941,31 @@ async def status_cmd(message: Message):
     await message.answer(_format_user_bot_status(message.chat.id))
 
 
-@dp.message(F.text == "ℹ️ Статус бота")
+@dp.message(F.text == "ℹ️ О системе")
+async def system_menu(message: Message):
+    await message.answer(
+        "ℹ️ Раздел системы. Здесь статус работы и сервисные функции.",
+        reply_markup=build_system_menu_kb(
+            is_admin=is_admin(message.from_user.id) if message.from_user else False
+        ),
+    )
+
+
+@dp.message(F.text == "📡 Статус системы")
 async def status_button(message: Message):
-    await message.answer(_format_user_bot_status(message.chat.id))
+    await message.answer(
+        _format_user_bot_status(message.chat.id),
+        reply_markup=build_system_menu_kb(
+            is_admin=is_admin(message.from_user.id) if message.from_user else False
+        ),
+    )
 
 
-@dp.message(F.text == "⬅️ Главное меню")
+@dp.message(F.text == "⬅️ Назад")
 async def back_to_main(message: Message):
     await message.answer(
         "Возвращаемся в главное меню.",
-        reply_markup=main_menu_kb(
+        reply_markup=build_main_menu_kb(
             is_admin=is_admin(message.from_user.id) if message.from_user else False
         ),
     )
@@ -1000,7 +1021,7 @@ async def show_stats(message: Message):
     stats = get_public_stats(days=30)
     await message.answer(
         _format_stats_message(stats),
-        reply_markup=main_menu_kb(is_admin=True),
+        reply_markup=build_main_menu_kb(is_admin=True),
     )
 
 
