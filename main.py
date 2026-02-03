@@ -350,6 +350,7 @@ COOLDOWN_FREE_SEC = int(os.getenv("AI_SIGNALS_COOLDOWN_SEC", "3600"))
 MAX_SIGNALS_PER_CYCLE = 3
 MAX_BTC_PER_CYCLE = 1
 AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "40"))
+AI_PRIORITY_N = int(os.getenv("AI_PRIORITY_N", "15"))
 AI_UNIVERSE_TOP_N = int(os.getenv("AI_UNIVERSE_TOP_N", "250"))
 WATCHLIST_MAX = int(os.getenv("WATCHLIST_MAX", "30"))
 WATCHLIST_TTL_MIN = int(os.getenv("WATCHLIST_TTL_MIN", "30"))
@@ -1364,6 +1365,9 @@ async def pump_scan_once(bot: Bot) -> None:
         klines_count = get_klines_request_count("pumpdump")
         cache_stats = get_klines_cache_stats("pumpdump")
         ticker_count = get_ticker_request_count("pumpdump")
+        fails = stats.get("fails", {}) if isinstance(stats, dict) else {}
+        fails_top = sorted(fails.items(), key=lambda x: x[1], reverse=True)[:3]
+        fails_str = ",".join([f"{k}={v}" for k, v in fails_top]) if fails_top else "-"
         if log_level >= 1:
             print(f"[pumpdump] cycle done: found={found} sent={sent_count}")
         mark_ok(
@@ -1375,7 +1379,7 @@ async def pump_scan_once(bot: Bot) -> None:
                 f"req={req_count} klines={klines_count} "
                 f"klines_hits={cache_stats.get('hits')} klines_misses={cache_stats.get('misses')} "
                 f"klines_inflight={cache_stats.get('inflight_awaits')} "
-                f"ticker_req={ticker_count}"
+                f"ticker_req={ticker_count} fails={fails_str}"
             ),
         )
     finally:
@@ -1407,16 +1411,28 @@ async def ai_scan_once() -> None:
             except (TypeError, ValueError):
                 ai_scan_once.cursor = 0
         cursor = ai_scan_once.cursor
-        if cursor >= total:
+        # Ensure symbols are sorted by volume desc (24h quoteVolume) BEFORE this block.
+        # If MarketHub already provides sorted list -> OK; else sort here.
+        priority = symbols[:max(0, min(AI_PRIORITY_N, len(symbols)))]
+        priority_set = set(priority)
+        pool = [s for s in symbols if s not in priority_set]
+
+        if cursor >= len(pool):
             cursor = 0
-            set_state("ai_cursor", "0")
-        chunk = symbols[cursor : cursor + AI_CHUNK_SIZE]
-        new_cursor = cursor + len(chunk)
-        if new_cursor >= total:
+
+        rotating_size = max(0, AI_CHUNK_SIZE - len(priority))
+        rotating = pool[cursor : cursor + rotating_size]
+
+        chunk = priority + rotating
+
+        new_cursor = cursor + len(rotating)
+        if new_cursor >= len(pool):
             new_cursor = 0
+
         ai_scan_once.cursor = new_cursor
         set_state("ai_cursor", str(new_cursor))
-        update_module_progress("ai_signals", total, new_cursor, len(chunk))
+
+        update_module_progress("ai_signals", total=len(symbols), current=new_cursor, chunk=len(chunk))
         if chunk:
             update_current_symbol("ai_signals", chunk[0])
 

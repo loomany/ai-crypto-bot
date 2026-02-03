@@ -111,12 +111,12 @@ def _remember_signal(signal: Dict[str, Any]) -> bool:
     return True
 
 
-def _calc_signal_from_klines(
+def _calc_signal_with_reason(
     symbol: str,
     klines: list[list[str]] | list[Candle],
-) -> Dict[str, Any] | None:
+) -> tuple[Dict[str, Any] | None, str]:
     if not klines or len(klines) < 6:
-        return None
+        return None, "fail_short_series"
 
     if isinstance(klines[0], Candle):
         closes = [float(k.close) for k in klines]
@@ -136,15 +136,15 @@ def _calc_signal_from_klines(
     avg_volume_1m = sum(volumes[:-5]) / max(1, len(volumes) - 5)
     avg_volume_5m = avg_volume_1m * 5
     if avg_volume_5m <= 0:
-        return None
+        return None, "fail_avg_volume"
     volume_mul = volume_5m / avg_volume_5m
 
     if last_price < MIN_PRICE_USDT:
-        return None
+        return None, "fail_min_price"
 
     volume_5m_usdt = volume_5m * last_price
     if volume_5m_usdt < MIN_VOLUME_5M_USDT:
-        return None
+        return None, "fail_min_volume_5m_usdt"
 
     sig_type = None
     if (
@@ -161,7 +161,7 @@ def _calc_signal_from_klines(
         sig_type = "dump"
 
     if not sig_type:
-        return None
+        return None, "fail_no_trigger"
 
     strength = abs(change_5m)
 
@@ -177,9 +177,17 @@ def _calc_signal_from_klines(
     }
 
     if not _remember_signal(signal):
-        return None
+        return None, "fail_dedup"
 
-    return signal
+    return signal, "ok"
+
+
+def _calc_signal_from_klines(
+    symbol: str,
+    klines: list[list[str]] | list[Candle],
+) -> Dict[str, Any] | None:
+    sig, _ = _calc_signal_with_reason(symbol, klines)
+    return sig
 
 
 async def build_pump_symbol_list(
@@ -208,8 +216,9 @@ async def scan_pumps_chunk(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int], int]:
     results: list[Dict[str, Any]] = []
     checked = 0
+    fails: dict[str, int] = {}
     if not symbols:
-        return results, {"checked": 0, "found": 0}, start_idx
+        return results, {"checked": 0, "found": 0, "fails": fails}, start_idx
 
     end_idx = min(start_idx + max_symbols, len(symbols))
     start_ts = time.time()
@@ -225,12 +234,15 @@ async def scan_pumps_chunk(
                 break
             checked += 1
             if isinstance(klines, Exception):
+                fails["fail_klines_exception"] = fails.get("fail_klines_exception", 0) + 1
                 continue
-            sig = _calc_signal_from_klines(symbol, klines)
+            sig, reason = _calc_signal_with_reason(symbol, klines)
             if sig:
                 results.append(sig)
+            else:
+                fails[reason] = fails.get(reason, 0) + 1
 
-    stats = {"checked": checked, "found": len(results)}
+    stats = {"checked": checked, "found": len(results), "fails": fails}
     next_idx = end_idx if end_idx < len(symbols) else 0
     if return_stats:
         return results, stats, next_idx
