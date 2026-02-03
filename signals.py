@@ -258,12 +258,18 @@ async def _prepare_signal(
     free_mode: bool = False,
     min_score: float = 80,
     stats: Dict[str, int] | None = None,
+    near_miss: Dict[str, int] | None = None,
     debug_state: Dict[str, int] | None = None,
 ) -> Optional[Dict[str, Any]]:
     def _inc_fail(reason: str) -> None:
         if stats is None:
             return
         stats[reason] = stats.get(reason, 0) + 1
+
+    def _inc_near_miss(reason: str) -> None:
+        if near_miss is None:
+            return
+        near_miss[reason] = near_miss.get(reason, 0) + 1
 
     def detect_side(entry: float, sl: float, tp1: float) -> Optional[str]:
         if tp1 > entry and sl < entry:
@@ -464,6 +470,10 @@ async def _prepare_signal(
 
                 score_pre -= ema_penalty
                 if score_pre < MIN_PRE_SCORE:
+                    if dist_to_ema50_pct > allowed_dist_pct:
+                        _inc_fail("fail_not_near_ema50_weak")
+                        if dist_to_ema50_pct <= allowed_dist_pct + 0.5:
+                            _inc_near_miss("ema")
                     _inc_fail("fail_pre_score")
                     return None
 
@@ -550,6 +560,9 @@ async def _prepare_signal(
         btc_ctx.get("min_score_short", min_score)
     )
     if abs(raw_score) < required_min:
+        delta = required_min - abs(raw_score)
+        if 0 < delta <= 5:
+            _inc_near_miss("score")
         _inc_fail("fail_score")
         return None
 
@@ -658,6 +671,7 @@ async def scan_market(
     checked = 0
     klines_ok = 0
     fails: Dict[str, int] = {}
+    near_miss: Dict[str, int] = {}
     start_time = time.time()
     debug_state = {"used": 0, "max": MAX_FAIL_DEBUG_LOGS_PER_CYCLE}
     deep_scans_done = 0
@@ -670,6 +684,7 @@ async def scan_market(
                     "klines_ok": klines_ok,
                     "signals_found": 0,
                     "fails": fails,
+                    "near_miss": near_miss,
                 }
             return []
     else:
@@ -725,6 +740,7 @@ async def scan_market(
                 free_mode=free_mode,
                 min_score=min_score,
                 stats=fails if return_stats else None,
+                near_miss=near_miss if return_stats else None,
                 debug_state=debug_state,
             )
             if signal:
@@ -737,5 +753,6 @@ async def scan_market(
             "deep_scans_done": deep_scans_done,
             "signals_found": len(signals),
             "fails": fails,
+            "near_miss": near_miss,
         }
     return signals

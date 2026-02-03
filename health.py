@@ -1,7 +1,7 @@
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import Optional, Dict, Callable, Awaitable
+from typing import Optional, Dict, Callable, Awaitable, Any
 
 
 @dataclass
@@ -12,6 +12,10 @@ class ModuleStatus:
     last_error: Optional[str] = None
     last_warn: Optional[str] = None
     extra: str = ""
+    last_stats: Optional[Dict[str, Any]] = None
+    fails_top: str = ""
+    near_miss: str = ""
+    universe_debug: str = ""
     total_symbols: int = 0
     cursor: int = 0
     checked_last_cycle: int = 0
