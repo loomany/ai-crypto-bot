@@ -37,6 +37,9 @@ EMA50_NEAR_PCT_MID = float(os.getenv("EMA50_NEAR_PCT_MID", "2.5"))
 EMA50_SCORE_WEAK = int(os.getenv("EMA50_SCORE_WEAK", "72"))
 EMA50_SCORE_MID = int(os.getenv("EMA50_SCORE_MID", "78"))
 MIN_PRE_SCORE = float(os.getenv("MIN_PRE_SCORE", "70"))
+PRE_SCORE_THRESHOLD = float(os.getenv("PRE_SCORE_THRESHOLD", "65"))
+FINAL_SCORE_THRESHOLD = float(os.getenv("FINAL_SCORE_THRESHOLD", "80"))
+AI_MAX_DEEP_PER_CYCLE = int(os.getenv("AI_MAX_DEEP_PER_CYCLE", "3"))
 REQUIRE_15M_CONFIRM_ON_EXPANDED = os.getenv("REQUIRE_15M_CONFIRM_ON_EXPANDED", "true").lower() in (
     "1",
     "true",
@@ -141,6 +144,50 @@ def _quick_score(candles: Dict[str, List[Candle]]) -> float:
     trend_bonus = 1.1 if trend.get("trend") not in ("range", "neutral") else 1.0
     rsi_distance = abs(rsi_15m - 50.0) / 50.0
     return max(volume_ratio, 0.01) * (1.0 + rsi_distance) * trend_bonus
+
+
+def _pre_score(candles: Dict[str, List[Candle]]) -> float:
+    candles_1h = candles.get("1h") or []
+    candles_15m = candles.get("15m") or []
+    if len(candles_1h) < 20 or len(candles_15m) < 20:
+        return 0.0
+    closes_1h = [c.close for c in candles_1h]
+    closes_15m = [c.close for c in candles_15m]
+    trend = detect_trend_and_structure(candles_1h)
+    volume_ratio, _ = _volume_ratio([c.volume for c in candles_15m])
+    ema50 = compute_ema(closes_1h, 50)
+    last_close = closes_1h[-1]
+    atr = compute_atr(candles_1h, 14)
+    rsi_15m_series = _compute_rsi_series(closes_15m)
+    rsi_15m = rsi_15m_series[-1] if rsi_15m_series else 50.0
+
+    score = 0.0
+    if trend.get("trend") in ("up", "down"):
+        score += 25
+    else:
+        score += 10
+
+    if volume_ratio >= 1.5:
+        score += 30
+    elif volume_ratio >= 1.2:
+        score += 20
+    elif volume_ratio >= 1.05:
+        score += 10
+
+    if ema50 and last_close > 0:
+        dist_pct = abs(last_close - ema50) / last_close * 100
+        if dist_pct <= 1.2:
+            score += 20
+        elif dist_pct <= 2.5:
+            score += 10
+
+    if atr and atr > 0:
+        score += 10
+
+    if 35 <= rsi_15m <= 65:
+        score += 10
+
+    return min(score, 100.0)
 
 
 async def _get_hourly_snapshot(symbol: str) -> Optional[Dict[str, float]]:
@@ -562,7 +609,7 @@ async def scan_market(
     symbols: List[str] | None = None,
     use_btc_gate: bool = True,
     free_mode: bool = False,
-    min_score: float = 80,
+    min_score: float | None = None,
     return_stats: bool = False,
     time_budget: float | None = None,
 ) -> List[Dict[str, Any]] | Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -571,6 +618,8 @@ async def scan_market(
     """
     if batch_size is None:
         batch_size = int(os.getenv("AI_SCAN_BATCH_SIZE", "8"))
+    if min_score is None:
+        min_score = FINAL_SCORE_THRESHOLD
 
     if symbols is None:
         symbols = await get_spot_usdt_symbols()
@@ -584,6 +633,7 @@ async def scan_market(
     fails: Dict[str, int] = {}
     start_time = time.time()
     debug_state = {"used": 0, "max": MAX_FAIL_DEBUG_LOGS_PER_CYCLE}
+    deep_scans_done = 0
 
     if use_btc_gate:
         if not btc_ctx["allow_longs"] and not btc_ctx["allow_shorts"]:
@@ -605,21 +655,32 @@ async def scan_market(
             break
         batch = symbols[i : i + batch_size]
         checked += len(batch)
-        candidate_symbols = batch
-        if free_mode:
-            quick_tasks = [asyncio.create_task(_gather_quick_klines(symbol)) for symbol in batch]
-            quick_list = await asyncio.gather(*quick_tasks)
-            scored: List[Tuple[str, float]] = []
-            for symbol, quick in zip(batch, quick_list):
-                if not quick:
-                    continue
-                scored.append((symbol, _quick_score(quick)))
-            scored.sort(key=lambda item: item[1], reverse=True)
-            top_k = min(AI_STAGE_A_TOP_K, len(scored))
-            candidate_symbols = [symbol for symbol, _ in scored[:top_k]]
+        quick_tasks = [asyncio.create_task(_gather_quick_klines(symbol)) for symbol in batch]
+        quick_list = await asyncio.gather(*quick_tasks)
+        scored: List[Tuple[str, float]] = []
+        for symbol, quick in zip(batch, quick_list):
+            if not quick:
+                fails["fail_no_quick"] = fails.get("fail_no_quick", 0) + 1
+                continue
+            pre_score = _pre_score(quick)
+            if pre_score < PRE_SCORE_THRESHOLD:
+                fails["fail_pre_score"] = fails.get("fail_pre_score", 0) + 1
+                continue
+            scored.append((symbol, pre_score))
 
-        if not candidate_symbols:
+        scored.sort(key=lambda item: item[1], reverse=True)
+        if free_mode:
+            top_k = min(AI_STAGE_A_TOP_K, len(scored))
+            scored = scored[:top_k]
+
+        if not scored:
             continue
+
+        remaining_deep = AI_MAX_DEEP_PER_CYCLE - deep_scans_done
+        if remaining_deep <= 0:
+            break
+        candidate_symbols = [symbol for symbol, _ in scored[:remaining_deep]]
+        deep_scans_done += len(candidate_symbols)
 
         tasks = [asyncio.create_task(_gather_klines(symbol)) for symbol in candidate_symbols]
         klines_list = await asyncio.gather(*tasks)
@@ -646,6 +707,7 @@ async def scan_market(
         return signals, {
             "checked": checked,
             "klines_ok": klines_ok,
+            "deep_scans_done": deep_scans_done,
             "signals_found": len(signals),
             "fails": fails,
         }

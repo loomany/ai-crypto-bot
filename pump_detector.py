@@ -8,7 +8,11 @@ import aiohttp
 
 from binance_client import fetch_klines, Candle
 from binance_rest import binance_request_context, fetch_json
-from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
+from symbol_cache import (
+    filter_tradeable_symbols,
+    get_spot_usdt_symbols,
+    get_top_usdt_symbols_by_volume,
+)
 
 BINANCE_API = "https://api.binance.com"
 PUMP_1M_THRESHOLD = float(os.getenv("PUMP_1M_THRESHOLD", "1.6"))
@@ -38,12 +42,19 @@ async def get_usdt_symbols(session: aiohttp.ClientSession) -> list[str]:
 async def get_candidate_symbols(
     session: aiohttp.ClientSession,
     limit: int = 80,
-) -> list[str]:
+    *,
+    return_stats: bool = False,
+) -> list[str] | tuple[list[str], dict[str, int]]:
     symbols = await get_usdt_symbols(session)
     symbols = [sym for sym in symbols if SYMBOL_REGEX.match(sym)]
+    symbols, removed = filter_tradeable_symbols(symbols)
     top_symbols = await get_top_usdt_symbols_by_volume(limit, session=session)
+    top_symbols, _ = filter_tradeable_symbols(top_symbols)
     filtered = [sym for sym in top_symbols if sym in symbols and SYMBOL_REGEX.match(sym)]
-    return filtered if filtered else symbols[:limit]
+    result = filtered if filtered else symbols[:limit]
+    if return_stats:
+        return result, {"total": len(symbols) + removed, "removed": removed, "final": len(result)}
+    return result
 
 
 async def get_klines_1m(symbol: str, limit: int = 25) -> list[Candle] | None:
@@ -178,7 +189,9 @@ async def build_pump_symbol_list(
 ) -> list[str]:
     symbols = await get_usdt_symbols(session)
     symbols = [sym for sym in symbols if SYMBOL_REGEX.match(sym)]
+    symbols, _ = filter_tradeable_symbols(symbols)
     top_symbols = await get_top_usdt_symbols_by_volume(priority_limit, session=session)
+    top_symbols, _ = filter_tradeable_symbols(top_symbols)
     priority = [sym for sym in top_symbols if sym in symbols and SYMBOL_REGEX.match(sym)]
     rest = [sym for sym in symbols if sym not in set(priority)]
     return priority + rest
