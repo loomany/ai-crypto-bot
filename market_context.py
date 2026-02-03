@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Dict, Any
 
-from binance_client import get_klines
+from binance_client import fetch_klines
 from trading_core import _compute_atr_series
 
 
@@ -35,13 +35,26 @@ async def get_market_context(symbol: str = "BTCUSDT") -> Dict[str, Any]:
 
     # 15m klines -> 6h change (24 candles)
     # 1h klines -> ATR% 1h
-    kl_15m = await get_klines(symbol, "15m", limit=60)
-    kl_1h = await get_klines(symbol, "1h", limit=120)
+    try:
+        kl_15m = await fetch_klines(symbol, "15m", limit=60)
+        kl_1h = await fetch_klines(symbol, "1h", limit=120)
+    except Exception:
+        return {
+            "mode": "NORMAL",
+            "bias": "NEUTRAL",
+            "allow_longs": True,
+            "allow_shorts": True,
+            "min_score_long": 80.0,
+            "min_score_short": 80.0,
+            "change_6h_pct": 0.0,
+            "atr_1h_pct": 0.0,
+            "ts": time.time(),
+        }
 
-    closes_15m = [float(k[4]) for k in kl_15m]
-    closes_1h = [float(k[4]) for k in kl_1h]
-    highs_1h = [float(k[2]) for k in kl_1h]
-    lows_1h = [float(k[3]) for k in kl_1h]
+    closes_15m = [k.close for k in kl_15m]
+    closes_1h = [k.close for k in kl_1h]
+    highs_1h = [k.high for k in kl_1h]
+    lows_1h = [k.low for k in kl_1h]
 
     last_close = closes_15m[-1] if closes_15m else 0.0
     close_6h_ago = closes_15m[-(24 + 1)] if len(closes_15m) >= 25 else (closes_15m[0] if closes_15m else 0.0)
