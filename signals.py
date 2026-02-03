@@ -51,6 +51,16 @@ MAX_FAIL_DEBUG_LOGS_PER_CYCLE = int(os.getenv("MAX_FAIL_DEBUG_LOGS_PER_CYCLE", "
 AI_STAGE_A_TOP_K = int(os.getenv("AI_STAGE_A_TOP_K", "10"))
 AI_STAGE_A_LIMIT_1H = int(os.getenv("AI_STAGE_A_LIMIT_1H", str(KLINES_1H_LIMIT)))
 AI_STAGE_A_LIMIT_15M = int(os.getenv("AI_STAGE_A_LIMIT_15M", str(KLINES_15M_LIMIT)))
+BTC_CONTEXT_TTL_SEC = int(os.getenv("BTC_CONTEXT_TTL_SEC", "60"))
+
+_BTC_CONTEXT_CACHE: Dict[str, Any] | None = None
+_BTC_CONTEXT_TS: float = 0.0
+
+
+def get_cached_btc_context() -> Dict[str, Any] | None:
+    if _BTC_CONTEXT_CACHE is None:
+        return None
+    return dict(_BTC_CONTEXT_CACHE)
 
 
 async def get_btc_context() -> Dict[str, Any]:
@@ -62,13 +72,19 @@ async def get_btc_context() -> Dict[str, Any]:
       - флаги allow_longs / allow_shorts
     """
 
+    global _BTC_CONTEXT_CACHE, _BTC_CONTEXT_TS
+
+    now = time.time()
+    if _BTC_CONTEXT_CACHE and (now - _BTC_CONTEXT_TS) < BTC_CONTEXT_TTL_SEC:
+        return dict(_BTC_CONTEXT_CACHE)
+
     candles = await get_bundle_with_fallback(BTC_SYMBOL, ("1d", "4h", "1h", "15m"))
     candles_1d = candles.get("1d", []) if candles else []
     candles_1h = candles.get("4h", []) or candles.get("1h", []) if candles else []
     candles_15m = candles.get("15m", []) if candles else []
 
     if not candles_1d or not candles_1h or not candles_15m:
-        return {
+        fallback = {
             "trend_1d": "range",
             "trend_1h": "range",
             "rsi_15m": 50.0,
@@ -76,6 +92,9 @@ async def get_btc_context() -> Dict[str, Any]:
             "allow_longs": False,
             "allow_shorts": False,
         }
+        _BTC_CONTEXT_CACHE = fallback
+        _BTC_CONTEXT_TS = now
+        return dict(fallback)
 
     daily_structure = detect_trend_and_structure(candles_1d)
     h1_structure = detect_trend_and_structure(candles_1h)
@@ -106,7 +125,7 @@ async def get_btc_context() -> Dict[str, Any]:
         and volume_ratio_15m >= 1.2
     )
 
-    return {
+    context = {
         "trend_1d": btc_trend_1d,
         "trend_1h": btc_trend_1h,
         "rsi_15m": rsi_15m_value,
@@ -114,6 +133,9 @@ async def get_btc_context() -> Dict[str, Any]:
         "allow_longs": allow_longs,
         "allow_shorts": allow_shorts,
     }
+    _BTC_CONTEXT_CACHE = context
+    _BTC_CONTEXT_TS = now
+    return dict(context)
 
 
 def _volume_ratio(volumes: Sequence[float]) -> Tuple[float, float]:
