@@ -1206,6 +1206,9 @@ async def test_admin(message: Message):
     use_btc_gate_value = "" if use_btc_gate_raw is None else use_btc_gate_raw
     blocks.append(f"BTC gate: {'enabled' if get_use_btc_gate() else 'disabled'}")
     blocks.append(f'USE_BTC_GATE raw: "{use_btc_gate_value}"')
+    ai_module = MODULES.get("ai_signals")
+    if ai_module and ai_module.last_error:
+        blocks.append(f"AI errors: {ai_module.last_error}")
     blocks.append("")
     blocks.append(_format_db_status())
     blocks.append("")
@@ -1901,9 +1904,10 @@ async def ai_scan_once() -> None:
     BUDGET = 35
     print("[AI] scan_once start")
     try:
+        use_btc_gate = get_use_btc_gate()
         module_state = MODULES.get("ai_signals")
         if module_state:
-            module_state.state["use_btc_gate"] = USE_BTC_GATE
+            module_state.state["use_btc_gate"] = use_btc_gate
             module_state.state["last_cycle_ts"] = time.time()
         reset_request_count("ai_signals")
         reset_klines_request_count("ai_signals")
