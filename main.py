@@ -27,7 +27,7 @@ from pump_detector import (
     scan_pumps_chunk,
     format_pump_message,
 )
-from signals import scan_market
+from signals import scan_market, get_cached_btc_context
 from market_access import get_quick_with_fallback
 from trading_core import compute_atr, compute_ema
 from symbol_cache import (
@@ -957,10 +957,21 @@ def _format_module_ru(key: str, st, now: float) -> str:
             lines.append(f"• Текущая позиция: {cur} / {universe}")
         elif cur:
             lines.append(f"• Текущая позиция: {cur}")
-        # current symbol
-        current = extra.get("current") or (st.current_symbol or None)
-        if current:
-            lines.append(f"• Текущая монета: {current}")
+        scan_symbol = st.current_symbol or "-"
+        lines.append(f"• Current scan symbol: {scan_symbol}")
+        btc_ctx = get_cached_btc_context() or {}
+        if btc_ctx:
+            trend_1d = btc_ctx.get("trend_1d", "-")
+            trend_1h = btc_ctx.get("trend_1h", "-")
+            allow_longs = btc_ctx.get("allow_longs", False)
+            allow_shorts = btc_ctx.get("allow_shorts", False)
+            btc_line = (
+                f"{trend_1d}/{trend_1h} "
+                f"allow_longs={allow_longs} allow_shorts={allow_shorts}"
+            )
+        else:
+            btc_line = "n/a"
+        lines.append(f"• BTC context: {btc_line}")
         cyc = extra.get("cycle")
         if cyc:
             lines.append(f"• Время цикла: ~{cyc}")
@@ -1503,6 +1514,14 @@ async def _get_ai_universe() -> List[str]:
     if not symbols:
         symbols = await get_all_usdt_symbols()
     filtered, removed = filter_tradeable_symbols(symbols)
+    exclude_btc = os.getenv("EXCLUDE_BTC_FROM_AI_UNIVERSE", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
+    if exclude_btc:
+        filtered = [symbol for symbol in filtered if symbol != "BTCUSDT"]
     if removed:
         print(
             f"[ai_signals] universe filtered: total={len(symbols)} removed={removed} final={len(filtered)}"
