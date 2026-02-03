@@ -11,6 +11,7 @@ from binance_rest import binance_request_context, fetch_json
 from symbol_cache import (
     filter_tradeable_symbols,
     get_spot_usdt_symbols,
+    get_top_usdt_symbols_by_movers,
     get_top_usdt_symbols_by_volume,
 )
 
@@ -27,6 +28,8 @@ MIN_VOLUME_5M_USDT = float(os.getenv("MIN_VOLUME_5M_USDT", "7000"))
 PRIORITY_LIMIT = 250
 BATCH_SIZE = 20
 PUMP_CHUNK_SIZE = int(os.getenv("PUMP_CHUNK_SIZE", "60"))
+PUMPDUMP_TOP_GAINERS_N = int(os.getenv("PUMPDUMP_TOP_GAINERS_N", "0"))
+PUMPDUMP_TOP_LOSERS_N = int(os.getenv("PUMPDUMP_TOP_LOSERS_N", "0"))
 MAX_CYCLE_SEC = 30
 SYMBOL_REGEX = re.compile(r"^[A-Z0-9]{2,20}USDT$")
 _last_signals: dict[str, Dict[str, Any]] = {}
@@ -50,7 +53,24 @@ async def get_candidate_symbols(
     symbols, removed = filter_tradeable_symbols(symbols)
     top_symbols = await get_top_usdt_symbols_by_volume(limit, session=session)
     top_symbols, _ = filter_tradeable_symbols(top_symbols)
-    filtered = [sym for sym in top_symbols if sym in symbols and SYMBOL_REGEX.match(sym)]
+    gainers = []
+    losers = []
+    if PUMPDUMP_TOP_GAINERS_N > 0 or PUMPDUMP_TOP_LOSERS_N > 0:
+        gainers, losers = await get_top_usdt_symbols_by_movers(
+            PUMPDUMP_TOP_GAINERS_N,
+            PUMPDUMP_TOP_LOSERS_N,
+            session=session,
+        )
+        gainers, _ = filter_tradeable_symbols(gainers)
+        losers, _ = filter_tradeable_symbols(losers)
+    candidates = top_symbols + gainers + losers
+    seen: set[str] = set()
+    symbols_set = set(symbols)
+    filtered = []
+    for sym in candidates:
+        if sym in symbols_set and sym not in seen and SYMBOL_REGEX.match(sym):
+            seen.add(sym)
+            filtered.append(sym)
     result = filtered if filtered else symbols[:limit]
     if return_stats:
         return result, {"total": len(symbols) + removed, "removed": removed, "final": len(result)}
@@ -200,7 +220,24 @@ async def build_pump_symbol_list(
     symbols, _ = filter_tradeable_symbols(symbols)
     top_symbols = await get_top_usdt_symbols_by_volume(priority_limit, session=session)
     top_symbols, _ = filter_tradeable_symbols(top_symbols)
-    priority = [sym for sym in top_symbols if sym in symbols and SYMBOL_REGEX.match(sym)]
+    gainers = []
+    losers = []
+    if PUMPDUMP_TOP_GAINERS_N > 0 or PUMPDUMP_TOP_LOSERS_N > 0:
+        gainers, losers = await get_top_usdt_symbols_by_movers(
+            PUMPDUMP_TOP_GAINERS_N,
+            PUMPDUMP_TOP_LOSERS_N,
+            session=session,
+        )
+        gainers, _ = filter_tradeable_symbols(gainers)
+        losers, _ = filter_tradeable_symbols(losers)
+    candidates = top_symbols + gainers + losers
+    seen: set[str] = set()
+    priority = []
+    symbols_set = set(symbols)
+    for sym in candidates:
+        if sym in symbols_set and sym not in seen and SYMBOL_REGEX.match(sym):
+            seen.add(sym)
+            priority.append(sym)
     rest = [sym for sym in symbols if sym not in set(priority)]
     return priority + rest
 
