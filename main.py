@@ -460,6 +460,190 @@ async def pumpdump_notify_off(callback: CallbackQuery):
         await callback.message.answer("🚫 Pump/Dump уведомления отключены.")
 
 
+def _human_ago_ru(seconds: int) -> str:
+    if seconds < 0:
+        seconds = 0
+    if seconds < 60:
+        return f"{seconds} сек назад"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} мин назад"
+    hours = minutes // 60
+    return f"{hours} ч назад"
+
+
+def _parse_extra_kv(extra: str) -> dict:
+    """
+    Превращает строку extra в словарь.
+    Поддерживает:
+      - "подписчиков: 1"
+      - "key=value"
+    Разделители могут быть пробелы и ';'
+    """
+    out = {}
+    if not extra:
+        return out
+
+    parts = []
+    for chunk in extra.replace(";", " ").split():
+        if chunk.strip():
+            parts.append(chunk.strip())
+
+    # склеим "подписчиков:" + "1"
+    i = 0
+    while i < len(parts):
+        token = parts[i]
+        if token.endswith(":") and i + 1 < len(parts):
+            key = token[:-1].strip().lower()
+            out[key] = parts[i + 1].strip()
+            i += 2
+            continue
+
+        if "=" in token:
+            k, v = token.split("=", 1)
+            out[k.strip().lower()] = v.strip()
+        i += 1
+
+    return out
+
+
+def _format_market_hub_ru(now: float) -> str:
+    # MARKET_HUB уже есть в проекте
+    if MARKET_HUB.last_ok_at:
+        ok_ago = int(now - MARKET_HUB.last_ok_at)
+        last_tick = _human_ago_ru(ok_ago)
+    else:
+        last_tick = "нет данных"
+
+    err = MARKET_HUB.last_error or "нет"
+    symbols_count = len(getattr(MARKET_HUB, "_symbols", []) or [])
+    return (
+        "🔧 MarketHub (базовый модуль рынка)\n"
+        "• Статус: работает\n"
+        f"• Последний тик: {last_tick}\n"
+        f"• Ошибки: {err}\n"
+        f"• Активных торговых пар: {symbols_count}"
+    )
+
+
+def _format_module_ru(key: str, st, now: float) -> str:
+    # st — это ModuleStatus из health.py
+    if st.last_tick:
+        tick = _human_ago_ru(int(now - st.last_tick))
+        status_line = "работает"
+    else:
+        tick = "ещё не запускался"
+        status_line = "не запускался"
+
+    ok_line = ""
+    if st.last_ok:
+        ok_line = f"• Последний успешный запрос: {_human_ago_ru(int(now - st.last_ok))}"
+
+    extra = _parse_extra_kv(st.extra or "")
+
+    # Общие поля
+    lines = [
+        f"{st.name}",
+        f"• Статус: {status_line}",
+        f"• Последний цикл: {tick}",
+    ]
+    if ok_line:
+        lines.append(ok_line)
+
+    if st.last_error:
+        lines.append(f"• Ошибка: {st.last_error}")
+    if st.last_warn:
+        lines.append(f"• Предупреждение: {st.last_warn}")
+
+    # Подписчики
+    subs = extra.get("подписчиков")
+    if subs is not None:
+        lines.append("")
+        lines.append("Пользователи")
+        lines.append(f"• Подписчиков: {subs}")
+
+    # Сканирование / прогресс (берём из st + extra)
+    # AI-сигналы
+    if key == "ai_signals":
+        lines.append("")
+        lines.append("Сканирование рынка")
+        universe = extra.get("universe") or (
+            str(st.total_symbols) if st.total_symbols else None
+        )
+        if universe:
+            lines.append(f"• Монет в рынке: {universe}")
+        chunk = extra.get("chunk")
+        if chunk:
+            lines.append(f"• Монет за цикл: {chunk}")
+        # cursor
+        cur = extra.get("cursor") or (str(st.cursor) if st.cursor else None)
+        if cur and universe:
+            lines.append(f"• Текущая позиция: {cur} / {universe}")
+        elif cur:
+            lines.append(f"• Текущая позиция: {cur}")
+        # current symbol
+        current = extra.get("current") or (st.current_symbol or None)
+        if current:
+            lines.append(f"• Текущая монета: {current}")
+        cyc = extra.get("cycle")
+        if cyc:
+            lines.append(f"• Время цикла: ~{cyc}")
+
+        # запросы
+        req = extra.get("req")
+        kl = extra.get("klines")
+        if req or kl:
+            lines.append("")
+            lines.append("Запросы к Binance")
+            if req:
+                lines.append(f"• Запросов сделано: {req}")
+            if kl:
+                lines.append(f"• Свечей получено: {kl}")
+
+    # Pump/Dump
+    if key == "pumpdump":
+        lines.append("")
+        lines.append("Поиск пампов / дампов")
+        prog = extra.get("progress")
+        checked = extra.get("checked")
+        found = extra.get("found")
+        sent = extra.get("sent")
+        if prog:
+            lines.append(f"• Прогресс: {prog}")
+        if checked:
+            lines.append(f"• Проверено: {checked}")
+        if found is not None:
+            lines.append(f"• Найдено сигналов: {found}")
+        if sent is not None:
+            lines.append(f"• Отправлено сигналов: {sent}")
+        current = extra.get("current") or (st.current_symbol or None)
+        if current:
+            lines.append(f"• Текущая монета: {current}")
+        cyc = extra.get("cycle")
+        if cyc:
+            lines.append(f"• Время цикла: ~{cyc}")
+
+    # Binance секция (общая)
+    lines.append("")
+    lines.append("Запросы к Binance")
+    if st.binance_last_success_ts:
+        lines.append(
+            f"• Последний успешный ответ: "
+            f"{_human_ago_ru(int(now - st.binance_last_success_ts))}"
+        )
+    else:
+        lines.append("• Последний успешный ответ: нет данных")
+    lines.append(f"• Таймауты подряд: {st.binance_consecutive_timeouts}")
+    lines.append(f"• Текущий этап: {st.binance_current_stage or '—'}")
+
+    # стабильность
+    lines.append("")
+    lines.append("Стабильность")
+    lines.append(f"• Перезапусков сессии: {st.binance_session_restarts}")
+
+    return "\n".join(lines)
+
+
 @dp.message(Command("testadmin"))
 async def test_admin(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
@@ -487,24 +671,22 @@ async def test_admin(message: Message):
         base = f"подписчиков: {len(pump_subscribers)}"
         MODULES["pumpdump"].extra = _merge_extra(base, MODULES["pumpdump"].extra)
 
-    lines = ["🛠 Статус модулей:\n"]
     now = time.time()
-    if MARKET_HUB.last_ok_at:
-        ok_ago = int(now - MARKET_HUB.last_ok_at)
-        ok_text = f"ok {ok_ago}s ago"
-    else:
-        ok_text = "ok n/a"
-    hub_err = MARKET_HUB.last_error or "-"
-    lines.append(
-        f"MarketHub: {ok_text} | err: {hub_err} | symbols: {len(MARKET_HUB._symbols)}"
-    )
+    blocks = []
+    blocks.append("🛠 Диагностика бота (админ)\n")
+    blocks.append(_format_market_hub_ru(now))
+    blocks.append("")
+
     hidden = _hidden_status_modules()
     for key, st in MODULES.items():
         if key in hidden:
             continue
-        lines.append(f"{st.name}:\n{st.as_text()}\n")
+        if key not in ("ai_signals", "pumpdump"):
+            continue
+        blocks.append(_format_module_ru(key, st, now))
+        blocks.append("\n" + ("—" * 22) + "\n")
 
-    await message.answer("\n".join(lines))
+    await message.answer("\n".join(blocks).strip())
 
 
 @dp.message(F.text == "🛠 Диагностика (админ)")
