@@ -147,7 +147,7 @@ async def get_btc_context(*, force_refresh: bool = False) -> Dict[str, Any]:
     if not allow_longs and not allow_shorts:
         allow_longs = True
         allow_shorts = True
-        ctx_reason = "fallback_neutral"
+        ctx_reason = f"{ctx_reason};fallback_neutral" if ctx_reason else "fallback_neutral"
 
     context = {
         "trend_1d": btc_trend_1d,
