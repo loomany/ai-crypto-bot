@@ -9,6 +9,7 @@ from binance_client import Candle, KLINES_15M_LIMIT, KLINES_1H_LIMIT
 from market_access import get_bundle_with_fallback, get_quick_with_fallback
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
+from market_context import get_market_context
 from market_regime import get_market_regime
 from trading_core import (
     _compute_rsi_series,
@@ -531,14 +532,25 @@ async def _prepare_signal(
 
     raw_score, breakdown = compute_score_breakdown(context)
 
-    if abs(raw_score) < min_score:
-        _inc_fail("fail_score")
-        return None
-
     side = detect_side(entry_ref, sl, tp1)
     if side is None:
         _inc_fail("fail_invalid_side")
         print(f"[ai_signals] Invalid side for {symbol}: entry={entry_ref} sl={sl} tp1={tp1}")
+        return None
+
+    # --- Market Context Layer gate (BTC-led) ---
+    if side == "LONG" and not btc_ctx.get("allow_longs", True):
+        _inc_fail("fail_market_mode_long_blocked")
+        return None
+    if side == "SHORT" and not btc_ctx.get("allow_shorts", True):
+        _inc_fail("fail_market_mode_short_blocked")
+        return None
+
+    required_min = float(btc_ctx.get("min_score_long", min_score)) if side == "LONG" else float(
+        btc_ctx.get("min_score_short", min_score)
+    )
+    if abs(raw_score) < required_min:
+        _inc_fail("fail_score")
         return None
 
     risk = abs(entry_ref - sl)
@@ -594,6 +606,10 @@ async def _prepare_signal(
             "volume_ratio": volume_ratio,
             "volume_avg": volume_avg,
             "rr": rr,
+            "market_mode": btc_ctx.get("mode", "NORMAL"),
+            "market_bias": btc_ctx.get("bias", "NEUTRAL"),
+            "btc_change_6h_pct": btc_ctx.get("change_6h_pct", 0.0),
+            "btc_atr_1h_pct": btc_ctx.get("atr_1h_pct", 0.0),
         },
         "breakdown": breakdown,
         "score_breakdown": breakdown,
@@ -630,6 +646,15 @@ async def scan_market(
         "allow_longs": True,
         "allow_shorts": True,
     }
+    market_ctx = await get_market_context() if use_btc_gate else {
+        "mode": "NORMAL",
+        "bias": "NEUTRAL",
+        "allow_longs": True,
+        "allow_shorts": True,
+        "min_score_long": float(min_score),
+        "min_score_short": float(min_score),
+    }
+    btc_ctx = {**btc_ctx, **market_ctx}
     checked = 0
     klines_ok = 0
     fails: Dict[str, int] = {}

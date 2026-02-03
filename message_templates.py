@@ -45,6 +45,10 @@ def format_scenario_message(
     rr: float,
     price_precision: int,
     score_breakdown: Optional[list[dict]] = None,
+    market_mode: Optional[str] = None,
+    market_bias: Optional[str] = None,
+    btc_change_6h_pct: float = 0.0,
+    btc_atr_1h_pct: float = 0.0,
 ) -> str:
     is_long = side == "LONG"
     emoji = "📈" if is_long else "📉"
@@ -141,6 +145,12 @@ def format_scenario_message(
         f"• RR ≈ 1 : {rr:.2f}",
         "",
         f"🧠 Score: {score} / 100",
+        (
+            f"🧭 Market Mode: {market_mode or 'NORMAL'} "
+            f"(bias {market_bias or 'NEUTRAL'}, "
+            f"BTC {btc_change_6h_pct:+.2f}%/6h, "
+            f"ATR1H {btc_atr_1h_pct:.1f}%)"
+        ),
         "",
         "🧩 Детали Score (сумма баллов):",
         *breakdown_lines,
