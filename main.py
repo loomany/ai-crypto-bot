@@ -119,7 +119,8 @@ def _env_bool(name: str, default: str = "0") -> bool:
     return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
 
 
-USE_BTC_GATE = _env_bool("USE_BTC_GATE", "0")
+def get_use_btc_gate() -> bool:
+    return _env_bool("USE_BTC_GATE", "0")
 
 
 def is_admin(user_id: int) -> bool:
@@ -1198,6 +1199,11 @@ async def test_admin(message: Message):
     now = time.time()
     blocks = []
     blocks.append("🛠 Диагностика бота (админ)\n")
+    use_btc_gate_raw = os.getenv("USE_BTC_GATE")
+    use_btc_gate_value = "" if use_btc_gate_raw is None else use_btc_gate_raw
+    blocks.append(f"BTC gate: {'enabled' if get_use_btc_gate() else 'disabled'}")
+    blocks.append(f'USE_BTC_GATE raw: "{use_btc_gate_value}"')
+    blocks.append("")
     blocks.append(_format_db_status())
     blocks.append("")
     blocks.append(_format_market_hub_ru(now))
@@ -2019,8 +2025,9 @@ async def watchlist_scan_once() -> None:
         mark_tick("ai_signals", extra="bot not ready")
         return
     module_state = MODULES.get("ai_signals")
+    use_btc_gate = get_use_btc_gate()
     if module_state:
-        module_state.state["use_btc_gate"] = USE_BTC_GATE
+        module_state.state["use_btc_gate"] = use_btc_gate
         module_state.state["last_cycle_ts"] = time.time()
     now = int(time.time())
     rows = list_watchlist_for_scan(now, WATCHLIST_MAX)
@@ -2049,7 +2056,7 @@ async def watchlist_scan_once() -> None:
     with binance_request_context("ai_signals"):
         signals, stats = await scan_market(
             symbols=symbols,
-            use_btc_gate=USE_BTC_GATE,
+            use_btc_gate=use_btc_gate,
             free_mode=True,
             min_score=FREE_MIN_SCORE,
             return_stats=True,
