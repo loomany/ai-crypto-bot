@@ -898,7 +898,7 @@ def _format_market_hub_ru(now: float) -> str:
         "• Статус: работает\n"
         f"• Последний тик: {last_tick}\n"
         f"• Ошибки: {err}\n"
-        f"• Активных торговых пар: {symbols_count}"
+        f"• Активных пар в MarketHub (кеш свечей): {symbols_count}"
     )
 
 
