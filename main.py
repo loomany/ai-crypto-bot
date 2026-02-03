@@ -1287,7 +1287,12 @@ async def pump_scan_once(bot: Bot) -> None:
         cycle_start = time.time()
         try:
             signals, stats, _next_cursor = await asyncio.wait_for(
-                scan_pumps_chunk(symbols, time_budget_sec=BUDGET, return_stats=True),
+                scan_pumps_chunk(
+                    symbols,
+                    time_budget_sec=BUDGET,
+                    return_stats=True,
+                    progress_cb=lambda sym: update_current_symbol("pumpdump", sym),
+                ),
                 timeout=BUDGET,
             )
         except asyncio.TimeoutError:
@@ -1445,6 +1450,7 @@ async def ai_scan_once() -> None:
         added = 0
         with binance_request_context("ai_signals"):
             for symbol in chunk:
+                update_current_symbol("ai_signals", symbol)
                 if time.time() - start > BUDGET:
                     print("[AI] budget exceeded, stopping early")
                     break

@@ -212,6 +212,7 @@ async def scan_pumps_chunk(
     batch_size: int = BATCH_SIZE,
     max_symbols: int = PUMP_CHUNK_SIZE,
     time_budget_sec: int | None = None,
+    progress_cb: callable | None = None,
     return_stats: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int], int]:
     results: list[Dict[str, Any]] = []
@@ -232,6 +233,8 @@ async def scan_pumps_chunk(
         for symbol, klines in zip(batch, klines_list):
             if time_budget_sec is not None and time.time() - start_ts >= time_budget_sec:
                 break
+            if progress_cb:
+                progress_cb(symbol)
             checked += 1
             if isinstance(klines, Exception):
                 fails["fail_klines_exception"] = fails.get("fail_klines_exception", 0) + 1
