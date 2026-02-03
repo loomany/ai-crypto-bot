@@ -1006,6 +1006,7 @@ def _format_module_ru(key: str, st, now: float) -> str:
             btc_ctx, age_sec, ttl_sec = btc_cache
             allow_longs = btc_ctx.get("allow_longs", False)
             allow_shorts = btc_ctx.get("allow_shorts", False)
+            ctx_reason = btc_ctx.get("ctx_reason")
             last_cycle_ts = float(st.state.get("last_cycle_ts", 0.0))
             last_refresh_ts = get_btc_context_last_refresh_ts()
             label = "refreshed" if last_refresh_ts and last_refresh_ts >= last_cycle_ts else "cached"
@@ -1013,6 +1014,8 @@ def _format_module_ru(key: str, st, now: float) -> str:
                 f"{label} age={age_sec}s ttl={ttl_sec}s "
                 f"allow_longs={allow_longs} allow_shorts={allow_shorts}"
             )
+            if ctx_reason:
+                btc_line = f"{btc_line} reason={ctx_reason}"
         lines.append(f"• BTC context: {btc_line}")
         cyc = extra.get("cycle")
         if cyc:

@@ -106,8 +106,9 @@ async def get_btc_context(*, force_refresh: bool = False) -> Dict[str, Any]:
             "trend_1h": "range",
             "rsi_15m": 50.0,
             "volume_ratio_15m": 0.0,
-            "allow_longs": False,
-            "allow_shorts": False,
+            "allow_longs": True,
+            "allow_shorts": True,
+            "ctx_reason": "fallback_neutral",
         }
         _BTC_CONTEXT_CACHE = fallback
         _BTC_CONTEXT_TS = now
@@ -142,6 +143,12 @@ async def get_btc_context(*, force_refresh: bool = False) -> Dict[str, Any]:
         and volume_ratio_15m >= 1.2
     )
 
+    ctx_reason = None
+    if not allow_longs and not allow_shorts:
+        allow_longs = True
+        allow_shorts = True
+        ctx_reason = "fallback_neutral"
+
     context = {
         "trend_1d": btc_trend_1d,
         "trend_1h": btc_trend_1h,
@@ -150,6 +157,8 @@ async def get_btc_context(*, force_refresh: bool = False) -> Dict[str, Any]:
         "allow_longs": allow_longs,
         "allow_shorts": allow_shorts,
     }
+    if ctx_reason:
+        context["ctx_reason"] = ctx_reason
     _BTC_CONTEXT_CACHE = context
     _BTC_CONTEXT_TS = now
     _BTC_CONTEXT_LAST_REFRESH_TS = now
