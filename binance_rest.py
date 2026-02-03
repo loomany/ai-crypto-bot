@@ -22,8 +22,10 @@ _SHARED_CONNECTOR: aiohttp.TCPConnector | None = None
 _SHARED_LOCK = asyncio.Lock()
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
-_KLINES_CACHE: dict[tuple[str, str, int], tuple[float, list]] = {}
-_KLINES_INFLIGHT: dict[tuple[str, str, int, int], asyncio.Task] = {}
+# cache by (symbol, interval) to reuse across different LIMIT requests
+# value: (ts, data_list, max_len)
+_KLINES_CACHE: dict[tuple[str, str], tuple[float, list, int]] = {}
+_KLINES_INFLIGHT: dict[tuple[str, str, int], asyncio.Task] = {}
 _KLINES_CACHE_HITS: dict[str, int] = {}
 _KLINES_CACHE_MISSES: dict[str, int] = {}
 _KLINES_INFLIGHT_AWAITS: dict[str, int] = {}
@@ -52,9 +54,10 @@ _KLINES_CACHE_TTL_SEC_DEFAULT = 20
 _KLINES_CACHE_TTL_BY_INTERVAL = {
     "1d": _env_int("KLINES_TTL_1D", 60 * 30),
     "4h": _env_int("KLINES_TTL_4H", 60 * 15),
-    "1h": _env_int("KLINES_TTL_1H", 60 * 7),
-    "15m": _env_int("KLINES_TTL_15M", 60 * 3),
-    "5m": _env_int("KLINES_TTL_5M", 60),
+    "1h": _env_int("KLINES_TTL_1H", 120),
+    "15m": _env_int("KLINES_TTL_15M", 30),
+    "5m": _env_int("KLINES_TTL_5M", 30),
+    "1m": _env_int("KLINES_TTL_1M", 8),
 }
 _KLINES_CACHE_LOCK = asyncio.Lock()
 _KLINES_INFLIGHT_LOCK = asyncio.Lock()
@@ -290,19 +293,22 @@ async def fetch_klines(
     now = time.time()
     module = _BINANCE_REQUEST_MODULE.get()
     ttl_sec = _KLINES_CACHE_TTL_BY_INTERVAL.get(interval, _KLINES_CACHE_TTL_SEC_DEFAULT)
-    cache_key = None if start_ms is not None else (symbol, interval, limit)
+    cache_key = None if start_ms is not None else (symbol, interval)
     if cache_key is not None:
         async with _KLINES_CACHE_LOCK:
             cached = _KLINES_CACHE.get(cache_key)
-            if cached and now - cached[0] < ttl_sec:
-                _increment_stat(_KLINES_CACHE_HITS, module)
-                print(
-                    f"[binance_rest] klines {symbol} {interval} {limit} (cache_hit=True)"
-                )
-                return cached[1]
+            if cached:
+                cached_ts, cached_data, cached_max = cached
+                if now - cached_ts < ttl_sec and isinstance(cached_data, list):
+                    if len(cached_data) >= limit:
+                        _increment_stat(_KLINES_CACHE_HITS, module)
+                        print(
+                            f"[binance_rest] klines {symbol} {interval} {limit} (cache_hit=True)"
+                        )
+                        return cached_data[-limit:]
 
     _increment_stat(_KLINES_CACHE_MISSES, module)
-    inflight_key = (symbol, interval, limit, int(start_ms or 0))
+    inflight_key = (symbol, interval, int(start_ms or 0))
     created = False
     async with _KLINES_INFLIGHT_LOCK:
         task = _KLINES_INFLIGHT.get(inflight_key)
@@ -340,7 +346,7 @@ async def _fetch_klines_from_binance(
     limit: int,
     *,
     start_ms: int | None,
-    cache_key: tuple[str, str, int] | None,
+    cache_key: tuple[str, str] | None,
     now: float,
 ) -> Optional[list]:
     print(f"[binance_rest] MISS klines {symbol} {interval} {limit}")
@@ -359,7 +365,15 @@ async def _fetch_klines_from_binance(
         return None
     if cache_key is not None:
         async with _KLINES_CACHE_LOCK:
-            _KLINES_CACHE[cache_key] = (now, data)
+            prev = _KLINES_CACHE.get(cache_key)
+            if prev:
+                _, prev_data, prev_max = prev
+                if isinstance(prev_data, list) and len(prev_data) >= len(data):
+                    _KLINES_CACHE[cache_key] = (now, prev_data, prev_max)
+                else:
+                    _KLINES_CACHE[cache_key] = (now, data, len(data))
+            else:
+                _KLINES_CACHE[cache_key] = (now, data, len(data))
     return data
 
 
