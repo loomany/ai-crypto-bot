@@ -1,6 +1,6 @@
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Dict, Callable, Awaitable, Any
 
 
@@ -27,6 +27,7 @@ class ModuleStatus:
     binance_consecutive_timeouts: int = 0
     binance_current_stage: str = ""
     binance_session_restarts: int = 0
+    state: Dict[str, Any] = field(default_factory=dict)
 
     def as_text(self) -> str:
         now = time.time()
