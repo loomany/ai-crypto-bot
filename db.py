@@ -47,6 +47,33 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS signal_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                module TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                score REAL NOT NULL,
+                poi_low REAL NOT NULL,
+                poi_high REAL NOT NULL,
+                sl REAL NOT NULL,
+                tp1 REAL NOT NULL,
+                tp2 REAL NOT NULL,
+                status TEXT NOT NULL,
+                tg_message_id INTEGER
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_signal_events_user_ts ON signal_events(user_id, ts)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_signal_events_symbol_ts ON signal_events(symbol, ts)"
+        )
         conn.commit()
     finally:
         conn.close()
@@ -329,5 +356,154 @@ def delete_watchlist_symbols(symbols: Iterable[str]) -> None:
     try:
         conn.executemany("DELETE FROM watchlist WHERE symbol = ?", [(s,) for s in symbols_list])
         conn.commit()
+    finally:
+        conn.close()
+
+
+def insert_signal_event(
+    *,
+    ts: int,
+    user_id: int,
+    module: str,
+    symbol: str,
+    side: str,
+    timeframe: str,
+    score: float,
+    poi_low: float,
+    poi_high: float,
+    sl: float,
+    tp1: float,
+    tp2: float,
+    status: str,
+    tg_message_id: int | None,
+) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO signal_events (
+                ts, user_id, module, symbol, side, timeframe, score,
+                poi_low, poi_high, sl, tp1, tp2, status, tg_message_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(ts),
+                int(user_id),
+                module,
+                symbol,
+                side,
+                timeframe,
+                float(score),
+                float(poi_low),
+                float(poi_high),
+                float(sl),
+                float(tp1),
+                float(tp2),
+                status,
+                tg_message_id,
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+def update_signal_events_status(
+    *,
+    module: str,
+    symbol: str,
+    ts: int,
+    status: str,
+) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE signal_events
+            SET status = ?
+            WHERE module = ? AND symbol = ? AND ts = ?
+            """,
+            (status, module, symbol, int(ts)),
+        )
+        conn.commit()
+        return cur.rowcount if cur.rowcount is not None else 0
+    finally:
+        conn.close()
+
+
+def list_signal_events(
+    *,
+    user_id: int,
+    since_ts: int | None,
+    min_score: float | None,
+    limit: int,
+    offset: int,
+) -> List[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        clauses = ["user_id = ?"]
+        params: list[object] = [int(user_id)]
+        if since_ts is not None:
+            clauses.append("ts >= ?")
+            params.append(int(since_ts))
+        if min_score is not None:
+            clauses.append("score >= ?")
+            params.append(float(min_score))
+        where_clause = " AND ".join(clauses)
+        params.extend([int(limit), int(offset)])
+        cur = conn.execute(
+            f"""
+            SELECT *
+            FROM signal_events
+            WHERE {where_clause}
+            ORDER BY ts DESC
+            LIMIT ? OFFSET ?
+            """,
+            params,
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def count_signal_events(
+    *,
+    user_id: int,
+    since_ts: int | None,
+    min_score: float | None,
+) -> int:
+    conn = get_conn()
+    try:
+        clauses = ["user_id = ?"]
+        params: list[object] = [int(user_id)]
+        if since_ts is not None:
+            clauses.append("ts >= ?")
+            params.append(int(since_ts))
+        if min_score is not None:
+            clauses.append("score >= ?")
+            params.append(float(min_score))
+        where_clause = " AND ".join(clauses)
+        cur = conn.execute(
+            f"SELECT COUNT(*) AS cnt FROM signal_events WHERE {where_clause}",
+            params,
+        )
+        return int(cur.fetchone()["cnt"])
+    finally:
+        conn.close()
+
+
+def get_signal_event(
+    *,
+    user_id: int,
+    event_id: int,
+) -> Optional[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT * FROM signal_events WHERE id = ? AND user_id = ?",
+            (int(event_id), int(user_id)),
+        )
+        return cur.fetchone()
     finally:
         conn.close()
