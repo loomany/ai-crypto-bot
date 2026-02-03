@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Awaitable
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.filters import CommandStart, Command
 from dotenv import load_dotenv
 
@@ -64,6 +64,10 @@ from db import (
     update_watchlist_after_signal,
     prune_watchlist,
     get_watchlist_counts,
+    insert_signal_event,
+    list_signal_events,
+    count_signal_events,
+    get_signal_event,
 )
 from db_path import ensure_db_writable, get_db_path
 from market_cache import get_ticker_request_count, reset_ticker_request_count
@@ -464,12 +468,83 @@ def _format_ai_stats_message(stats: Dict[str, Any], period_key: str) -> str:
     return "\n".join(lines)
 
 
+def _period_days(period_key: str) -> int | None:
+    if period_key == "1d":
+        return 1
+    if period_key == "3d":
+        return 3
+    if period_key == "7d":
+        return 7
+    return None
+
+
+def _format_signal_event_status(raw_status: str) -> str:
+    status_map = {
+        "OPEN": "Открыт",
+        "TP1": "TP1",
+        "TP2": "TP2",
+        "SL": "SL",
+        "EXP": "EXP",
+        "EXPIRED": "EXP",
+        "BE": "BE",
+        "NO_FILL": "Нет входа",
+        "AMBIGUOUS": "Спорно",
+    }
+    return status_map.get(raw_status, raw_status)
+
+
+def _format_event_time(ts: int) -> str:
+    dt = datetime.fromtimestamp(ts, tz=ALMATY_TZ)
+    return dt.strftime("%d.%m %H:%M")
+
+
+def _format_archive_list(
+    period_key: str,
+    events: list[dict],
+    page: int,
+    pages: int,
+    filter_on: bool,
+) -> str:
+    title = f"📚 Архив сигналов ({_period_label(period_key)})"
+    lines = [title]
+    if filter_on:
+        lines.append("Фильтр: 80+")
+    if not events:
+        lines.append("Нет сигналов за период.")
+        return "\n".join(lines)
+
+    lines.append(f"Страница {page}/{pages}")
+    lines.append("")
+    for idx, event in enumerate(events, start=1):
+        status = _format_signal_event_status(str(event.get("status", "")))
+        lines.append(
+            f"{idx}) {event.get('symbol')} {event.get('side')} {int(event.get('score', 0))} "
+            f"| {event.get('timeframe')} | {_format_event_time(int(event.get('ts', 0)))} | {status}"
+        )
+    return "\n".join(lines)
+
+
+def _format_archive_detail(event: dict) -> str:
+    status = _format_signal_event_status(str(event.get("status", "")))
+    return "\n".join(
+        [
+            f"📌 {event.get('symbol')} {event.get('side')} {int(event.get('score', 0))} ({event.get('timeframe')})",
+            f"🕒 {_format_event_time(int(event.get('ts', 0)))}",
+            f"Статус: {status}",
+            f"POI: {float(event.get('poi_low')):.4f} - {float(event.get('poi_high')):.4f}",
+            f"SL: {float(event.get('sl')):.4f}",
+            f"TP1: {float(event.get('tp1')):.4f}",
+            f"TP2: {float(event.get('tp2')):.4f}",
+        ]
+    )
+
+
 @dp.message(F.text == "📊 Статистика")
 async def stats_menu(message: Message):
     stats = get_ai_signal_stats(days=7)
     await message.answer(
         _format_ai_stats_message(stats, "7d"),
-        reply_markup=stats_inline_kb(),
+        reply_markup=stats_inline_kb("7d"),
     )
 
 
@@ -489,7 +564,144 @@ async def stats_callback(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_text(
         _format_ai_stats_message(stats, period_key),
-        reply_markup=stats_inline_kb(),
+        reply_markup=stats_inline_kb(period_key),
+    )
+
+
+def _archive_inline_kb(
+    period_key: str,
+    page: int,
+    pages: int,
+    filter_on: bool,
+    events: list[dict],
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for idx, event in enumerate(events, start=1):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{idx}. {event.get('symbol')} {event.get('side')}",
+                    callback_data=f"archive:detail:{period_key}:{page}:{int(filter_on)}:{event.get('id')}",
+                )
+            ]
+        )
+
+    nav_row: list[InlineKeyboardButton] = []
+    if page > 1:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="⬅️ Prev",
+                callback_data=f"archive:list:{period_key}:{page - 1}:{int(filter_on)}",
+            )
+        )
+    if page < pages:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="Next ➡️",
+                callback_data=f"archive:list:{period_key}:{page + 1}:{int(filter_on)}",
+            )
+        )
+    if nav_row:
+        rows.append(nav_row)
+
+    filter_text = "Фильтр 80+" if not filter_on else "Снять фильтр"
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=filter_text,
+                callback_data=f"archive:list:{period_key}:1:{0 if filter_on else 1}",
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data=f"archive:back:{period_key}",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _archive_detail_kb(period_key: str, page: int, filter_on: bool) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data=f"archive:list:{period_key}:{page}:{int(filter_on)}",
+                )
+            ]
+        ]
+    )
+
+
+@dp.callback_query(F.data.regexp(r"^archive:list:(1d|3d|7d|all):\d+:(0|1)$"))
+async def archive_list(callback: CallbackQuery):
+    if callback.message is None or callback.from_user is None:
+        return
+    _, _, period_key, page_raw, filter_raw = callback.data.split(":")
+    page = max(1, int(page_raw))
+    filter_on = filter_raw == "1"
+    days = _period_days(period_key)
+    since_ts = int(time.time()) - days * 86400 if days is not None else None
+    min_score = 80 if filter_on else None
+    total = count_signal_events(
+        user_id=callback.from_user.id,
+        since_ts=since_ts,
+        min_score=min_score,
+    )
+    pages = max(1, (total + 9) // 10)
+    if page > pages:
+        page = pages
+    events_rows = list_signal_events(
+        user_id=callback.from_user.id,
+        since_ts=since_ts,
+        min_score=min_score,
+        limit=10,
+        offset=(page - 1) * 10,
+    )
+    events = [dict(row) for row in events_rows]
+    await callback.answer()
+    await callback.message.edit_text(
+        _format_archive_list(period_key, events, page, pages, filter_on),
+        reply_markup=_archive_inline_kb(period_key, page, pages, filter_on, events),
+    )
+
+
+@dp.callback_query(F.data.regexp(r"^archive:detail:(1d|3d|7d|all):\d+:(0|1):\d+$"))
+async def archive_detail(callback: CallbackQuery):
+    if callback.message is None or callback.from_user is None:
+        return
+    _, _, period_key, page_raw, filter_raw, event_id_raw = callback.data.split(":")
+    page = max(1, int(page_raw))
+    filter_on = filter_raw == "1"
+    event = get_signal_event(
+        user_id=callback.from_user.id,
+        event_id=int(event_id_raw),
+    )
+    if event is None:
+        await callback.answer("Сигнал не найден.", show_alert=True)
+        return
+    await callback.answer()
+    await callback.message.edit_text(
+        _format_archive_detail(dict(event)),
+        reply_markup=_archive_detail_kb(period_key, page, filter_on),
+    )
+
+
+@dp.callback_query(F.data.regexp(r"^archive:back:(1d|3d|7d|all)$"))
+async def archive_back(callback: CallbackQuery):
+    if callback.message is None:
+        return
+    period_key = callback.data.split(":")[2]
+    days = _period_days(period_key)
+    stats = get_ai_signal_stats(days=days)
+    await callback.answer()
+    await callback.message.edit_text(
+        _format_ai_stats_message(stats, period_key),
+        reply_markup=stats_inline_kb(period_key),
     )
 
 @dp.callback_query(F.data == "ai_notify_on")
@@ -1209,7 +1421,8 @@ async def send_signal_to_all(signal_dict: Dict[str, Any]):
     dedup_key = f"{symbol}:{direction}:1h:{time_bucket}:{e1}-{e2}"
 
     text = _format_signal(signal_dict)
-    insert_signal_audit(signal_dict, tier="free", module="ai_signals")
+    sent_at = int(time.time())
+    insert_signal_audit(signal_dict, tier="free", module="ai_signals", sent_at=sent_at)
 
     tasks = []
     recipients = []
@@ -1233,6 +1446,26 @@ async def send_signal_to_all(signal_dict: Dict[str, Any]):
     for chat_id, res in zip(recipients, results):
         if isinstance(res, Exception):
             print(f"[ai_signals] Failed to send to {chat_id}: {res}")
+            continue
+        try:
+            insert_signal_event(
+                ts=sent_at,
+                user_id=chat_id,
+                module="ai_signals",
+                symbol=symbol,
+                side="LONG" if direction == "long" else "SHORT",
+                timeframe="1H",
+                score=float(signal_dict.get("score", 0.0)),
+                poi_low=float(entry_low),
+                poi_high=float(entry_high),
+                sl=float(signal_dict.get("sl", 0.0)),
+                tp1=float(signal_dict.get("tp1", 0.0)),
+                tp2=float(signal_dict.get("tp2", 0.0)),
+                status="OPEN",
+                tg_message_id=int(res.message_id),
+            )
+        except Exception as exc:
+            print(f"[ai_signals] Failed to log signal event for {chat_id}: {exc}")
 
 
 def _select_signals_for_cycle(signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

@@ -70,12 +70,19 @@ def _compute_rr(signal_dict: dict) -> float:
     return reward / risk if risk > 0 else 0.0
 
 
-def insert_signal_audit(signal_dict: dict, tier: str, module: str) -> str:
+def insert_signal_audit(
+    signal_dict: dict,
+    tier: str,
+    module: str,
+    *,
+    sent_at: int | None = None,
+) -> str:
     signal_id = str(uuid.uuid4())
     entry_from, entry_to = signal_dict.get("entry_zone") or (0.0, 0.0)
     reason = signal_dict.get("reason") if isinstance(signal_dict.get("reason"), dict) else {}
     breakdown = signal_dict.get("breakdown") if isinstance(signal_dict.get("breakdown"), list) else []
     rr_value = _compute_rr(signal_dict)
+    signal_sent_at = int(time.time()) if sent_at is None else int(sent_at)
 
     payload = (
         signal_id,
@@ -93,7 +100,7 @@ def insert_signal_audit(signal_dict: dict, tier: str, module: str) -> str:
         float(rr_value),
         json.dumps(reason, ensure_ascii=False),
         json.dumps(breakdown, ensure_ascii=False),
-        int(time.time()),
+        signal_sent_at,
         "open",
     )
 

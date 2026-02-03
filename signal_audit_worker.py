@@ -10,6 +10,7 @@ from health import (
     update_module_progress,
     update_current_symbol,
 )
+from db import update_signal_events_status
 from signal_audit_db import fetch_open_signals, mark_signal_closed
 
 MAX_SIGNAL_AGE_SEC = 60 * 60 * 24
@@ -194,6 +195,23 @@ async def evaluate_open_signals(
                 filled_at=result["filled_at"],
                 notes=result["notes"],
             )
+            status_map = {
+                "TP1": "TP1",
+                "TP2": "TP2",
+                "SL": "SL",
+                "EXPIRED": "EXP",
+                "BE": "BE",
+                "NO_FILL": "NO_FILL",
+                "AMBIGUOUS": "AMBIGUOUS",
+            }
+            status_value = status_map.get(result["outcome"])
+            if status_value is not None:
+                update_signal_events_status(
+                    module=str(signal.get("module", "")),
+                    symbol=str(signal.get("symbol", "")),
+                    ts=int(signal.get("sent_at", 0)),
+                    status=status_value,
+                )
         except Exception as exc:
             print(f"[signal_audit] Failed to evaluate signal {signal.get('signal_id')}: {exc}")
             continue
