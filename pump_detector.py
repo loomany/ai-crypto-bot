@@ -2,7 +2,7 @@ import asyncio
 import os
 import re
 import time
-from typing import List, Dict, Any, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
@@ -212,7 +212,7 @@ async def scan_pumps_chunk(
     batch_size: int = BATCH_SIZE,
     max_symbols: int = PUMP_CHUNK_SIZE,
     time_budget_sec: int | None = None,
-    progress_cb: callable | None = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
     return_stats: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int], int]:
     results: list[Dict[str, Any]] = []
