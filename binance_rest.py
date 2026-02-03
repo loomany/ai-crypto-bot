@@ -23,6 +23,10 @@ _SHARED_LOCK = asyncio.Lock()
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 _KLINES_CACHE: dict[tuple[str, str, int], tuple[float, list]] = {}
+_KLINES_INFLIGHT: dict[tuple[str, str, int, int], asyncio.Task] = {}
+_KLINES_CACHE_HITS: dict[str, int] = {}
+_KLINES_CACHE_MISSES: dict[str, int] = {}
+_KLINES_INFLIGHT_AWAITS: dict[str, int] = {}
 _AGGTRADES_CACHE: dict[tuple[str, str, int, int], tuple[float, list]] = {}
 _BINANCE_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
 _MAX_RETRIES = 3
@@ -53,6 +57,7 @@ _KLINES_CACHE_TTL_BY_INTERVAL = {
     "5m": _env_int("KLINES_TTL_5M", 60),
 }
 _KLINES_CACHE_LOCK = asyncio.Lock()
+_KLINES_INFLIGHT_LOCK = asyncio.Lock()
 _AGGTRADES_CACHE_LOCK = asyncio.Lock()
 _AGGTRADES_CACHE_TTL_SEC = _env_int("AGGTRADES_TTL_SEC", 10)
 _BINANCE_REQUEST_MODULE = ContextVar("binance_request_module", default=None)
@@ -155,6 +160,10 @@ def binance_request_context(module: str):
         _BINANCE_REQUEST_MODULE.reset(token)
 
 
+def get_request_module() -> Optional[str]:
+    return _BINANCE_REQUEST_MODULE.get()
+
+
 def _track_request() -> None:
     module = _BINANCE_REQUEST_MODULE.get()
     if module:
@@ -165,6 +174,25 @@ def _track_klines_request() -> None:
     module = _BINANCE_REQUEST_MODULE.get()
     if module:
         increment_klines_request_count(module)
+
+
+def _increment_stat(bucket: dict[str, int], module: Optional[str]) -> None:
+    if module:
+        bucket[module] = bucket.get(module, 0) + 1
+
+
+def reset_klines_cache_stats(module: str) -> None:
+    _KLINES_CACHE_HITS[module] = 0
+    _KLINES_CACHE_MISSES[module] = 0
+    _KLINES_INFLIGHT_AWAITS[module] = 0
+
+
+def get_klines_cache_stats(module: str) -> dict[str, int]:
+    return {
+        "hits": _KLINES_CACHE_HITS.get(module, 0),
+        "misses": _KLINES_CACHE_MISSES.get(module, 0),
+        "inflight_awaits": _KLINES_INFLIGHT_AWAITS.get(module, 0),
+    }
 
 
 async def fetch_json(
@@ -260,17 +288,61 @@ async def fetch_klines(
     start_ms: int | None = None,
 ) -> Optional[list]:
     now = time.time()
+    module = _BINANCE_REQUEST_MODULE.get()
     ttl_sec = _KLINES_CACHE_TTL_BY_INTERVAL.get(interval, _KLINES_CACHE_TTL_SEC_DEFAULT)
     cache_key = None if start_ms is not None else (symbol, interval, limit)
     if cache_key is not None:
         async with _KLINES_CACHE_LOCK:
             cached = _KLINES_CACHE.get(cache_key)
             if cached and now - cached[0] < ttl_sec:
+                _increment_stat(_KLINES_CACHE_HITS, module)
                 print(
                     f"[binance_rest] klines {symbol} {interval} {limit} (cache_hit=True)"
                 )
                 return cached[1]
 
+    _increment_stat(_KLINES_CACHE_MISSES, module)
+    inflight_key = (symbol, interval, limit, int(start_ms or 0))
+    created = False
+    async with _KLINES_INFLIGHT_LOCK:
+        task = _KLINES_INFLIGHT.get(inflight_key)
+        if task is None:
+            created = True
+            task = asyncio.create_task(
+                _fetch_klines_from_binance(
+                    symbol,
+                    interval,
+                    limit,
+                    start_ms=start_ms,
+                    cache_key=cache_key,
+                    now=now,
+                )
+            )
+            _KLINES_INFLIGHT[inflight_key] = task
+
+    if not created:
+        _increment_stat(_KLINES_INFLIGHT_AWAITS, module)
+        print(
+            f"[binance_rest] INFLIGHT await klines {symbol} {interval} {limit}"
+        )
+        return await task
+
+    try:
+        return await task
+    finally:
+        async with _KLINES_INFLIGHT_LOCK:
+            _KLINES_INFLIGHT.pop(inflight_key, None)
+
+
+async def _fetch_klines_from_binance(
+    symbol: str,
+    interval: str,
+    limit: int,
+    *,
+    start_ms: int | None,
+    cache_key: tuple[str, str, int] | None,
+    now: float,
+) -> Optional[list]:
     print(f"[binance_rest] MISS klines {symbol} {interval} {limit}")
     url = f"{BINANCE_BASE_URL}/klines"
     params = {

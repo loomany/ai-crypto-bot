@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -51,6 +52,9 @@ async def fetch_klines(
                 close_time=int(item[6]),
             )
         )
+    now_ms = int(time.time() * 1000)
+    if candles and candles[-1].close_time > now_ms:
+        candles.pop()
     return candles
 
 

@@ -11,9 +11,69 @@ BINANCE_FAPI_BASE = "https://fapi.binance.com"
 
 SPOT_SYMBOLS_REFRESH_SEC = 60 * 30
 FUTURES_SYMBOLS_REFRESH_SEC = 60 * 30
+EXCLUDED_BASE_ASSETS = {
+    "USDT",
+    "USDC",
+    "FDUSD",
+    "TUSD",
+    "USDP",
+    "DAI",
+    "BUSD",
+    "PAXG",
+    "EUR",
+    "GBP",
+    "TRY",
+    "BRL",
+    "AUD",
+    "RUB",
+    "UAH",
+    "NGN",
+    "IDR",
+}
+LEVERAGE_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR", "3L", "3S", "5L", "5S")
 
 _spot_cache: dict[str, Any] = {"updated_at": 0.0, "symbols": []}
 _futures_cache: dict[str, Any] = {"updated_at": 0.0, "symbols": []}
+
+
+def _get_base_asset(symbol: str) -> str | None:
+    if symbol.endswith("USDT"):
+        return symbol[:-4]
+    return None
+
+
+def is_tradeable_symbol(symbol: str, ticker_24h: dict | None = None) -> bool:
+    if not symbol or not symbol.endswith("USDT"):
+        return False
+    base = _get_base_asset(symbol)
+    if not base or base in EXCLUDED_BASE_ASSETS:
+        return False
+    if any(base.endswith(suffix) for suffix in LEVERAGE_SUFFIXES):
+        return False
+    if ticker_24h:
+        try:
+            last_price = float(ticker_24h.get("lastPrice", 0.0))
+        except (TypeError, ValueError):
+            last_price = 0.0
+        if last_price <= 0:
+            return False
+    return True
+
+
+def filter_tradeable_symbols(
+    symbols: List[str],
+    *,
+    tickers_by_symbol: dict[str, dict] | None = None,
+) -> tuple[List[str], int]:
+    filtered: List[str] = []
+    removed = 0
+    for symbol in symbols:
+        ticker = tickers_by_symbol.get(symbol) if tickers_by_symbol else None
+        if is_tradeable_symbol(symbol, ticker):
+            filtered.append(symbol)
+        else:
+            removed += 1
+    return filtered, removed
 
 
 async def get_spot_usdt_symbols(session: aiohttp.ClientSession | None = None) -> List[str]:
@@ -38,9 +98,7 @@ async def get_spot_usdt_symbols(session: aiohttp.ClientSession | None = None) ->
             and symbol_info.get("isSpotTradingAllowed", True)
         ):
             symbol = symbol_info.get("symbol")
-            if not symbol:
-                continue
-            if any(token in symbol for token in ("UPUSDT", "DOWNUSDT", "3LUSDT", "3SUSDT")):
+            if not symbol or not is_tradeable_symbol(symbol):
                 continue
             symbols.append(symbol)
 
@@ -100,6 +158,8 @@ async def get_top_usdt_symbols_by_volume(
         try:
             quote_volume = float(row.get("quoteVolume", 0.0))
         except (TypeError, ValueError):
+            continue
+        if not is_tradeable_symbol(symbol, row):
             continue
         usdt_rows.append((symbol, quote_volume))
 

@@ -17,6 +17,8 @@ from binance_rest import (
     binance_watchdog,
     close_shared_session,
     get_shared_session,
+    get_klines_cache_stats,
+    reset_klines_cache_stats,
 )
 from pump_detector import (
     PUMP_CHUNK_SIZE,
@@ -27,7 +29,11 @@ from pump_detector import (
 from signals import scan_market
 from market_access import get_quick_with_fallback
 from trading_core import compute_atr, compute_ema
-from symbol_cache import get_all_usdt_symbols, get_top_usdt_symbols_by_volume
+from symbol_cache import (
+    filter_tradeable_symbols,
+    get_all_usdt_symbols,
+    get_top_usdt_symbols_by_volume,
+)
 from market_hub import MARKET_HUB
 from health import (
     MODULES,
@@ -56,7 +62,8 @@ from db import (
     prune_watchlist,
     get_watchlist_counts,
 )
-from db_path import get_db_path
+from db_path import ensure_db_writable, get_db_path
+from market_cache import get_ticker_request_count, reset_ticker_request_count
 from alert_dedup_db import init_alert_dedup, can_send
 from status_utils import is_notify_enabled
 from message_templates import format_scenario_message
@@ -118,6 +125,8 @@ def is_trading_time() -> bool:
 
 
 def init_app_db():
+    db_path = ensure_db_writable()
+    print(f"[DB] using sqlite at: {db_path}")
     conn = sqlite3.connect(get_db_path())
     try:
         conn.execute(
@@ -526,6 +535,20 @@ def _format_market_hub_ru(now: float) -> str:
     )
 
 
+def _format_db_status() -> str:
+    path = get_db_path()
+    if not os.path.exists(path):
+        return f"🗄 База данных\n• Путь: {path}\n• Файл не найден"
+    size_bytes = os.path.getsize(path)
+    mtime = datetime.fromtimestamp(os.path.getmtime(path))
+    return (
+        "🗄 База данных\n"
+        f"• Путь: {path}\n"
+        f"• Размер: {size_bytes} байт\n"
+        f"• Изменена: {mtime:%Y-%m-%d %H:%M:%S}"
+    )
+
+
 def _format_module_ru(key: str, st, now: float) -> str:
     # st — это ModuleStatus из health.py
     if st.last_tick:
@@ -592,13 +615,26 @@ def _format_module_ru(key: str, st, now: float) -> str:
         # запросы
         req = extra.get("req")
         kl = extra.get("klines")
-        if req or kl:
+        hits = extra.get("klines_hits")
+        misses = extra.get("klines_misses")
+        inflight = extra.get("klines_inflight")
+        ticker_req = extra.get("ticker_req")
+        deep_scans = extra.get("deep_scans")
+        if req or kl or hits or misses or inflight or ticker_req or deep_scans:
             lines.append("")
             lines.append("Запросы к Binance")
             if req:
                 lines.append(f"• Запросов сделано: {req}")
             if kl:
                 lines.append(f"• Свечей получено: {kl}")
+            if hits or misses:
+                lines.append(f"• Кеш свечей: hit={hits or 0} miss={misses or 0}")
+            if inflight:
+                lines.append(f"• In-flight ожиданий свечей: {inflight}")
+            if ticker_req:
+                lines.append(f"• Ticker/24h запросов: {ticker_req}")
+            if deep_scans:
+                lines.append(f"• Deep-scan за цикл: {deep_scans}")
 
     # Pump/Dump
     if key == "pumpdump":
@@ -622,6 +658,25 @@ def _format_module_ru(key: str, st, now: float) -> str:
         cyc = extra.get("cycle")
         if cyc:
             lines.append(f"• Время цикла: ~{cyc}")
+        hits = extra.get("klines_hits")
+        misses = extra.get("klines_misses")
+        inflight = extra.get("klines_inflight")
+        ticker_req = extra.get("ticker_req")
+        req = extra.get("req")
+        kl = extra.get("klines")
+        if req or kl or hits or misses or inflight or ticker_req:
+            lines.append("")
+            lines.append("Запросы к Binance")
+            if req:
+                lines.append(f"• Запросов сделано: {req}")
+            if kl:
+                lines.append(f"• Свечей получено: {kl}")
+            if hits or misses:
+                lines.append(f"• Кеш свечей: hit={hits or 0} miss={misses or 0}")
+            if inflight:
+                lines.append(f"• In-flight ожиданий свечей: {inflight}")
+            if ticker_req:
+                lines.append(f"• Ticker/24h запросов: {ticker_req}")
 
     # Binance секция (общая)
     lines.append("")
@@ -674,6 +729,8 @@ async def test_admin(message: Message):
     now = time.time()
     blocks = []
     blocks.append("🛠 Диагностика бота (админ)\n")
+    blocks.append(_format_db_status())
+    blocks.append("")
     blocks.append(_format_market_hub_ru(now))
     blocks.append("")
 
@@ -1014,7 +1071,12 @@ async def _get_ai_universe() -> List[str]:
         print(f"[ai_signals] top-n universe failed: {exc}")
     if not symbols:
         symbols = await get_all_usdt_symbols()
-    return symbols
+    filtered, removed = filter_tradeable_symbols(symbols)
+    if removed:
+        print(
+            f"[ai_signals] universe filtered: total={len(symbols)} removed={removed} final={len(filtered)}"
+        )
+    return filtered
 
 
 async def _compute_candidate_score(symbol: str) -> tuple[int, str]:
@@ -1088,11 +1150,28 @@ async def pump_scan_once(bot: Bot) -> None:
                 print("[pumpdump] no notify subscribers -> skip")
             return
 
+        reset_request_count("pumpdump")
+        reset_klines_request_count("pumpdump")
+        reset_klines_cache_stats("pumpdump")
+        reset_ticker_request_count("pumpdump")
+
         session = await get_shared_session()
-        symbols = await get_candidate_symbols(session, limit=120)
+        with binance_request_context("pumpdump"):
+            symbols, symbol_stats = await get_candidate_symbols(
+                session,
+                limit=120,
+                return_stats=True,
+            )
         if not symbols:
             mark_error("pumpdump", "no symbols to scan")
             return
+        if log_level >= 1 and symbol_stats.get("removed"):
+            print(
+                "[pumpdump] universe filtered "
+                f"total={symbol_stats.get('total')} "
+                f"removed={symbol_stats.get('removed')} "
+                f"final={symbol_stats.get('final')}"
+            )
         total = len(symbols)
         update_current_symbol("pumpdump", symbols[0] if symbols else "")
 
@@ -1173,6 +1252,10 @@ async def pump_scan_once(bot: Bot) -> None:
 
         cycle_sec = time.time() - cycle_start
         current_symbol = MODULES.get("pumpdump").current_symbol if "pumpdump" in MODULES else None
+        req_count = get_request_count("pumpdump")
+        klines_count = get_klines_request_count("pumpdump")
+        cache_stats = get_klines_cache_stats("pumpdump")
+        ticker_count = get_ticker_request_count("pumpdump")
         if log_level >= 1:
             print(f"[pumpdump] cycle done: found={found} sent={sent_count}")
         mark_ok(
@@ -1180,7 +1263,11 @@ async def pump_scan_once(bot: Bot) -> None:
             extra=(
                 f"progress={checked}/{total} "
                 f"checked={checked}/{chunk_len} found={found} sent={sent_count} "
-                f"current={current_symbol or '-'} cycle={int(cycle_sec)}s"
+                f"current={current_symbol or '-'} cycle={int(cycle_sec)}s "
+                f"req={req_count} klines={klines_count} "
+                f"klines_hits={cache_stats.get('hits')} klines_misses={cache_stats.get('misses')} "
+                f"klines_inflight={cache_stats.get('inflight_awaits')} "
+                f"ticker_req={ticker_count}"
             ),
         )
     finally:
@@ -1194,9 +1281,12 @@ async def ai_scan_once() -> None:
     try:
         reset_request_count("ai_signals")
         reset_klines_request_count("ai_signals")
+        reset_klines_cache_stats("ai_signals")
+        reset_ticker_request_count("ai_signals")
         mark_tick("ai_signals", extra="сканирую рынок...")
 
-        symbols = await _get_ai_universe()
+        with binance_request_context("ai_signals"):
+            symbols = await _get_ai_universe()
         if not symbols:
             mark_error("ai_signals", "no symbols to scan")
             return
@@ -1248,6 +1338,8 @@ async def ai_scan_once() -> None:
         current_symbol = MODULES.get("ai_signals").current_symbol if "ai_signals" in MODULES else None
         req_count = get_request_count("ai_signals")
         klines_count = get_klines_request_count("ai_signals")
+        cache_stats = get_klines_cache_stats("ai_signals")
+        ticker_count = get_ticker_request_count("ai_signals")
         print(
             "[AI] "
             f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
@@ -1259,7 +1351,10 @@ async def ai_scan_once() -> None:
                 f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
                 f"watchlist={active_watchlist}/{total_watchlist} added={added} pruned={pruned} "
                 f"current={current_symbol or '-'} cycle={int(time.time() - start)}s "
-                f"req={req_count} klines={klines_count}"
+                f"req={req_count} klines={klines_count} "
+                f"klines_hits={cache_stats.get('hits')} klines_misses={cache_stats.get('misses')} "
+                f"klines_inflight={cache_stats.get('inflight_awaits')} "
+                f"ticker_req={ticker_count}"
             ),
         )
     finally:
@@ -1294,6 +1389,7 @@ async def watchlist_scan_once() -> None:
             time_budget=BUDGET,
         )
     print("[ai_signals] watchlist stats:", stats)
+    deep_scans_done = stats.get("deep_scans_done", 0) if isinstance(stats, dict) else 0
     sent_count = 0
     for signal in _select_signals_for_cycle(signals):
         if time.time() - start > BUDGET:
@@ -1324,6 +1420,7 @@ async def watchlist_scan_once() -> None:
         extra=(
             f"watchlist={active_watchlist}/{total_watchlist} "
             f"scanned={len(symbols)} sent={sent_count} pruned={pruned} "
+            f"deep_scans={deep_scans_done} "
             f"cycle={int(time.time() - start)}s"
         ),
     )
