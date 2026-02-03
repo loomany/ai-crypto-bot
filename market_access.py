@@ -42,6 +42,7 @@ async def get_quick_with_fallback(
     symbol: str,
     *,
     tfs: Tuple[str, ...] = ("1h", "15m"),
+    limit_overrides: dict[str, int] | None = None,
 ) -> Optional[Dict[str, List[Candle]]]:
     bundle = MARKET_HUB.get_bundle(symbol, tfs)
     if bundle and all(bundle.get(tf) for tf in tfs):
@@ -50,7 +51,7 @@ async def get_quick_with_fallback(
         else:
             return bundle
     # fallback
-    quick = await get_quick_candles(symbol)
+    quick = await get_quick_candles(symbol, tfs=tfs, limit_overrides=limit_overrides)
     if not quick:
         return None
     for tf in tfs:

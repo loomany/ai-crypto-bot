@@ -5,18 +5,17 @@ import time
 from statistics import mean
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from binance_client import Candle, KLINES_15M_LIMIT, KLINES_1H_LIMIT
+from binance_client import Candle
 from market_access import get_bundle_with_fallback, get_quick_with_fallback
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
 from market_context import get_market_context
 from market_regime import get_market_regime
+from indicators_cache import get_cached_atr, get_cached_ema, get_cached_rsi
 from trading_core import (
     _compute_rsi_series,
     _nearest_level,
     analyze_orderflow,
-    compute_atr,
-    compute_ema,
     compute_score_breakdown,
     detect_rsi_divergence,
     detect_trend_and_structure,
@@ -41,6 +40,11 @@ MIN_PRE_SCORE = float(os.getenv("MIN_PRE_SCORE", "70"))
 PRE_SCORE_THRESHOLD = float(os.getenv("PRE_SCORE_THRESHOLD", "65"))
 FINAL_SCORE_THRESHOLD = float(os.getenv("FINAL_SCORE_THRESHOLD", "80"))
 AI_MAX_DEEP_PER_CYCLE = int(os.getenv("AI_MAX_DEEP_PER_CYCLE", "3"))
+AI_DEEP_TOP_K = int(os.getenv("AI_DEEP_TOP_K", str(AI_MAX_DEEP_PER_CYCLE)))
+AI_CHEAP_LIMIT = int(os.getenv("AI_CHEAP_LIMIT", "120"))
+AI_CHEAP_TF = os.getenv("AI_CHEAP_TF", "15m")
+AGGTRADES_TOP_K = int(os.getenv("AGGTRADES_TOP_K", "2"))
+KLINES_CONCURRENCY = int(os.getenv("KLINES_CONCURRENCY", "10"))
 REQUIRE_15M_CONFIRM_ON_EXPANDED = os.getenv("REQUIRE_15M_CONFIRM_ON_EXPANDED", "true").lower() in (
     "1",
     "true",
@@ -49,8 +53,6 @@ REQUIRE_15M_CONFIRM_ON_EXPANDED = os.getenv("REQUIRE_15M_CONFIRM_ON_EXPANDED", "
 )
 MAX_FAIL_DEBUG_LOGS_PER_CYCLE = int(os.getenv("MAX_FAIL_DEBUG_LOGS_PER_CYCLE", "8"))
 AI_STAGE_A_TOP_K = int(os.getenv("AI_STAGE_A_TOP_K", "10"))
-AI_STAGE_A_LIMIT_1H = int(os.getenv("AI_STAGE_A_LIMIT_1H", str(KLINES_1H_LIMIT)))
-AI_STAGE_A_LIMIT_15M = int(os.getenv("AI_STAGE_A_LIMIT_15M", str(KLINES_15M_LIMIT)))
 BTC_CONTEXT_TTL_SEC = int(os.getenv("BTC_CONTEXT_TTL_SEC", "90"))
 
 _BTC_CONTEXT_CACHE: Dict[str, Any] | None = None
@@ -119,9 +121,7 @@ async def get_btc_context(*, force_refresh: bool = False) -> Dict[str, Any]:
     btc_trend_1d = daily_structure["trend"]
     btc_trend_1h = h1_structure["trend"]
 
-    closes_15m = [c.close for c in candles_15m]
-    rsi_15m_series = _compute_rsi_series(closes_15m)
-    rsi_15m_value = rsi_15m_series[-1] if rsi_15m_series else 50.0
+    rsi_15m_value = get_cached_rsi(BTC_SYMBOL, "15m", candles_15m)
 
     vols = [c.volume for c in candles_15m[-21:-1]]
     last_vol = candles_15m[-1].volume if candles_15m else 0.0
@@ -171,37 +171,26 @@ async def _gather_klines(symbol: str) -> Optional[Dict[str, List[Candle]]]:
     return await get_bundle_with_fallback(symbol, ("1d", "4h", "1h", "15m", "5m"))
 
 
-async def _gather_quick_klines(symbol: str) -> Optional[Dict[str, List[Candle]]]:
-    return await get_quick_with_fallback(symbol, tfs=("1h", "15m"))
+async def _gather_stage_a_klines(
+    symbol: str,
+    *,
+    tf: str,
+    limit: int,
+) -> Optional[Dict[str, List[Candle]]]:
+    return await get_quick_with_fallback(symbol, tfs=(tf,), limit_overrides={tf: limit})
 
 
-def _quick_score(candles: Dict[str, List[Candle]]) -> float:
-    candles_1h = candles["1h"]
-    candles_15m = candles["15m"]
-    closes_15m = [c.close for c in candles_15m]
-    rsi_15m_series = _compute_rsi_series(closes_15m)
-    rsi_15m = rsi_15m_series[-1] if rsi_15m_series else 50.0
-    volume_ratio, _ = _volume_ratio([c.volume for c in candles_15m])
-    trend = detect_trend_and_structure(candles_1h)
-    trend_bonus = 1.1 if trend.get("trend") not in ("range", "neutral") else 1.0
-    rsi_distance = abs(rsi_15m - 50.0) / 50.0
-    return max(volume_ratio, 0.01) * (1.0 + rsi_distance) * trend_bonus
-
-
-def _pre_score(candles: Dict[str, List[Candle]]) -> float:
-    candles_1h = candles.get("1h") or []
-    candles_15m = candles.get("15m") or []
-    if len(candles_1h) < 20 or len(candles_15m) < 20:
+def _pre_score(candles: Dict[str, List[Candle]], *, tf: str, symbol: str) -> float:
+    source = candles.get(tf) or []
+    if len(source) < 20:
         return 0.0
-    closes_1h = [c.close for c in candles_1h]
-    closes_15m = [c.close for c in candles_15m]
-    trend = detect_trend_and_structure(candles_1h)
-    volume_ratio, _ = _volume_ratio([c.volume for c in candles_15m])
-    ema50 = compute_ema(closes_1h, 50)
-    last_close = closes_1h[-1]
-    atr = compute_atr(candles_1h, 14)
-    rsi_15m_series = _compute_rsi_series(closes_15m)
-    rsi_15m = rsi_15m_series[-1] if rsi_15m_series else 50.0
+    closes = [c.close for c in source]
+    trend = detect_trend_and_structure(source)
+    volume_ratio, _ = _volume_ratio([c.volume for c in source])
+    ema50 = get_cached_ema(symbol, tf, source, 50)
+    last_close = closes[-1]
+    atr = get_cached_atr(symbol, tf, source, 14)
+    rsi_value = get_cached_rsi(symbol, tf, source)
 
     score = 0.0
     if trend.get("trend") in ("up", "down"):
@@ -226,7 +215,7 @@ def _pre_score(candles: Dict[str, List[Candle]]) -> float:
     if atr and atr > 0:
         score += 10
 
-    if 35 <= rsi_15m <= 65:
+    if 35 <= rsi_value <= 65:
         score += 10
 
     return min(score, 100.0)
@@ -301,6 +290,7 @@ async def _prepare_signal(
     stats: Dict[str, int] | None = None,
     near_miss: Dict[str, int] | None = None,
     debug_state: Dict[str, int] | None = None,
+    fetch_orderflow: bool = True,
 ) -> Optional[Dict[str, Any]]:
     def _inc_fail(reason: str) -> None:
         if stats is None:
@@ -423,7 +413,9 @@ async def _prepare_signal(
         _inc_fail("fail_btc_gate_short")
         return None
 
-    atr_15m = compute_atr(candles_15m[-60:]) if len(candles_15m) >= 15 else None
+    atr_15m = (
+        get_cached_atr(symbol, "15m", candles_15m[-60:], 14) if len(candles_15m) >= 15 else None
+    )
     stop_buffer = atr_15m * 0.8 if atr_15m else current_price * 0.003
 
     if candidate_side == "LONG":
@@ -488,8 +480,8 @@ async def _prepare_signal(
     score_pre = min(100.0, max(0.0, score_pre))
 
     closes_1h = [c.close for c in candles_1h]
-    ema50_1h = compute_ema(closes_1h, 50) if len(closes_1h) >= 50 else None
-    ema200_1h = compute_ema(closes_1h, 200) if len(closes_1h) >= 200 else None
+    ema50_1h = get_cached_ema(symbol, "1h", candles_1h, 50) if len(closes_1h) >= 50 else None
+    ema200_1h = get_cached_ema(symbol, "1h", candles_1h, 200) if len(closes_1h) >= 200 else None
     ma_trend_ok = False
     if ema50_1h and ema200_1h:
         if candidate_side == "LONG" and current_price >= ema50_1h >= ema200_1h:
@@ -556,7 +548,10 @@ async def _prepare_signal(
         _inc_fail("fail_atr_ok")
         return None
 
-    orderflow = await analyze_orderflow(symbol)
+    if fetch_orderflow:
+        orderflow = await analyze_orderflow(symbol)
+    else:
+        orderflow = {"orderflow_bullish": False, "orderflow_bearish": False, "whale_activity": False}
 
     # --- AI-паттерны и Market Regime ---
     pattern_info = await analyze_ai_patterns(symbol, candles_1h, candles_15m, candles_5m)
@@ -624,8 +619,7 @@ async def _prepare_signal(
         )
         return None
 
-    rsi_1h_series = _compute_rsi_series(closes_1h)
-    rsi_1h_value = rsi_1h_series[-1] if rsi_1h_series else 50.0
+    rsi_1h_value = get_cached_rsi(symbol, "1h", candles_1h)
     rsi_zone = "комфортная зона"
     if rsi_1h_value >= 70:
         rsi_zone = "перекупленность"
@@ -718,7 +712,12 @@ async def scan_market(
     start_time = time.time()
     debug_state = {"used": 0, "max": MAX_FAIL_DEBUG_LOGS_PER_CYCLE}
     deep_scans_done = 0
-    max_deep_scans = AI_MAX_DEEP_PER_CYCLE if deep_scan_limit is None else deep_scan_limit
+    max_deep_scans = AI_DEEP_TOP_K if deep_scan_limit is None else deep_scan_limit
+    semaphore = asyncio.Semaphore(KLINES_CONCURRENCY)
+
+    async def _with_semaphore(awaitable, *args, **kwargs):
+        async with semaphore:
+            return await awaitable(*args, **kwargs)
 
     if use_btc_gate:
         if not btc_ctx["allow_longs"] and not btc_ctx["allow_shorts"]:
@@ -736,66 +735,97 @@ async def scan_market(
 
     signals: List[Dict[str, Any]] = []
 
+    scored: List[Tuple[str, float]] = []
     for i in range(0, len(symbols), batch_size):
         if time_budget is not None and time.time() - start_time > time_budget:
             break
         batch = symbols[i : i + batch_size]
         checked += len(batch)
-        quick_tasks = [asyncio.create_task(_gather_quick_klines(symbol)) for symbol in batch]
+        quick_tasks = [
+            asyncio.create_task(
+                _with_semaphore(
+                    _gather_stage_a_klines,
+                    symbol,
+                    tf=AI_CHEAP_TF,
+                    limit=AI_CHEAP_LIMIT,
+                )
+            )
+            for symbol in batch
+        ]
         quick_list = await asyncio.gather(*quick_tasks)
-        scored: List[Tuple[str, float]] = []
         for symbol, quick in zip(batch, quick_list):
             if not quick:
                 fails["fail_no_quick"] = fails.get("fail_no_quick", 0) + 1
                 continue
-            pre_score = _pre_score(quick)
+            pre_score = _pre_score(quick, tf=AI_CHEAP_TF, symbol=symbol)
             if pre_score < PRE_SCORE_THRESHOLD:
                 fails["fail_pre_score"] = fails.get("fail_pre_score", 0) + 1
                 continue
             scored.append((symbol, pre_score))
 
-        scored.sort(key=lambda item: item[1], reverse=True)
-        if free_mode:
-            top_k = min(AI_STAGE_A_TOP_K, len(scored))
-            scored = scored[:top_k]
+    if not scored:
+        if return_stats:
+            return signals, {
+                "checked": checked,
+                "klines_ok": klines_ok,
+                "deep_scans_done": deep_scans_done,
+                "signals_found": len(signals),
+                "fails": fails,
+                "near_miss": near_miss,
+            }
+        return signals
 
-        if not scored:
+    scored.sort(key=lambda item: item[1], reverse=True)
+    if free_mode:
+        scored = scored[: min(AI_STAGE_A_TOP_K, len(scored))]
+
+    ranked = scored
+    if priority_scores:
+        ranked = sorted(
+            scored,
+            key=lambda item: (priority_scores.get(item[0], item[1]), item[1]),
+            reverse=True,
+        )
+
+    candidate_symbols = [symbol for symbol, _ in ranked[: max_deep_scans]]
+    deep_scans_done = len(candidate_symbols)
+    if not candidate_symbols:
+        if return_stats:
+            return signals, {
+                "checked": checked,
+                "klines_ok": klines_ok,
+                "deep_scans_done": deep_scans_done,
+                "signals_found": len(signals),
+                "fails": fails,
+                "near_miss": near_miss,
+            }
+        return signals
+
+    orderflow_candidates = {
+        symbol for symbol, _ in ranked[: min(AGGTRADES_TOP_K, len(candidate_symbols))]
+    }
+    tasks = [asyncio.create_task(_with_semaphore(_gather_klines, symbol)) for symbol in candidate_symbols]
+    klines_list = await asyncio.gather(*tasks)
+
+    for symbol, klines in zip(candidate_symbols, klines_list):
+        if not klines:
+            fails["fail_no_klines"] = fails.get("fail_no_klines", 0) + 1
             continue
+        klines_ok += 1
 
-        remaining_deep = max_deep_scans - deep_scans_done
-        if remaining_deep <= 0:
-            break
-        ranked = scored
-        if priority_scores:
-            ranked = sorted(
-                scored,
-                key=lambda item: (priority_scores.get(item[0], item[1]), item[1]),
-                reverse=True,
-            )
-        candidate_symbols = [symbol for symbol, _ in ranked[:remaining_deep]]
-        deep_scans_done += len(candidate_symbols)
-
-        tasks = [asyncio.create_task(_gather_klines(symbol)) for symbol in candidate_symbols]
-        klines_list = await asyncio.gather(*tasks)
-
-        for symbol, klines in zip(candidate_symbols, klines_list):
-            if not klines:
-                fails["fail_no_klines"] = fails.get("fail_no_klines", 0) + 1
-                continue
-            klines_ok += 1
-
-            signal = await _prepare_signal(
-                symbol,
-                klines,
-                btc_ctx,
-                free_mode=free_mode,
-                min_score=min_score,
-                stats=fails if return_stats else None,
-                near_miss=near_miss if return_stats else None,
-                debug_state=debug_state,
-            )
-            if signal:
-                signals.append(signal)
+        signal = await _prepare_signal(
+            symbol,
+            klines,
+            btc_ctx,
+            free_mode=free_mode,
+            min_score=min_score,
+            stats=fails if return_stats else None,
+            near_miss=near_miss if return_stats else None,
+            debug_state=debug_state,
+            fetch_orderflow=symbol in orderflow_candidates,
+        )
+        if signal:
+            signals.append(signal)
 
     if return_stats:
         return signals, {
