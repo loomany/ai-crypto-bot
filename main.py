@@ -67,9 +67,14 @@ from market_cache import get_ticker_request_count, reset_ticker_request_count
 from alert_dedup_db import init_alert_dedup, can_send
 from status_utils import is_notify_enabled
 from message_templates import format_scenario_message
-from signal_audit_db import init_signal_audit_tables, insert_signal_audit, get_public_stats
+from signal_audit_db import (
+    get_ai_signal_stats,
+    get_public_stats,
+    init_signal_audit_tables,
+    insert_signal_audit,
+)
 from signal_audit_worker import signal_audit_worker_loop
-from keyboards import ai_signals_inline_kb, main_menu_kb, pumpdump_inline_kb
+from keyboards import ai_signals_inline_kb, main_menu_kb, pumpdump_inline_kb, stats_inline_kb
 from texts import AI_SIGNALS_TEXT, PUMPDUMP_TEXT, START_TEXT
 
 
@@ -399,6 +404,82 @@ async def pumpdump_menu(message: Message):
         reply_markup=pumpdump_inline_kb(),
     )
 
+
+def _period_label(period_key: str) -> str:
+    mapping = {
+        "1d": "1 день",
+        "3d": "3 дня",
+        "7d": "7 дней",
+        "all": "Все время",
+    }
+    return mapping.get(period_key, "Все время")
+
+
+def _format_ai_stats_message(stats: Dict[str, Any], period_key: str) -> str:
+    title = f"📊 Статистика AI-сигналов ({_period_label(period_key)})"
+    total = stats.get("total", 0)
+    disclaimer = "ℹ️ Это статистика отработки сценариев по рынку, не гарантия прибыли."
+
+    if total == 0:
+        return f"{title}\nНет завершенных сигналов за период.\n\n{disclaimer}"
+
+    tp1 = stats.get("tp1", 0)
+    tp2 = stats.get("tp2", 0)
+    sl = stats.get("sl", 0)
+    exp = stats.get("exp", 0)
+    winrate = stats.get("winrate", 0.0)
+    buckets = stats.get("buckets", {})
+
+    def _bucket_line(label: str, key: str) -> str:
+        data = buckets.get(key, {"total": 0, "winrate": 0.0})
+        total_bucket = data.get("total", 0)
+        win_bucket = data.get("winrate", 0.0)
+        return f"{label}:  {total_bucket} (TP1+: {win_bucket:.0f}%)"
+
+    lines = [
+        title,
+        "",
+        f"Сигналов: {total}",
+        f"TP1+: {tp1} | TP2: {tp2} | SL: {sl} | Exp: {exp}",
+        f"Winrate (TP1+): {winrate:.1f}%",
+        "",
+        "Score:",
+        _bucket_line("0–69", "0-69"),
+        _bucket_line("70–79", "70-79"),
+        _bucket_line("80+", "80-100"),
+        "",
+        disclaimer,
+    ]
+    return "\n".join(lines)
+
+
+@dp.message(F.text == "📊 Статистика")
+async def stats_menu(message: Message):
+    stats = get_ai_signal_stats(days=7)
+    await message.answer(
+        _format_ai_stats_message(stats, "7d"),
+        reply_markup=stats_inline_kb(),
+    )
+
+
+@dp.callback_query(F.data.regexp(r"^stats:(1d|3d|7d|all)$"))
+async def stats_callback(callback: CallbackQuery):
+    if callback.message is None:
+        return
+    period_key = callback.data.split(":", 1)[1]
+    days = None
+    if period_key == "1d":
+        days = 1
+    elif period_key == "3d":
+        days = 3
+    elif period_key == "7d":
+        days = 7
+    stats = get_ai_signal_stats(days=days)
+    await callback.answer()
+    await callback.message.edit_text(
+        _format_ai_stats_message(stats, period_key),
+        reply_markup=stats_inline_kb(),
+    )
 
 @dp.callback_query(F.data == "ai_notify_on")
 async def ai_notify_on(callback: CallbackQuery):

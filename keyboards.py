@@ -13,6 +13,7 @@ def main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text="🤖 AI-сигналы")],
         [KeyboardButton(text="⚡ Pump/Dump")],
+        [KeyboardButton(text="📊 Статистика")],
         [KeyboardButton(text="ℹ️ Статус бота")],
     ]
     if is_admin:
@@ -56,5 +57,20 @@ def pumpdump_inline_kb() -> InlineKeyboardMarkup:
                 )
             ],
             [InlineKeyboardButton(text="✉️ Написать админу", url=admin_url())],
+        ]
+    )
+
+
+def stats_inline_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="1 день", callback_data="stats:1d"),
+                InlineKeyboardButton(text="3 дня", callback_data="stats:3d"),
+            ],
+            [
+                InlineKeyboardButton(text="7 дней", callback_data="stats:7d"),
+                InlineKeyboardButton(text="Все время", callback_data="stats:all"),
+            ],
         ]
     )
