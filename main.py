@@ -1083,6 +1083,10 @@ def _format_signal(signal: Dict[str, Any]) -> str:
         rr=rr,
         price_precision=4,
         score_breakdown=breakdown,
+        market_mode=reason.get("market_mode"),
+        market_bias=reason.get("market_bias"),
+        btc_change_6h_pct=float(reason.get("btc_change_6h_pct", 0.0)),
+        btc_atr_1h_pct=float(reason.get("btc_atr_1h_pct", 0.0)),
     )
 
 
