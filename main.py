@@ -20,7 +20,7 @@ from binance_rest import (
 )
 from pump_detector import (
     PUMP_CHUNK_SIZE,
-    build_pump_symbol_list,
+    get_candidate_symbols,
     scan_pumps_chunk,
     format_pump_message,
 )
@@ -80,6 +80,9 @@ def load_settings() -> str:
 
 
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
+PUMP_COOLDOWN_SYMBOL_SEC = int(os.getenv("PUMP_COOLDOWN_SYMBOL_SEC", "21600"))  # 6h
+PUMP_COOLDOWN_GLOBAL_SEC = int(os.getenv("PUMP_COOLDOWN_GLOBAL_SEC", "3600"))  # 1h
+PUMP_DAILY_LIMIT = int(os.getenv("PUMP_DAILY_LIMIT", "6"))
 
 
 def is_admin(user_id: int) -> bool:
@@ -120,6 +123,17 @@ def init_app_db():
     try:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS ai_signals_subscribers (chat_id INTEGER PRIMARY KEY)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pumpdump_daily_counts (
+                chat_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                feature TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (chat_id, date, feature)
+            )
+            """
         )
         conn.execute(
             """
@@ -183,6 +197,47 @@ def migrate_legacy_notify_settings() -> None:
             set_user_pref(int(chat_id), "ai_signals_enabled", 1)
         except Exception:
             continue
+
+
+def _get_pumpdump_date_key(now: datetime | None = None) -> str:
+    if now is None:
+        now = datetime.now(timezone.utc)
+    return now.date().isoformat()
+
+
+def get_pumpdump_daily_count(chat_id: int, date_key: str) -> int:
+    conn = sqlite3.connect(get_db_path())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT count
+            FROM pumpdump_daily_counts
+            WHERE chat_id = ? AND date = ? AND feature = ?
+            """,
+            (chat_id, date_key, "pumpdump"),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
+
+
+def increment_pumpdump_daily_count(chat_id: int, date_key: str) -> None:
+    conn = sqlite3.connect(get_db_path())
+    try:
+        conn.execute(
+            """
+            INSERT INTO pumpdump_daily_counts (chat_id, date, feature, count)
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(chat_id, date, feature)
+            DO UPDATE SET count = count + 1
+            """,
+            (chat_id, date_key, "pumpdump"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def upsert_user(
@@ -814,8 +869,6 @@ async def pump_scan_once(bot: Bot) -> None:
     if not hasattr(pump_scan_once, "state"):
         pump_scan_once.state = {
             "last_sent": {},
-            "symbols": [],
-            "cursor": 0,
         }
 
     try:
@@ -834,39 +887,27 @@ async def pump_scan_once(bot: Bot) -> None:
             return
 
         session = await get_shared_session()
-        symbols = state["symbols"]
-        cursor = state["cursor"]
-        if not symbols or cursor >= len(symbols):
-            symbols = await build_pump_symbol_list(session)
-            cursor = 0
-            state["symbols"] = symbols
-
+        symbols = await get_candidate_symbols(session, limit=120)
         if not symbols:
             mark_error("pumpdump", "no symbols to scan")
             return
         total = len(symbols)
-        update_current_symbol("pumpdump", symbols[cursor] if cursor < total else "")
+        update_current_symbol("pumpdump", symbols[0] if symbols else "")
 
         cycle_start = time.time()
         try:
-            signals, stats, next_cursor = await asyncio.wait_for(
-                scan_pumps_chunk(
-                    symbols,
-                    start_idx=cursor,
-                    time_budget_sec=BUDGET,
-                    return_stats=True,
-                ),
+            signals, stats, _next_cursor = await asyncio.wait_for(
+                scan_pumps_chunk(symbols, time_budget_sec=BUDGET, return_stats=True),
                 timeout=BUDGET,
             )
         except asyncio.TimeoutError:
             return
-        state["cursor"] = next_cursor
         found = stats.get("found", len(signals) if isinstance(signals, list) else 0)
 
         if log_level >= 1:
             print(
-                f"[pumpdump] chunk: cursor={cursor} -> next={next_cursor} "
-                f"total={len(symbols)} checked={stats.get('checked',0)} found={found}"
+                f"[pumpdump] chunk: total={len(symbols)} "
+                f"checked={stats.get('checked',0)} found={found}"
             )
 
         if log_level >= 2 and signals:
@@ -878,13 +919,14 @@ async def pump_scan_once(bot: Bot) -> None:
                     f"5m={s.get('change_5m')}% "
                     f"volx={s.get('volume_mul')}"
                 )
-        chunk_len = min(PUMP_CHUNK_SIZE, total - cursor) if total else 0
+        chunk_len = min(PUMP_CHUNK_SIZE, total) if total else 0
         checked = stats.get("checked", 0)
-        update_module_progress("pumpdump", total, next_cursor, checked)
+        update_module_progress("pumpdump", total, checked, checked)
 
         now_min = int(time.time() // 60)
         sent_count = 0
         last_sent: dict[str, int] = state["last_sent"]
+        date_key = _get_pumpdump_date_key()
 
         for sig in signals:
             if time.time() - start > BUDGET:
@@ -901,7 +943,27 @@ async def pump_scan_once(bot: Bot) -> None:
             last_sent[symbol] = now_min
             for chat_id in subscribers:
                 try:
+                    if get_pumpdump_daily_count(chat_id, date_key) >= PUMP_DAILY_LIMIT:
+                        continue
+                    time_bucket = int(time.time() // PUMP_COOLDOWN_GLOBAL_SEC)
+                    dedup_global = f"pumpdump:global:{time_bucket}"
+                    if not can_send(
+                        chat_id,
+                        "pumpdump",
+                        dedup_global,
+                        PUMP_COOLDOWN_GLOBAL_SEC,
+                    ):
+                        continue
+                    dedup_symbol = f"pumpdump:{symbol}"
+                    if not can_send(
+                        chat_id,
+                        "pumpdump",
+                        dedup_symbol,
+                        PUMP_COOLDOWN_SYMBOL_SEC,
+                    ):
+                        continue
                     await bot.send_message(chat_id, text, parse_mode="Markdown")
+                    increment_pumpdump_daily_count(chat_id, date_key)
                     sent_count += 1
                 except Exception as e:
                     print(f"[pumpdump] send failed chat_id={chat_id} symbol={symbol}: {e}")
@@ -914,7 +976,7 @@ async def pump_scan_once(bot: Bot) -> None:
         mark_ok(
             "pumpdump",
             extra=(
-                f"progress={next_cursor}/{total} "
+                f"progress={checked}/{total} "
                 f"checked={checked}/{chunk_len} found={found} sent={sent_count} "
                 f"current={current_symbol or '-'} cycle={int(cycle_sec)}s"
             ),

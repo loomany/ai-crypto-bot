@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 import time
 from typing import List, Dict, Any, Tuple
@@ -10,15 +11,15 @@ from binance_rest import binance_request_context, fetch_json
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 
 BINANCE_API = "https://api.binance.com"
-PUMP_1M_THRESHOLD = 2.5
-PUMP_5M_THRESHOLD = 5.0
-DUMP_1M_THRESHOLD = 2.5
-DUMP_5M_THRESHOLD = 5.0
-PUMP_VOLUME_THRESHOLD = 2.0
+PUMP_1M_THRESHOLD = float(os.getenv("PUMP_1M_THRESHOLD", "1.6"))
+PUMP_5M_THRESHOLD = float(os.getenv("PUMP_5M_THRESHOLD", "3.2"))
+DUMP_1M_THRESHOLD = float(os.getenv("DUMP_1M_THRESHOLD", "-1.6"))
+DUMP_5M_THRESHOLD = float(os.getenv("DUMP_5M_THRESHOLD", "-3.2"))
+PUMP_VOLUME_MUL = float(os.getenv("PUMP_VOLUME_MUL", "1.8"))
 COOLDOWN_SEC = 60
 DUP_CHANGE_THRESHOLD = 0.15
 MIN_PRICE_USDT = 0.0005
-MIN_VOLUME_5M_USDT = 10_000
+MIN_VOLUME_5M_USDT = float(os.getenv("MIN_VOLUME_5M_USDT", "7000"))
 PRIORITY_LIMIT = 250
 BATCH_SIZE = 20
 PUMP_CHUNK_SIZE = 60
@@ -32,6 +33,17 @@ async def get_usdt_symbols(session: aiohttp.ClientSession) -> list[str]:
     Получаем ВСЕ спотовые пары к USDT, которые сейчас торгуются.
     """
     return await get_spot_usdt_symbols(session)
+
+
+async def get_candidate_symbols(
+    session: aiohttp.ClientSession,
+    limit: int = 80,
+) -> list[str]:
+    symbols = await get_usdt_symbols(session)
+    symbols = [sym for sym in symbols if SYMBOL_REGEX.match(sym)]
+    top_symbols = await get_top_usdt_symbols_by_volume(limit, session=session)
+    filtered = [sym for sym in top_symbols if sym in symbols and SYMBOL_REGEX.match(sym)]
+    return filtered if filtered else symbols[:limit]
 
 
 async def get_klines_1m(symbol: str, limit: int = 25) -> list[Candle] | None:
@@ -127,13 +139,13 @@ def _calc_signal_from_klines(
     if (
         change_1m >= PUMP_1M_THRESHOLD
         and change_5m >= PUMP_5M_THRESHOLD
-        and volume_mul >= PUMP_VOLUME_THRESHOLD
+        and volume_mul >= PUMP_VOLUME_MUL
     ):
         sig_type = "pump"
     elif (
-        change_1m <= -DUMP_1M_THRESHOLD
-        and change_5m <= -DUMP_5M_THRESHOLD
-        and volume_mul >= PUMP_VOLUME_THRESHOLD
+        change_1m <= DUMP_1M_THRESHOLD
+        and change_5m <= DUMP_5M_THRESHOLD
+        and volume_mul >= PUMP_VOLUME_MUL
     ):
         sig_type = "dump"
 
@@ -395,13 +407,13 @@ async def generate_pump_alert(symbol: str) -> str | None:
     if (
         change_1m >= PUMP_1M_THRESHOLD
         and change_5m >= PUMP_5M_THRESHOLD
-        and volume_mul >= PUMP_VOLUME_THRESHOLD
+        and volume_mul >= PUMP_VOLUME_MUL
     ):
         sig_type = "pump"
     elif (
-        change_1m <= -DUMP_1M_THRESHOLD
-        and change_5m <= -DUMP_5M_THRESHOLD
-        and volume_mul >= PUMP_VOLUME_THRESHOLD
+        change_1m <= DUMP_1M_THRESHOLD
+        and change_5m <= DUMP_5M_THRESHOLD
+        and volume_mul >= PUMP_VOLUME_MUL
     ):
         sig_type = "dump"
 
