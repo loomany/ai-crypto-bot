@@ -1486,22 +1486,17 @@ async def send_signal_to_all(signal_dict: Dict[str, Any]):
         print("[ai_signals] deliver: subs=0 queued=0 dedup=0")
         return
 
-    refresh_on_send = os.getenv("BTC_REFRESH_ON_SEND", "0").lower() in (
-        "1",
-        "true",
-        "yes",
-        "y",
-    )
+    refresh_on_send = _env_bool("BTC_REFRESH_ON_SEND", "0")
     module_state = MODULES.get("ai_signals")
     use_btc_gate = bool(module_state and module_state.state.get("use_btc_gate", False))
     if refresh_on_send and use_btc_gate:
         btc_ctx = None
         cached = get_cached_btc_context()
-        ttl_sec = int(os.getenv("BTC_CONTEXT_TTL_SEC", "90"))
         age_sec = None
+        ttl_sec = None
         if cached:
             btc_ctx, age_sec, ttl_sec = cached
-        needs_refresh = age_sec is None or age_sec >= max(1, ttl_sec // 2)
+        needs_refresh = age_sec is None or ttl_sec is None or age_sec >= ttl_sec
         if needs_refresh:
             try:
                 btc_ctx = await get_btc_context(force_refresh=True)
@@ -1899,7 +1894,7 @@ async def ai_scan_once() -> None:
     try:
         module_state = MODULES.get("ai_signals")
         if module_state:
-            module_state.state["use_btc_gate"] = False
+            module_state.state["use_btc_gate"] = USE_BTC_GATE
             module_state.state["last_cycle_ts"] = time.time()
         reset_request_count("ai_signals")
         reset_klines_request_count("ai_signals")
@@ -2025,7 +2020,7 @@ async def watchlist_scan_once() -> None:
         return
     module_state = MODULES.get("ai_signals")
     if module_state:
-        module_state.state["use_btc_gate"] = False
+        module_state.state["use_btc_gate"] = USE_BTC_GATE
         module_state.state["last_cycle_ts"] = time.time()
     now = int(time.time())
     rows = list_watchlist_for_scan(now, WATCHLIST_MAX)
