@@ -27,7 +27,13 @@ from pump_detector import (
     scan_pumps_chunk,
     format_pump_message,
 )
-from signals import scan_market, get_cached_btc_context
+from signals import (
+    scan_market,
+    get_cached_btc_context,
+    get_btc_context,
+    get_btc_context_last_error,
+    get_btc_context_last_refresh_ts,
+)
 from market_access import get_quick_with_fallback
 from trading_core import compute_atr, compute_ema
 from symbol_cache import (
@@ -951,6 +957,15 @@ def _format_module_ru(key: str, st, now: float) -> str:
         chunk = extra.get("chunk")
         if chunk:
             lines.append(f"• Монет за цикл: {chunk}")
+        exclude_btc = os.getenv("EXCLUDE_BTC_FROM_AI_UNIVERSE", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+            "y",
+        )
+        lines.append(
+            f"• BTC candidate scanning: {'disabled' if exclude_btc else 'enabled'}"
+        )
         # cursor
         cur = extra.get("cursor") or (str(st.cursor) if st.cursor else None)
         if cur and universe:
@@ -959,18 +974,25 @@ def _format_module_ru(key: str, st, now: float) -> str:
             lines.append(f"• Текущая позиция: {cur}")
         scan_symbol = st.current_symbol or "-"
         lines.append(f"• Current scan symbol: {scan_symbol}")
-        btc_ctx = get_cached_btc_context() or {}
-        if btc_ctx:
-            trend_1d = btc_ctx.get("trend_1d", "-")
-            trend_1h = btc_ctx.get("trend_1h", "-")
+        use_btc_gate = bool(st.state.get("use_btc_gate", False))
+        lines.append(f"• BTC gate: {'enabled' if use_btc_gate else 'disabled'}")
+        btc_cache = get_cached_btc_context()
+        btc_error = get_btc_context_last_error()
+        if not use_btc_gate:
+            btc_line = "disabled (use_btc_gate=false)"
+        elif btc_cache is None:
+            btc_line = f"error: {btc_error}" if btc_error else "pending"
+        else:
+            btc_ctx, age_sec, ttl_sec = btc_cache
             allow_longs = btc_ctx.get("allow_longs", False)
             allow_shorts = btc_ctx.get("allow_shorts", False)
+            last_cycle_ts = float(st.state.get("last_cycle_ts", 0.0))
+            last_refresh_ts = get_btc_context_last_refresh_ts()
+            label = "refreshed" if last_refresh_ts and last_refresh_ts >= last_cycle_ts else "cached"
             btc_line = (
-                f"{trend_1d}/{trend_1h} "
+                f"{label} age={age_sec}s ttl={ttl_sec}s "
                 f"allow_longs={allow_longs} allow_shorts={allow_shorts}"
             )
-        else:
-            btc_line = "n/a"
         lines.append(f"• BTC context: {btc_line}")
         cyc = extra.get("cycle")
         if cyc:
@@ -1417,6 +1439,37 @@ async def send_signal_to_all(signal_dict: Dict[str, Any]):
         print("[ai_signals] deliver: subs=0 queued=0 dedup=0")
         return
 
+    refresh_on_send = os.getenv("BTC_REFRESH_ON_SEND", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
+    module_state = MODULES.get("ai_signals")
+    use_btc_gate = bool(module_state and module_state.state.get("use_btc_gate", False))
+    if refresh_on_send and use_btc_gate:
+        btc_ctx = None
+        cached = get_cached_btc_context()
+        ttl_sec = int(os.getenv("BTC_CONTEXT_TTL_SEC", "90"))
+        age_sec = None
+        if cached:
+            btc_ctx, age_sec, ttl_sec = cached
+        needs_refresh = age_sec is None or age_sec >= max(1, ttl_sec // 2)
+        if needs_refresh:
+            try:
+                btc_ctx = await get_btc_context(force_refresh=True)
+                age_sec = 0
+            except Exception as exc:
+                print(f"[ai_signals] BTC refresh on send failed: {exc}")
+        if btc_ctx:
+            side = "LONG" if signal_dict.get("direction") == "long" else "SHORT"
+            if side == "LONG" and not btc_ctx.get("allow_longs", False):
+                print("[ai_signals] BTC gate blocked LONG signal on refresh.")
+                return
+            if side == "SHORT" and not btc_ctx.get("allow_shorts", False):
+                print("[ai_signals] BTC gate blocked SHORT signal on refresh.")
+                return
+
     entry_low, entry_high = signal_dict["entry_zone"]
     symbol = signal_dict.get("symbol", "")
     direction = signal_dict.get("direction", "long")
@@ -1797,6 +1850,10 @@ async def ai_scan_once() -> None:
     BUDGET = 35
     print("[AI] scan_once start")
     try:
+        module_state = MODULES.get("ai_signals")
+        if module_state:
+            module_state.state["use_btc_gate"] = False
+            module_state.state["last_cycle_ts"] = time.time()
         reset_request_count("ai_signals")
         reset_klines_request_count("ai_signals")
         reset_klines_cache_stats("ai_signals")
@@ -1919,10 +1976,25 @@ async def watchlist_scan_once() -> None:
     if bot is None:
         mark_tick("ai_signals", extra="bot not ready")
         return
+    module_state = MODULES.get("ai_signals")
+    if module_state:
+        module_state.state["use_btc_gate"] = False
+        module_state.state["last_cycle_ts"] = time.time()
     now = int(time.time())
     rows = list_watchlist_for_scan(now, WATCHLIST_MAX)
     symbols = [row["symbol"] for row in rows]
     priority_scores = {row["symbol"]: float(row["score"]) for row in rows}
+    exclude_btc = os.getenv("EXCLUDE_BTC_FROM_AI_UNIVERSE", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
+    if exclude_btc:
+        symbols = [symbol for symbol in symbols if symbol != "BTCUSDT"]
+        priority_scores = {
+            symbol: score for symbol, score in priority_scores.items() if symbol != "BTCUSDT"
+        }
     if not symbols:
         active_watchlist, total_watchlist = get_watchlist_counts(now)
         mark_ok(
