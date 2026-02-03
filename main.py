@@ -1432,7 +1432,12 @@ async def ai_scan_once() -> None:
         ai_scan_once.cursor = new_cursor
         set_state("ai_cursor", str(new_cursor))
 
-        update_module_progress("ai_signals", total=len(symbols), current=new_cursor, chunk=len(chunk))
+        update_module_progress(
+            "ai_signals",
+            total_symbols=len(symbols),
+            cursor=new_cursor,
+            checked_last_cycle=len(chunk),
+        )
         if chunk:
             update_current_symbol("ai_signals", chunk[0])
 

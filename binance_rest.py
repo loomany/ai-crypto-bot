@@ -23,8 +23,8 @@ _SHARED_LOCK = asyncio.Lock()
 
 BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 # cache by (symbol, interval) to reuse across different LIMIT requests
-# value: (ts, data_list, max_len)
-_KLINES_CACHE: dict[tuple[str, str], tuple[float, list, int]] = {}
+# value: (ts, data_list)
+_KLINES_CACHE: dict[tuple[str, str], tuple[float, list]] = {}
 _KLINES_INFLIGHT: dict[tuple[str, str, int, int], asyncio.Task] = {}
 _KLINES_CACHE_HITS: dict[str, int] = {}
 _KLINES_CACHE_MISSES: dict[str, int] = {}
@@ -298,7 +298,7 @@ async def fetch_klines(
         async with _KLINES_CACHE_LOCK:
             cached = _KLINES_CACHE.get(cache_key)
             if cached:
-                cached_ts, cached_data, cached_max = cached
+                cached_ts, cached_data = cached
                 if now - cached_ts < ttl_sec and isinstance(cached_data, list):
                     if len(cached_data) >= limit:
                         _increment_stat(_KLINES_CACHE_HITS, module)
@@ -367,13 +367,13 @@ async def _fetch_klines_from_binance(
         async with _KLINES_CACHE_LOCK:
             prev = _KLINES_CACHE.get(cache_key)
             if prev:
-                _, prev_data, prev_max = prev
+                _, prev_data = prev
                 if isinstance(prev_data, list) and len(prev_data) >= len(data):
-                    _KLINES_CACHE[cache_key] = (now, prev_data, prev_max)
+                    _KLINES_CACHE[cache_key] = (now, prev_data)
                 else:
-                    _KLINES_CACHE[cache_key] = (now, data, len(data))
+                    _KLINES_CACHE[cache_key] = (now, data)
             else:
-                _KLINES_CACHE[cache_key] = (now, data, len(data))
+                _KLINES_CACHE[cache_key] = (now, data)
     return data
 
 
