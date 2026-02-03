@@ -2,6 +2,7 @@ import asyncio
 import os
 import sqlite3
 import time
+import random
 from contextlib import suppress
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Awaitable
@@ -56,6 +57,8 @@ from db import (
     list_user_ids_with_pref,
     get_state,
     set_state,
+    kv_get_int,
+    kv_set_int,
     upsert_watchlist_candidate,
     list_watchlist_for_scan,
     update_watchlist_after_signal,
@@ -624,6 +627,36 @@ def _format_near_miss(near_miss: dict) -> str:
     return "\n".join(lines)
 
 
+def _build_rotation_order(symbols: list[str], *, shuffle: bool) -> list[str]:
+    if not shuffle:
+        return list(symbols)
+    seed = datetime.utcnow().strftime("%Y-%m-%d")
+    rng = random.Random(seed)
+    ordered = list(symbols)
+    rng.shuffle(ordered)
+    return ordered
+
+
+def _take_rotation_slice(
+    symbols: list[str],
+    rot_n: int,
+    *,
+    shuffle: bool,
+    ttl_sec: int,
+) -> tuple[list[str], int, int]:
+    if rot_n <= 0 or not symbols:
+        return [], 0, 0
+    ordered = _build_rotation_order(symbols, shuffle=shuffle)
+    cursor = kv_get_int("pumpdump_rotation_cursor", 0, ttl_sec=ttl_sec)
+    if cursor < 0 or cursor >= len(ordered):
+        cursor = 0
+    count = min(rot_n, len(ordered))
+    rotation_slice = [ordered[(cursor + i) % len(ordered)] for i in range(count)]
+    next_cursor = (cursor + count) % len(ordered)
+    kv_set_int("pumpdump_rotation_cursor", next_cursor)
+    return rotation_slice, cursor, len(ordered)
+
+
 def _format_market_hub_ru(now: float) -> str:
     # MARKET_HUB уже есть в проекте
     if MARKET_HUB.last_ok_at:
@@ -775,6 +808,26 @@ def _format_module_ru(key: str, st, now: float) -> str:
         cyc = extra.get("cycle")
         if cyc:
             lines.append(f"• Время цикла: ~{cyc}")
+        rotation_flag = extra.get("rotation")
+        rotation_n = extra.get("rotation_n")
+        rotation_cursor = extra.get("rotation_cursor")
+        rotation_slice = extra.get("rotation_slice")
+        universe_size = extra.get("universe_size")
+        rotation_added = extra.get("rotation_added")
+        final_candidates = extra.get("final_candidates")
+        scanned = extra.get("scanned")
+        if rotation_flag is not None:
+            cursor_line = f" cursor={rotation_cursor}" if rotation_cursor else ""
+            n_line = f"{rotation_n}" if rotation_n is not None else "0"
+            lines.append(f"• Rotation: {rotation_flag} (N={n_line}){cursor_line}")
+        if rotation_slice is not None:
+            lines.append(f"• Rotation last slice size: {rotation_slice}")
+        if universe_size or rotation_added or final_candidates or scanned:
+            lines.append(
+                "• Universe size="
+                f"{universe_size or 0} rotation_added={rotation_added or 0} "
+                f"final_candidates={final_candidates or 0} scanned={scanned or 0}"
+            )
 
         if st.fails_top or st.universe_debug:
             lines.append("")
@@ -1302,8 +1355,11 @@ async def pump_scan_once(bot: Bot) -> None:
 
         session = await get_shared_session()
         universe_limit = int(os.getenv("PUMPDUMP_UNIVERSE_LIMIT", "120"))
+        rotation_n = int(os.getenv("PUMPDUMP_ROTATION_N", "0"))
+        rotation_ttl_sec = int(os.getenv("PUMPDUMP_ROTATION_STATE_TTL_SEC", "86400"))
+        rotation_shuffle = os.getenv("PUMPDUMP_ROTATION_SHUFFLE", "1") != "0"
         with binance_request_context("pumpdump"):
-            symbols, symbol_stats = await get_candidate_symbols(
+            symbols, symbol_stats, all_symbols = await get_candidate_symbols(
                 session,
                 limit=universe_limit,
                 return_stats=True,
@@ -1334,21 +1390,39 @@ async def pump_scan_once(bot: Bot) -> None:
                 f"removed={symbol_stats.get('removed')} "
                 f"final={symbol_stats.get('final')}"
             )
-        total = len(symbols)
+        rotation_enabled = rotation_n > 0
+        rotation_slice: list[str] = []
+        rotation_cursor = 0
+        rotation_total = 0
+        if rotation_enabled:
+            rotation_slice, rotation_cursor, rotation_total = _take_rotation_slice(
+                all_symbols,
+                rotation_n,
+                shuffle=rotation_shuffle,
+                ttl_sec=rotation_ttl_sec,
+            )
+        seen: set[str] = set()
+        candidates: list[str] = []
+        for sym in symbols + rotation_slice:
+            if sym not in seen:
+                seen.add(sym)
+                candidates.append(sym)
+        rotation_added = max(0, len(candidates) - len(symbols))
+        total = len(candidates)
         try:
             cursor = int(get_state("pumpdump_cursor", "0") or "0")
         except Exception:
             cursor = 0
-        if cursor >= len(symbols):
+        if cursor >= len(candidates):
             cursor = 0
 
-        update_current_symbol("pumpdump", symbols[cursor] if symbols else "")
+        update_current_symbol("pumpdump", candidates[cursor] if candidates else "")
 
         cycle_start = time.time()
         try:
             signals, stats, next_cursor = await asyncio.wait_for(
                 scan_pumps_chunk(
-                    symbols,
+                    candidates,
                     start_idx=cursor,
                     time_budget_sec=BUDGET,
                     return_stats=True,
@@ -1363,7 +1437,7 @@ async def pump_scan_once(bot: Bot) -> None:
 
         if log_level >= 1:
             print(
-                f"[pumpdump] chunk: total={len(symbols)} "
+                f"[pumpdump] chunk: total={len(candidates)} "
                 f"checked={stats.get('checked',0)} found={found}"
             )
 
@@ -1455,7 +1529,11 @@ async def pump_scan_once(bot: Bot) -> None:
                 f"req={req_count} klines={klines_count} "
                 f"klines_hits={cache_stats.get('hits')} klines_misses={cache_stats.get('misses')} "
                 f"klines_inflight={cache_stats.get('inflight_awaits')} "
-                f"ticker_req={ticker_count} fails={fails_str}"
+                f"ticker_req={ticker_count} fails={fails_str} "
+                f"rotation={'on' if rotation_enabled else 'off'} "
+                f"rotation_n={rotation_n} rotation_cursor={rotation_cursor}/{rotation_total} "
+                f"rotation_slice={len(rotation_slice)} universe_size={len(symbols)} "
+                f"rotation_added={rotation_added} final_candidates={total} scanned={checked}"
             ),
         )
     finally:

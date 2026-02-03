@@ -47,7 +47,7 @@ async def get_candidate_symbols(
     limit: int = 80,
     *,
     return_stats: bool = False,
-) -> list[str] | tuple[list[str], dict[str, int]]:
+) -> list[str] | tuple[list[str], dict[str, int], list[str]]:
     symbols = await get_usdt_symbols(session)
     symbols = [sym for sym in symbols if SYMBOL_REGEX.match(sym)]
     symbols, removed = filter_tradeable_symbols(symbols)
@@ -73,7 +73,7 @@ async def get_candidate_symbols(
             filtered.append(sym)
     result = filtered if filtered else symbols[:limit]
     if return_stats:
-        return result, {"total": len(symbols) + removed, "removed": removed, "final": len(result)}
+        return result, {"total": len(symbols) + removed, "removed": removed, "final": len(result)}, symbols
     return result
 
 

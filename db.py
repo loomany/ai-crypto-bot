@@ -123,6 +123,67 @@ def set_state(key: str, value: str) -> None:
         conn.close()
 
 
+def _get_kv_table(conn: sqlite3.Connection) -> str:
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('state_kv', 'kv_store')"
+    )
+    rows = [row["name"] for row in cur.fetchall()]
+    if "state_kv" in rows:
+        return "state_kv"
+    if "kv_store" in rows:
+        return "kv_store"
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS kv_store (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    return "kv_store"
+
+
+def kv_get_int(key: str, default: int = 0, *, ttl_sec: Optional[int] = None) -> int:
+    conn = get_conn()
+    try:
+        table = _get_kv_table(conn)
+        cur = conn.execute(f"SELECT value, updated_at FROM {table} WHERE key = ?", (key,))
+        row = cur.fetchone()
+        if row is None:
+            return default
+        if ttl_sec is not None:
+            updated_at = float(row["updated_at"]) if row["updated_at"] is not None else 0.0
+            if time.time() - updated_at > ttl_sec:
+                return default
+        try:
+            return int(row["value"])
+        except (TypeError, ValueError):
+            return default
+    finally:
+        conn.close()
+
+
+def kv_set_int(key: str, value: int) -> None:
+    now = time.time()
+    conn = get_conn()
+    try:
+        table = _get_kv_table(conn)
+        conn.execute(
+            f"""
+            INSERT INTO {table} (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key)
+            DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (key, str(int(value)), now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def upsert_watchlist_candidate(
     symbol: str,
     score: int,
