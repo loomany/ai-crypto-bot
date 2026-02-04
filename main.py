@@ -4,6 +4,7 @@ import os
 import sqlite3
 import time
 import random
+import re
 from contextlib import suppress
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Awaitable
@@ -76,6 +77,7 @@ from db import (
     count_signal_events,
     get_signal_outcome_counts,
     get_signal_event,
+    get_last_signal_event_by_module,
 )
 from db_path import ensure_db_writable, get_db_path
 from market_cache import get_ticker_request_count, reset_ticker_request_count
@@ -84,6 +86,7 @@ from status_utils import is_notify_enabled
 from message_templates import format_scenario_message
 from signal_audit_db import (
     get_public_stats,
+    get_last_signal_audit,
     init_signal_audit_tables,
     insert_signal_audit,
 )
@@ -1381,58 +1384,158 @@ def _format_user_bot_status(chat_id: int) -> str:
     """Понятный для пользователя статус (без тех. мусора)."""
     now = time.time()
 
-    ai_enabled = is_notify_enabled(chat_id, "ai_signals")
-    pd_enabled = is_notify_enabled(chat_id, "pumpdump")
-
     ai = MODULES.get("ai_signals")
     pd = MODULES.get("pumpdump")
 
-    def _module_line(title: str, st) -> str:
-        if not st:
-            return f"• {title}: нет данных"
-        if st.last_tick == 0:
-            return f"• {title}: ещё не запускался"
-        tick_ago = _human_ago(int(now - st.last_tick))
-        ok_part = ""
-        if st.last_ok:
-            ok_part = f", успешный запрос: {_human_ago(int(now - st.last_ok))} назад"
-        return f"• {title}: активен ({tick_ago} назад{ok_part})"
+    def _sec_ago(ts: float | int) -> int:
+        return max(0, int(now - ts))
 
-    def _scan_hint(st) -> str:
-        if not st:
-            return ""
-        parts = []
-        if getattr(st, "total_symbols", 0):
-            parts.append(f"рынок: {st.total_symbols} монет")
-        if getattr(st, "checked_last_cycle", 0):
-            parts.append(f"проверено за цикл: {st.checked_last_cycle}")
-        if getattr(st, "current_symbol", ""):
-            parts.append(f"сейчас: {st.current_symbol}")
-        return " | ".join(parts)
+    def _extract_from_extra(extra: str, key: str) -> int | None:
+        match = re.search(rf"{key}=(\\d+)", extra)
+        return int(match.group(1)) if match else None
 
-    def _binance_hint(st) -> str:
-        ts = getattr(st, "binance_last_success_ts", 0)
-        if not ts:
-            return "Binance: нет свежих данных"
-        return f"Binance: обновление {_human_ago(int(now - ts))} назад"
+    def _extract_progress(extra: str) -> tuple[int, int] | None:
+        match = re.search(r"progress=(\\d+)/(\\d+)", extra)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+        return None
+
+    def _extract_cycle(extra: str) -> int | None:
+        match = re.search(r"cycle=(\\d+)s", extra)
+        return int(match.group(1)) if match else None
+
+    def _format_last_ai_signal() -> str:
+        row = get_last_signal_audit("ai_signals")
+        if not row:
+            return "• последний сигнал: нет"
+        symbol = str(row.get("symbol", "-"))
+        direction = str(row.get("direction", "")).upper()
+        side = "LONG" if direction == "LONG" else "SHORT" if direction == "SHORT" else direction
+        score_raw = row.get("score", 0)
+        try:
+            score = int(round(float(score_raw)))
+        except (TypeError, ValueError):
+            score = 0
+        sent_at = int(row.get("sent_at", 0) or 0)
+        stamp = _format_event_time(sent_at) if sent_at else "-"
+        return f"• последний сигнал: {symbol} {side} (Score {score}) — {stamp}"
+
+    def _format_last_pumpdump() -> str:
+        row = get_last_signal_event_by_module("pumpdump")
+        if row is None:
+            return "• последний импульс: не найден"
+        payload = dict(row)
+        reason_json = payload.get("reason_json")
+        change_pct = None
+        if reason_json:
+            try:
+                parsed = json.loads(reason_json)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                for key in ("change_pct", "change_5m", "change_1m"):
+                    if key in parsed:
+                        try:
+                            change_pct = float(parsed[key])
+                        except (TypeError, ValueError):
+                            change_pct = None
+                        if change_pct is not None:
+                            break
+        if change_pct is None:
+            return "• последний импульс: не найден"
+        symbol = str(payload.get("symbol", "-"))
+        arrow = "⬆️" if change_pct >= 0 else "⬇️"
+        change_text = f"{change_pct:+.1f}%"
+        ts = int(payload.get("ts", 0) or 0)
+        stamp = _format_event_time(ts) if ts else "-"
+        return f"• последний импульс: {symbol} {arrow} {change_text} — {stamp}"
+
+    binance_ts = max(
+        (st.binance_last_success_ts for st in MODULES.values() if st.binance_last_success_ts),
+        default=0,
+    )
+    if binance_ts:
+        binance_line = f"🔌 Связь с Binance: ✅ есть ({_sec_ago(binance_ts)} сек назад)"
+    else:
+        binance_line = "🔌 Связь с Binance: ⛔ нет свежих данных"
+
+    ai_status = "✅ работают" if ai and ai.last_tick else "⛔ не запущены"
+    ai_last_cycle = (
+        f"• последний цикл: {_sec_ago(ai.last_tick)} сек назад"
+        if ai and ai.last_tick
+        else "• последний цикл: нет данных"
+    )
+    ai_cursor = ai.cursor if ai else 0
+    ai_total = ai.total_symbols if ai else 0
+    if (ai_cursor == 0 and ai_total == 0) and ai and ai.extra:
+        extra_cursor = _extract_from_extra(ai.extra, "cursor")
+        extra_total = _extract_from_extra(ai.extra, "universe")
+        if extra_cursor is not None:
+            ai_cursor = extra_cursor
+        if extra_total is not None:
+            ai_total = extra_total
+    ai_scan_line = (
+        f"• скан рынка: {ai_cursor} / {ai_total}"
+        if ai_cursor or ai_total
+        else "• скан рынка: нет данных"
+    )
+    ai_current = ai.current_symbol if ai else None
+    ai_current_line = (
+        f"• сейчас проверяю: {ai_current}"
+        if ai_current
+        else "• сейчас проверяю: нет данных"
+    )
+    ai_cycle = _extract_cycle(ai.extra) if ai and ai.extra else None
+    ai_cycle_line = f"• скорость: ~{ai_cycle} сек / цикл" if ai_cycle else None
+
+    pd_status = "✅ работает" if pd and pd.last_tick else "⛔ не запущен"
+    pd_last_cycle = (
+        f"• последний цикл: {_sec_ago(pd.last_tick)} сек назад"
+        if pd and pd.last_tick
+        else "• последний цикл: нет данных"
+    )
+    pd_checked = pd.checked_last_cycle if pd else 0
+    pd_total = pd.total_symbols if pd else 0
+    if (pd_checked == 0 and pd_total == 0) and pd and pd.extra:
+        progress = _extract_progress(pd.extra)
+        if progress:
+            pd_checked, pd_total = progress
+    pd_progress_line = (
+        f"• прогресс: {pd_checked} / {pd_total}"
+        if pd_checked or pd_total
+        else "• прогресс: нет данных"
+    )
+    pd_current = pd.current_symbol if pd else None
+    pd_current_line = (
+        f"• сейчас проверяю: {pd_current}"
+        if pd_current
+        else "• сейчас проверяю: нет данных"
+    )
 
     lines = [
-        "📡 Статус системы",
+        "🛰 Статус системы",
         "",
-        f"🔔 AI-сигналы: {'✅ включены' if ai_enabled else '⛔ выключены'}",
-        f"🔔 Pump/Dump: {'✅ включены' if pd_enabled else '⛔ выключены'}",
+        binance_line,
         "",
-        "Что сейчас делает бот:",
-        _module_line("AI-сигналы", ai),
-        (f"  ↳ {_scan_hint(ai)}" if _scan_hint(ai) else ""),
-        _module_line("Pump/Dump", pd),
-        "",
-        _binance_hint(ai or pd),
-        "",
-        "Если хочешь получать сигналы автоматически — включи уведомления в нужном разделе.",
+        f"🎯 AI-сигналы: {ai_status}",
+        ai_last_cycle,
+        ai_scan_line,
+        ai_current_line,
     ]
-    compact = [x for x in lines if x != ""]
-    return "\n".join(compact)
+    if ai_cycle_line:
+        lines.append(ai_cycle_line)
+    lines.extend(
+        [
+            _format_last_ai_signal(),
+            "",
+            f"⚡ Pump / Dump: {pd_status}",
+            pd_last_cycle,
+            pd_progress_line,
+            pd_current_line,
+            _format_last_pumpdump(),
+        ]
+    )
+    return "\n".join(lines)
 
 
 @dp.message(Command("status"))

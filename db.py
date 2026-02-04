@@ -506,6 +506,24 @@ def count_signal_events(
         conn.close()
 
 
+def get_last_signal_event_by_module(module: str) -> Optional[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT symbol, side, score, ts, reason_json, breakdown_json
+            FROM signal_events
+            WHERE module = ?
+            ORDER BY ts DESC
+            LIMIT 1
+            """,
+            (module,),
+        )
+        return cur.fetchone()
+    finally:
+        conn.close()
+
+
 def get_signal_outcome_counts(
     *,
     user_id: int,
