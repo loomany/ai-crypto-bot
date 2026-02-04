@@ -724,6 +724,85 @@ def get_signal_outcome_counts(
         conn.close()
 
 
+def get_signal_score_bucket_counts(
+    *,
+    user_id: int | None,
+    since_ts: int | None,
+    min_score: float | None,
+) -> dict[str, dict[str, int]]:
+    conn = get_conn()
+    try:
+        clauses = ["(is_test IS NULL OR is_test = 0)"]
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
+        if since_ts is not None:
+            clauses.append("ts >= ?")
+            params.append(int(since_ts))
+        if min_score is not None:
+            clauses.append("score >= ?")
+            params.append(float(min_score))
+        clauses.append(
+            "NOT ("
+            "symbol LIKE 'TEST%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
+        )
+        where_clause = " AND ".join(clauses)
+        cur = conn.execute(
+            f"""
+            SELECT
+                SUM(CASE
+                    WHEN score BETWEEN 90 AND 100
+                     AND status IN ('TP1', 'TP2', 'BE')
+                    THEN 1 ELSE 0 END) AS b90_passed,
+                SUM(CASE
+                    WHEN score BETWEEN 90 AND 100
+                     AND status IN ('SL', 'EXP', 'EXPIRED', 'NO_FILL')
+                    THEN 1 ELSE 0 END) AS b90_failed,
+                SUM(CASE
+                    WHEN score BETWEEN 80 AND 89
+                     AND status IN ('TP1', 'TP2', 'BE')
+                    THEN 1 ELSE 0 END) AS b80_passed,
+                SUM(CASE
+                    WHEN score BETWEEN 80 AND 89
+                     AND status IN ('SL', 'EXP', 'EXPIRED', 'NO_FILL')
+                    THEN 1 ELSE 0 END) AS b80_failed,
+                SUM(CASE
+                    WHEN score BETWEEN 70 AND 79
+                     AND status IN ('TP1', 'TP2', 'BE')
+                    THEN 1 ELSE 0 END) AS b70_passed,
+                SUM(CASE
+                    WHEN score BETWEEN 70 AND 79
+                     AND status IN ('SL', 'EXP', 'EXPIRED', 'NO_FILL')
+                    THEN 1 ELSE 0 END) AS b70_failed
+            FROM signal_events
+            WHERE {where_clause}
+            """,
+            params,
+        )
+        row = cur.fetchone()
+        return {
+            "90-100": {
+                "passed": int(row["b90_passed"] or 0),
+                "failed": int(row["b90_failed"] or 0),
+            },
+            "80-89": {
+                "passed": int(row["b80_passed"] or 0),
+                "failed": int(row["b80_failed"] or 0),
+            },
+            "70-79": {
+                "passed": int(row["b70_passed"] or 0),
+                "failed": int(row["b70_failed"] or 0),
+            },
+        }
+    finally:
+        conn.close()
+
+
 def get_signal_event(
     *,
     user_id: int | None,

@@ -83,6 +83,7 @@ from db import (
     list_signal_events,
     count_signal_events,
     get_signal_outcome_counts,
+    get_signal_score_bucket_counts,
     get_signal_event,
     get_last_signal_event_by_module,
     purge_test_signals,
@@ -558,6 +559,7 @@ def _format_archive_list(
     page: int,
     pages: int,
     outcome_counts: dict,
+    score_bucket_counts: dict[str, dict[str, int]],
 ) -> str:
     title = f"📊 История сигналов ({_period_label(period_key)})"
     lines = [title]
@@ -566,9 +568,29 @@ def _format_archive_list(
         f"✅ Прошло: {outcome_counts.get('passed', 0)} | "
         f"❌ Не прошло: {outcome_counts.get('failed', 0)}"
     )
+    def _score_bucket_line(bucket_key: str, label: str) -> str:
+        bucket = score_bucket_counts.get(bucket_key, {})
+        passed = int(bucket.get("passed", 0))
+        failed = int(bucket.get("failed", 0))
+        total = passed + failed
+        percent = round((passed / total) * 100) if total > 0 else 0
+        return f"{label}: ✅ {passed} / ❌ {failed}  ({percent}%)"
+
+    lines.extend(
+        [
+            "",
+            f"📊 Статистика ({_period_label(period_key)}) — по Score",
+            _score_bucket_line("90-100", "90–100"),
+            _score_bucket_line("80-89", "80–89"),
+            _score_bucket_line("70-79", "70–79"),
+            "",
+            "ℹ️ Чем выше Score — тем чаще сигнал “отрабатывает”.",
+        ]
+    )
     tp1_total = outcome_counts.get("tp1", 0) + outcome_counts.get("tp2", 0)
     lines.extend(
         [
+            "",
             f"TP1: {tp1_total}",
             "👉 Сигнал дал прибыль и закрылся в плюс.",
             f"BE: {outcome_counts.get('be', 0)}",
@@ -693,9 +715,21 @@ async def history_callback(callback: CallbackQuery):
         since_ts=since_ts,
         min_score=None,
     )
+    score_bucket_counts = get_signal_score_bucket_counts(
+        user_id=None,
+        since_ts=since_ts,
+        min_score=None,
+    )
     await callback.answer()
     await callback.message.edit_text(
-        _format_archive_list(period_key, events, page, pages, outcome_counts),
+        _format_archive_list(
+            period_key,
+            events,
+            page,
+            pages,
+            outcome_counts,
+            score_bucket_counts,
+        ),
         reply_markup=_archive_inline_kb(period_key, page, pages, events),
     )
 
@@ -791,9 +825,21 @@ async def archive_list(callback: CallbackQuery):
         since_ts=since_ts,
         min_score=None,
     )
+    score_bucket_counts = get_signal_score_bucket_counts(
+        user_id=None,
+        since_ts=since_ts,
+        min_score=None,
+    )
     await callback.answer()
     await callback.message.edit_text(
-        _format_archive_list(period_key, events, page, pages, outcome_counts),
+        _format_archive_list(
+            period_key,
+            events,
+            page,
+            pages,
+            outcome_counts,
+            score_bucket_counts,
+        ),
         reply_markup=_archive_inline_kb(period_key, page, pages, events),
     )
 
