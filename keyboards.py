@@ -24,16 +24,22 @@ def build_system_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Системное меню."""
     if is_admin:
         keyboard = [
-            [KeyboardButton(text="🛰 Статус системы")],
-            [KeyboardButton(text="🧪 Диагностика (админ)")],
-            [KeyboardButton(text="👥 Пользователи")],
-            [KeyboardButton(text="💳 Оплатить подписку")],
+            [
+                KeyboardButton(text="🛰 Статус системы"),
+                KeyboardButton(text="🧪 Диагностика (админ)"),
+            ],
+            [
+                KeyboardButton(text="👥 Пользователи"),
+                KeyboardButton(text="💳 Оплатить подписку"),
+            ],
             [KeyboardButton(text="⬅️ Назад")],
         ]
     else:
         keyboard = [
-            [KeyboardButton(text="🧪 Диагностика")],
-            [KeyboardButton(text="💳 Оплатить подписку")],
+            [
+                KeyboardButton(text="🧪 Диагностика"),
+                KeyboardButton(text="💳 Оплатить подписку"),
+            ],
             [KeyboardButton(text="⬅️ Назад")],
         ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
