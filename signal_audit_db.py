@@ -268,6 +268,27 @@ def get_public_stats(days: int = 30) -> dict:
         conn.close()
 
 
+def get_last_signal_audit(module: str) -> dict | None:
+    conn = sqlite3.connect(get_db_path())
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT symbol, direction, score, sent_at
+            FROM signal_audit
+            WHERE module = ?
+            ORDER BY sent_at DESC
+            LIMIT 1
+            """,
+            (module,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def get_ai_signal_stats(days: int | None) -> dict:
     now = int(time.time())
     params: list[Any] = ["TP1", "TP2", "SL", "EXPIRED"]
