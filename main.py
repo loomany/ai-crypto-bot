@@ -381,6 +381,10 @@ def list_ai_subscribers() -> List[int]:
     return sorted(subs)
 
 
+def get_pumpdump_subscribers() -> list[int]:
+    return list(list_user_ids_with_pref("pumpdump_enabled", 1))
+
+
 # ===== СОЗДАЁМ БОТА =====
 
 BOT_TOKEN = load_settings()
@@ -1391,12 +1395,6 @@ async def test_ai_signal_all(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
         await message.answer("⛔ Нет доступа")
         return
-    subscribers = list_ai_subscribers()
-    if not subscribers:
-        await message.answer(
-            "⚠️ Подписчиков нет. Включи уведомления на тест-аккаунте и повтори."
-        )
-        return
     signal_dict = {
         "symbol": "TESTUSDT",
         "direction": "long",
@@ -1417,8 +1415,24 @@ async def test_ai_signal_all(message: Message):
             "⚠️ Это тест. Если лимит 0 — вместо текста должен прийти paywall.\n\n"
         ),
     }
-    sent_count = await send_signal_to_all(signal_dict, allow_admin_bypass=False)
-    await message.answer(f"✅ Тест AI отправлен: {sent_count} получателей")
+    stats = await send_signal_to_all(
+        signal_dict,
+        allow_admin_bypass=False,
+        bypass_cooldown=True,
+        return_stats=True,
+    )
+    if stats["subscribers"] <= 0:
+        await message.answer(
+            "⚠️ Подписчиков нет. Включи уведомления на тест-аккаунте и повтори."
+        )
+        return
+    await message.answer(
+        "AI тест\n"
+        "✅ Тест AI завершён: "
+        f"sent={stats['sent']}, locked={stats['locked']}, "
+        f"paywall={stats['paywall']}, errors={stats['errors']} "
+        f"(subscribers={stats['subscribers']})"
+    )
 
 
 @dp.message(F.text == "🧪 Тест Pump/Dump (всем)")
@@ -1426,7 +1440,7 @@ async def test_pumpdump_signal_all(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
         await message.answer("⛔ Нет доступа")
         return
-    subscribers = list_user_ids_with_pref("pumpdump_enabled", 1)
+    subscribers = get_pumpdump_subscribers()
     if not subscribers:
         await message.answer(
             "⚠️ Подписчиков нет. Включи уведомления на тест-аккаунте и повтори."
@@ -1445,14 +1459,22 @@ async def test_pumpdump_signal_all(message: Message):
         f"{format_pump_message(signal_dict)}\n\n"
         "⚠️ Это тест. Если лимит 0 — вместо текста должен прийти paywall."
     )
-    _, recipient_count = await _deliver_pumpdump_signal(
+    stats = await _deliver_pumpdump_signal_stats(
         bot=message.bot,
         text=text,
         symbol=signal_dict["symbol"],
         subscribers=subscribers,
         allow_admin_bypass=False,
+        bypass_cooldown=True,
+        bypass_limits=True,
     )
-    await message.answer(f"✅ Тест Pump/Dump отправлен: {recipient_count} получателей")
+    await message.answer(
+        "Pump/Dump тест\n"
+        "✅ Тест Pump/Dump завершён: "
+        f"sent={stats['sent']}, locked={stats['locked']}, "
+        f"paywall={stats['paywall']}, errors={stats['errors']} "
+        f"(subscribers={stats['subscribers']})"
+    )
 
 
 @dp.message(Command("test_notify"))
@@ -2282,7 +2304,13 @@ def _trial_suffix(left: int, limit: int, label: str) -> str:
     return f"\n\n🎁 Осталось {left}/{limit} {label}"
 
 
-async def send_signal_to_all(signal_dict: Dict[str, Any], *, allow_admin_bypass: bool = True) -> int:
+async def send_signal_to_all(
+    signal_dict: Dict[str, Any],
+    *,
+    allow_admin_bypass: bool = True,
+    bypass_cooldown: bool = False,
+    return_stats: bool = False,
+) -> int | dict[str, int]:
     """Отправляет сигнал всем подписчикам без блокировки event loop."""
     if bot is None:
         print("[ai_signals] Bot is not initialized; skipping send.")
@@ -2290,11 +2318,18 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], *, allow_admin_bypass:
 
     skipped_dedup = 0
     skipped_no_subs = 0
-    subscribers = list_ai_subscribers()
+    subscribers = list(list_ai_subscribers())
+    stats = {
+        "sent": 0,
+        "locked": 0,
+        "paywall": 0,
+        "errors": 0,
+        "subscribers": len(subscribers),
+    }
     if not subscribers:
         skipped_no_subs += 1
         print("[ai_signals] deliver: subs=0 queued=0 dedup=0")
-        return 0
+        return stats if return_stats else 0
 
     refresh_on_send = _env_bool("BTC_REFRESH_ON_SEND", "0")
     module_state = MODULES.get("ai_signals")
@@ -2349,24 +2384,26 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], *, allow_admin_bypass:
     breakdown_json = json.dumps(breakdown, ensure_ascii=False) if breakdown is not None else None
 
     tasks: list[asyncio.Task] = []
-    recipients: list[tuple[int, bool]] = []
+    recipients: list[tuple[int, bool, str]] = []
     for chat_id in subscribers:
         if is_user_locked(chat_id):
+            stats["locked"] += 1
             continue
         # индивидуальный cooldown на пользователя
-        if not can_send(chat_id, "ai_signals", dedup_key, COOLDOWN_FREE_SEC):
-            skipped_dedup += 1
-            continue
+        if not bypass_cooldown:
+            if not can_send(chat_id, "ai_signals", dedup_key, COOLDOWN_FREE_SEC):
+                skipped_dedup += 1
+                continue
         if allow_admin_bypass and is_admin(chat_id):
             tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
-            recipients.append((chat_id, True))
+            recipients.append((chat_id, True, "signal"))
             continue
         ensure_trial_defaults(chat_id)
         allowed, left = try_consume_trial(chat_id, "trial_ai_left", 1)
         if allowed:
             message_text = text + _trial_suffix(left, TRIAL_AI_LIMIT, TRIAL_AI_SUFFIX)
             tasks.append(asyncio.create_task(bot.send_message(chat_id, message_text)))
-            recipients.append((chat_id, True))
+            recipients.append((chat_id, True, "signal"))
         else:
             tasks.append(
                 asyncio.create_task(
@@ -2378,7 +2415,7 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], *, allow_admin_bypass:
                     )
                 )
             )
-            recipients.append((chat_id, False))
+            recipients.append((chat_id, False, "paywall"))
 
     print(
         "[ai_signals] deliver: "
@@ -2386,13 +2423,17 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], *, allow_admin_bypass:
         f"dedup={skipped_dedup}"
     )
     if not tasks:
-        return 0
+        return stats if return_stats else 0
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    for (chat_id, should_log), res in zip(recipients, results):
+    for (chat_id, should_log, kind), res in zip(recipients, results):
         if isinstance(res, Exception):
             print(f"[ai_signals] Failed to send to {chat_id}: {res}")
+            stats["errors"] += 1
             continue
+        stats["sent"] += 1
+        if kind == "paywall":
+            stats["paywall"] += 1
         if not should_log:
             continue
         try:
@@ -2416,7 +2457,7 @@ async def send_signal_to_all(signal_dict: Dict[str, Any], *, allow_admin_bypass:
             )
         except Exception as exc:
             print(f"[ai_signals] Failed to log signal event for {chat_id}: {exc}")
-    return len(tasks)
+    return stats if return_stats else stats["sent"]
 
 
 def _select_signals_for_cycle(signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -2515,43 +2556,51 @@ async def _compute_candidate_score(symbol: str) -> tuple[int, str]:
     return min(score, 100), reason
 
 
-async def _deliver_pumpdump_signal(
+async def _deliver_pumpdump_signal_stats(
     *,
     bot: Bot,
     text: str,
     symbol: str,
     subscribers: list[int],
     allow_admin_bypass: bool = True,
-) -> tuple[int, int]:
+    bypass_cooldown: bool = False,
+    bypass_limits: bool = False,
+) -> dict[str, int]:
     sent_count = 0
     recipient_count = 0
+    locked_count = 0
+    paywall_count = 0
+    error_count = 0
     date_key = _get_pumpdump_date_key()
 
     for chat_id in subscribers:
         try:
             is_admin_user = is_admin(chat_id) if allow_admin_bypass else False
             if not is_admin_user:
-                if get_pumpdump_daily_count(chat_id, date_key) >= PUMP_DAILY_LIMIT:
-                    continue
+                if not bypass_limits:
+                    if get_pumpdump_daily_count(chat_id, date_key) >= PUMP_DAILY_LIMIT:
+                        continue
                 if is_user_locked(chat_id):
+                    locked_count += 1
                     continue
-            time_bucket = int(time.time() // PUMP_COOLDOWN_GLOBAL_SEC)
-            dedup_global = f"pumpdump:global:{time_bucket}"
-            if not can_send(
-                chat_id,
-                "pumpdump",
-                dedup_global,
-                PUMP_COOLDOWN_GLOBAL_SEC,
-            ):
-                continue
-            dedup_symbol = f"pumpdump:{symbol}"
-            if not can_send(
-                chat_id,
-                "pumpdump",
-                dedup_symbol,
-                PUMP_COOLDOWN_SYMBOL_SEC,
-            ):
-                continue
+            if not bypass_cooldown:
+                time_bucket = int(time.time() // PUMP_COOLDOWN_GLOBAL_SEC)
+                dedup_global = f"pumpdump:global:{time_bucket}"
+                if not can_send(
+                    chat_id,
+                    "pumpdump",
+                    dedup_global,
+                    PUMP_COOLDOWN_GLOBAL_SEC,
+                ):
+                    continue
+                dedup_symbol = f"pumpdump:{symbol}"
+                if not can_send(
+                    chat_id,
+                    "pumpdump",
+                    dedup_symbol,
+                    PUMP_COOLDOWN_SYMBOL_SEC,
+                ):
+                    continue
             if is_admin_user:
                 await bot.send_message(chat_id, text, parse_mode="Markdown")
                 increment_pumpdump_daily_count(chat_id, date_key)
@@ -2577,11 +2626,38 @@ async def _deliver_pumpdump_signal(
                     "Нажми «Купить подписку».",
                     reply_markup=_subscription_kb(),
                 )
+                paywall_count += 1
                 recipient_count += 1
         except Exception as e:
             print(f"[pumpdump] send failed chat_id={chat_id} symbol={symbol}: {e}")
+            error_count += 1
             continue
-    return sent_count, recipient_count
+    return {
+        "sent": sent_count + paywall_count,
+        "locked": locked_count,
+        "paywall": paywall_count,
+        "errors": error_count,
+        "subscribers": len(subscribers),
+        "recipient_count": recipient_count,
+    }
+
+
+async def _deliver_pumpdump_signal(
+    *,
+    bot: Bot,
+    text: str,
+    symbol: str,
+    subscribers: list[int],
+    allow_admin_bypass: bool = True,
+) -> tuple[int, int]:
+    stats = await _deliver_pumpdump_signal_stats(
+        bot=bot,
+        text=text,
+        symbol=symbol,
+        subscribers=subscribers,
+        allow_admin_bypass=allow_admin_bypass,
+    )
+    return stats["sent"] - stats["paywall"], stats["recipient_count"]
 
 
 async def pump_scan_once(bot: Bot) -> None:
@@ -2597,7 +2673,7 @@ async def pump_scan_once(bot: Bot) -> None:
     try:
         state = pump_scan_once.state
 
-        subscribers = list_user_ids_with_pref("pumpdump_enabled", 1)
+        subscribers = get_pumpdump_subscribers()
 
         if log_level >= 1:
             print(f"[pumpdump] subs: notify={len(subscribers)}")
