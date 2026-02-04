@@ -368,7 +368,10 @@ def upsert_user(
         exists = row is not None
         existing_lang = _clean_lang(row[0]) if row else None
         incoming_lang = _clean_lang(language)
-        resolved_lang = existing_lang or incoming_lang
+        if exists:
+            resolved_lang = existing_lang or incoming_lang
+        else:
+            resolved_lang = None
         if not exists:
             cur.execute(
                 """
@@ -515,7 +518,9 @@ async def lang_select_callback(callback: CallbackQuery):
     set_user_lang(callback.from_user.id, lang)
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text(
+        with suppress(Exception):
+            await callback.message.delete()
+        await callback.message.answer(
             i18n.t(lang, "START_TEXT"),
             reply_markup=build_main_menu_kb(
                 lang,
@@ -943,7 +948,8 @@ async def archive_detail(callback: CallbackQuery):
         event_id=int(event_id_raw),
     )
     if event is None:
-        await callback.answer("Сигнал не найден.", show_alert=True)
+        lang = get_user_lang(callback.from_user.id) or "ru"
+        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
         return
     await callback.answer()
     await callback.message.edit_text(
@@ -969,18 +975,17 @@ async def ai_notify_on(callback: CallbackQuery):
     if callback.from_user is None:
         return
     chat_id = callback.from_user.id
+    lang = get_user_lang(chat_id) or "ru"
     if get_user_pref(chat_id, "ai_signals_enabled", 0):
-        await callback.answer("Уже включено.")
+        await callback.answer(i18n.t(lang, "ALREADY_ON"))
         if callback.message:
-            await callback.message.answer("ℹ️ AI-уведомления уже включены.")
+            await callback.message.answer(i18n.t(lang, "AI_ALREADY_ON"))
         return
     ensure_trial_defaults(chat_id)
     set_user_pref(chat_id, "ai_signals_enabled", 1)
     await callback.answer()
     if callback.message:
-        await callback.message.answer(
-            "✅ AI-уведомления включены."
-        )
+        await callback.message.answer(i18n.t(lang, "AI_ON_OK"))
 
 
 @dp.callback_query(F.data == "ai_notify_off")
@@ -988,15 +993,16 @@ async def ai_notify_off(callback: CallbackQuery):
     if callback.from_user is None:
         return
     chat_id = callback.from_user.id
+    lang = get_user_lang(chat_id) or "ru"
     if not get_user_pref(chat_id, "ai_signals_enabled", 0):
-        await callback.answer("Уже выключено.")
+        await callback.answer(i18n.t(lang, "ALREADY_OFF"))
         if callback.message:
-            await callback.message.answer("ℹ️ AI-уведомления уже выключены.")
+            await callback.message.answer(i18n.t(lang, "AI_ALREADY_OFF"))
         return
     set_user_pref(chat_id, "ai_signals_enabled", 0)
     await callback.answer()
     if callback.message:
-        await callback.message.answer("🚫 Уведомления отключены.")
+        await callback.message.answer(i18n.t(lang, "AI_OFF_OK"))
 
 
 @dp.callback_query(F.data == "pumpdump_notify_on")
@@ -1004,19 +1010,17 @@ async def pumpdump_notify_on(callback: CallbackQuery):
     if callback.from_user is None:
         return
     chat_id = callback.from_user.id
+    lang = get_user_lang(chat_id) or "ru"
     if get_user_pref(chat_id, "pumpdump_enabled", 0):
-        await callback.answer("Уже включено.")
+        await callback.answer(i18n.t(lang, "ALREADY_ON"))
         if callback.message:
-            await callback.message.answer("ℹ️ Pump/Dump уведомления уже включены.")
+            await callback.message.answer(i18n.t(lang, "PD_ALREADY_ON"))
         return
     ensure_trial_defaults(chat_id)
     set_user_pref(chat_id, "pumpdump_enabled", 1)
     await callback.answer()
     if callback.message:
-        await callback.message.answer(
-            "✅ Pump/Dump уведомления включены.\n"
-            "Теперь бот будет присылать алерты при резких движениях рынка."
-        )
+        await callback.message.answer(i18n.t(lang, "PD_ON_OK"))
 
 
 @dp.callback_query(F.data == "pumpdump_notify_off")
@@ -1024,15 +1028,16 @@ async def pumpdump_notify_off(callback: CallbackQuery):
     if callback.from_user is None:
         return
     chat_id = callback.from_user.id
+    lang = get_user_lang(chat_id) or "ru"
     if not get_user_pref(chat_id, "pumpdump_enabled", 0):
-        await callback.answer("Уже выключено.")
+        await callback.answer(i18n.t(lang, "ALREADY_OFF"))
         if callback.message:
-            await callback.message.answer("ℹ️ Pump/Dump уведомления уже выключены.")
+            await callback.message.answer(i18n.t(lang, "PD_ALREADY_OFF"))
         return
     set_user_pref(chat_id, "pumpdump_enabled", 0)
     await callback.answer()
     if callback.message:
-        await callback.message.answer("🚫 Pump/Dump уведомления отключены.")
+        await callback.message.answer(i18n.t(lang, "PD_OFF_OK"))
 
 
 @dp.callback_query(F.data.startswith("sub_paywall:"))
@@ -1472,8 +1477,9 @@ def _format_module_ru(key: str, st, now: float) -> str:
 
 @dp.message(Command("testadmin"))
 async def test_admin(message: Message):
+    lang = get_user_lang(message.chat.id) or "ru"
     if message.from_user is None or not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа")
+        await message.answer(i18n.t(lang, "NO_ACCESS"))
         return
     ai_subscribers = list_ai_subscribers()
     pump_subscribers = list_user_ids_with_pref("pumpdump_enabled", 1)
@@ -1541,16 +1547,18 @@ async def test_admin(message: Message):
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_DIAG_ADMIN")))
 async def test_admin_button(message: Message):
+    lang = get_user_lang(message.chat.id) or "ru"
     if message.from_user is None or not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа")
+        await message.answer(i18n.t(lang, "NO_ACCESS"))
         return
     await test_admin(message)
 
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_TEST_AI")))
 async def test_ai_signal_all(message: Message):
+    lang = get_user_lang(message.chat.id) or "ru"
     if message.from_user is None or not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа")
+        await message.answer(i18n.t(lang, "NO_ACCESS"))
         return
     signal_dict = {
         "symbol": "TESTUSDT",
@@ -1595,8 +1603,9 @@ async def test_ai_signal_all(message: Message):
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_TEST_PD")))
 async def test_pumpdump_signal_all(message: Message):
+    lang = get_user_lang(message.chat.id) or "ru"
     if message.from_user is None or not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа")
+        await message.answer(i18n.t(lang, "NO_ACCESS"))
         return
     subscribers = get_pumpdump_subscribers()
     if not subscribers:
@@ -1640,8 +1649,9 @@ async def test_pumpdump_signal_all(message: Message):
 async def test_notify_cmd(message: Message):
     user_id = message.from_user.id if message.from_user else None
     print("[notify] /test_notify received", user_id, message.chat.id)
+    lang = get_user_lang(message.chat.id) or "ru"
     if message.from_user is None or not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа")
+        await message.answer(i18n.t(lang, "NO_ACCESS"))
         return
     target_chat_id = message.chat.id
     try:
@@ -1657,8 +1667,9 @@ async def test_notify_cmd(message: Message):
 
 @dp.message(Command("purge_tests"))
 async def purge_tests_cmd(message: Message):
+    lang = get_user_lang(message.chat.id) or "ru"
     if message.from_user is None or not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа")
+        await message.answer(i18n.t(lang, "NO_ACCESS"))
         return
     removed = purge_test_signals()
     await message.answer(f"✅ Удалено тестовых сигналов: {removed}")
@@ -2133,7 +2144,8 @@ def _build_user_card(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
 
 async def _ensure_admin_callback(callback: CallbackQuery) -> bool:
     if callback.from_user is None or not is_admin(callback.from_user.id):
-        await callback.answer("Нет доступа")
+        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+        await callback.answer(i18n.t(lang or "ru", "NO_ACCESS"))
         return False
     return True
 
@@ -2162,7 +2174,8 @@ async def admin_back_callback(callback: CallbackQuery):
         return
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text("Возвращаемся в главное меню.")
+        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+        await callback.message.edit_text(i18n.t(lang or "ru", "BACK_TO_MAIN_TEXT"))
 
 
 @dp.callback_query(F.data.regexp(r"^user_view:\d+$"))

@@ -113,6 +113,21 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "STATS_PICK_TEXT": "📊 История сигналов\nВыбери период:",
         "SYSTEM_SECTION_TEXT": "ℹ️ Раздел: О системе",
         "BACK_TO_MAIN_TEXT": "Возвращаемся в главное меню.",
+        "ALREADY_ON": "Уже включено.",
+        "ALREADY_OFF": "Уже выключено.",
+        "AI_ALREADY_ON": "ℹ️ AI-уведомления уже включены.",
+        "AI_ALREADY_OFF": "ℹ️ AI-уведомления уже выключены.",
+        "AI_ON_OK": "✅ AI-уведомления включены.",
+        "AI_OFF_OK": "🚫 Уведомления отключены.",
+        "PD_ALREADY_ON": "ℹ️ Pump/Dump уведомления уже включены.",
+        "PD_ALREADY_OFF": "ℹ️ Pump/Dump уведомления уже выключены.",
+        "PD_ON_OK": (
+            "✅ Pump/Dump уведомления включены.\n"
+            "Теперь бот будет присылать алерты при резких движениях рынка."
+        ),
+        "PD_OFF_OK": "🚫 Pump/Dump уведомления отключены.",
+        "NO_ACCESS": "⛔ Нет доступа",
+        "SIGNAL_NOT_FOUND": "Сигнал не найден.",
     },
     "en": {
         "START_TEXT": (
@@ -222,6 +237,21 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "STATS_PICK_TEXT": "📊 Signal history\nChoose a period:",
         "SYSTEM_SECTION_TEXT": "ℹ️ Section: System",
         "BACK_TO_MAIN_TEXT": "Returning to the main menu.",
+        "ALREADY_ON": "Already enabled.",
+        "ALREADY_OFF": "Already disabled.",
+        "AI_ALREADY_ON": "ℹ️ AI notifications are already enabled.",
+        "AI_ALREADY_OFF": "ℹ️ AI notifications are already disabled.",
+        "AI_ON_OK": "✅ AI notifications enabled.",
+        "AI_OFF_OK": "🚫 Notifications disabled.",
+        "PD_ALREADY_ON": "ℹ️ Pump/Dump notifications are already enabled.",
+        "PD_ALREADY_OFF": "ℹ️ Pump/Dump notifications are already disabled.",
+        "PD_ON_OK": (
+            "✅ Pump/Dump notifications enabled.\n"
+            "The bot will now send alerts on sharp market moves."
+        ),
+        "PD_OFF_OK": "🚫 Pump/Dump notifications disabled.",
+        "NO_ACCESS": "⛔ Access denied",
+        "SIGNAL_NOT_FOUND": "Signal not found.",
     },
 }
 

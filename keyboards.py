@@ -111,12 +111,12 @@ def stats_inline_kb(lang: str) -> InlineKeyboardMarkup:
     )
 
 
-def build_about_inline_kb() -> InlineKeyboardMarkup:
+def build_about_inline_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить подписку", callback_data="sub_pay")],
-            [InlineKeyboardButton(text="💬 Связь с админом", callback_data="sub_contact")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="about_back")],
+            [InlineKeyboardButton(text=i18n.t(lang, "SYS_PAY"), callback_data="sub_pay")],
+            [InlineKeyboardButton(text=i18n.t(lang, "BTN_CONTACT_ADMIN"), callback_data="sub_contact")],
+            [InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data="about_back")],
         ]
     )
 
