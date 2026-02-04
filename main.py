@@ -411,7 +411,7 @@ WATCHLIST_TTL_MIN = int(os.getenv("WATCHLIST_TTL_MIN", "30"))
 WATCHLIST_COOLDOWN_MIN = int(os.getenv("WATCHLIST_COOLDOWN_MIN", "45"))
 WATCHLIST_SCAN_EVERY_SEC = int(os.getenv("WATCHLIST_SCAN_EVERY_SEC", "60"))
 AI_DEEP_TOP_K = int(os.getenv("AI_DEEP_TOP_K", os.getenv("AI_MAX_DEEP_PER_CYCLE", "3")))
-CANDIDATE_SCORE_MIN = int(os.getenv("CANDIDATE_SCORE_MIN", "60"))
+CANDIDATE_SCORE_MIN = int(os.getenv("CANDIDATE_SCORE_MIN", "40"))
 
 
 # ===== ХЭНДЛЕРЫ =====
@@ -2690,10 +2690,12 @@ async def _compute_candidate_score(symbol: str) -> tuple[int, str]:
         volume_ratio = last_vol / avg_vol if avg_vol > 0 else 0.0
         if volume_ratio >= 1.6:
             reason_scores["volume_spike"] = 30
+        elif volume_ratio >= 1.3:
+            reason_scores["volume_spike"] = 20
 
     atr_now = compute_atr(candles_1h, 14)
     atr_prev = compute_atr(candles_1h[:-1], 14) if len(candles_1h) > 15 else None
-    if atr_now and atr_prev and atr_prev > 0 and atr_now >= atr_prev * 1.15:
+    if atr_now and atr_prev and atr_prev > 0 and atr_now >= atr_prev * 1.10:
         reason_scores["atr"] = 20
 
     closes_1h = [float(c.close) for c in candles_1h]
@@ -2702,6 +2704,8 @@ async def _compute_candidate_score(symbol: str) -> tuple[int, str]:
     if ema50 and last_close > 0:
         distance_pct = abs(last_close - ema50) / last_close * 100
         if distance_pct <= 1.0:
+            reason_scores["near_poi"] = 30
+        elif distance_pct <= 2.0:
             reason_scores["near_poi"] = 20
 
     last_candle = candles_1h[-1]
@@ -2709,6 +2713,8 @@ async def _compute_candidate_score(symbol: str) -> tuple[int, str]:
         change_pct = abs((float(last_candle.close) - float(last_candle.open)) / float(last_candle.open) * 100)
         if change_pct >= 3.0:
             reason_scores["pump"] = 30
+        elif change_pct >= 2.0:
+            reason_scores["pump"] = 20
 
     score = sum(reason_scores.values())
     if not reason_scores:
@@ -3114,6 +3120,7 @@ async def ai_scan_once() -> None:
 
         now = int(time.time())
         added = 0
+        low_score_reasons: dict[str, int] = {}
         with binance_request_context("ai_signals"):
             for symbol in chunk:
                 if time.time() - start > BUDGET:
@@ -3122,6 +3129,8 @@ async def ai_scan_once() -> None:
                 update_current_symbol("ai_signals", symbol)
                 score, reason = await _compute_candidate_score(symbol)
                 if score < CANDIDATE_SCORE_MIN:
+                    reason_key = reason or "no_score"
+                    low_score_reasons[reason_key] = low_score_reasons.get(reason_key, 0) + 1
                     continue
                 ttl_until = now + WATCHLIST_TTL_MIN * 60
                 inserted = upsert_watchlist_candidate(
@@ -3141,6 +3150,14 @@ async def ai_scan_once() -> None:
         klines_count = get_klines_request_count("ai_signals")
         cache_stats = get_klines_cache_stats("ai_signals")
         ticker_count = get_ticker_request_count("ai_signals")
+        if low_score_reasons:
+            top_reasons = sorted(
+                low_score_reasons.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:5]
+            reasons_str = ", ".join([f"{key}={count}" for key, count in top_reasons])
+            print(f"[AI] below min score reasons: {reasons_str}")
         print(
             "[AI] "
             f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
