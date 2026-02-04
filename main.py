@@ -1984,9 +1984,10 @@ async def user_lock_callback(callback: CallbackQuery):
     try:
         await callback.message.bot.send_message(
             user_id,
-            "⛔ Доступ к сигналам приостановлен\n\n"
-            "Ваша подписка/доступ временно приостановлены администратором.\n"
-            "Если это ошибка — напишите в поддержку.",
+            "⛔ Подписка приостановлена\n\n"
+            "Доступ к сигналам временно отключён администратором.\n"
+            "Для связи: @loomany\n"
+            f"Ваш ID: {user_id}",
         )
     except Exception:
         pass
@@ -2006,9 +2007,9 @@ async def user_unlock_callback(callback: CallbackQuery):
     try:
         await callback.message.bot.send_message(
             user_id,
-            "✅ Доступ к сигналам восстановлен\n\n"
-            "Ваша подписка/доступ продлены (возобновлены).\n"
-            "Спасибо!",
+            "✅ Подписка активирована\n\n"
+            "Доступ к сигналам восстановлен на 30 дней.\n"
+            "Если не приходят уведомления — включите их в меню бота.",
         )
     except Exception:
         pass
