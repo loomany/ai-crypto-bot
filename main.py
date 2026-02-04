@@ -418,7 +418,6 @@ async def cmd_start(message: Message):
             is_admin=is_admin(message.from_user.id) if message.from_user else False
         ),
     )
-    await message.answer(f"Ваш ID: {message.chat.id}")
 
 
 @dp.message(F.text == "🎯 AI-сигналы")
