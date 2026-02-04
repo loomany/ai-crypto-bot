@@ -540,19 +540,14 @@ def _format_archive_list(
     tp1_total = outcome_counts.get("tp1", 0) + outcome_counts.get("tp2", 0)
     lines.extend(
         [
-            "",
             f"TP1: {tp1_total}",
             "👉 Сигнал дал прибыль и закрылся в плюс.",
-            "",
             f"BE: {outcome_counts.get('be', 0)}",
             "👉 Сигнал ушёл в безубыток — риск снят.",
-            "",
             f"SL: {outcome_counts.get('sl', 0)}",
             "👉 Сигнал закрылся по стоп-лоссу.",
-            "",
             f"EXP: {outcome_counts.get('exp', 0)}",
             "👉 Прошло 12 часов после активации — сценарий устарел.",
-            "",
             f"NF: {outcome_counts.get('no_fill', 0)}",
             "👉 Прошло 12 часов, цена не дошла до входа.",
         ]
@@ -561,7 +556,6 @@ def _format_archive_list(
         lines.append("Нет сигналов за период.")
         return "\n".join(lines)
 
-    lines.append("")
     for idx, event in enumerate(events, start=1):
         status_icon = _status_icon(str(event.get("status", "")))
         lines.append(
