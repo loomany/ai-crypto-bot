@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sqlite3
 import time
@@ -73,6 +74,7 @@ from db import (
     insert_signal_event,
     list_signal_events,
     count_signal_events,
+    get_signal_outcome_counts,
     get_signal_event,
 )
 from db_path import ensure_db_writable, get_db_path
@@ -81,7 +83,6 @@ from alert_dedup_db import init_alert_dedup, can_send
 from status_utils import is_notify_enabled
 from message_templates import format_scenario_message
 from signal_audit_db import (
-    get_ai_signal_stats,
     get_public_stats,
     init_signal_audit_tables,
     insert_signal_audit,
@@ -437,8 +438,8 @@ async def pumpdump_menu(message: Message):
 def _period_label(period_key: str) -> str:
     mapping = {
         "1d": "1 день",
-        "3d": "3 дня",
         "7d": "7 дней",
+        "30d": "30 дней",
         "all": "Все время",
     }
     return mapping.get(period_key, "Все время")
@@ -485,11 +486,21 @@ def _format_ai_stats_message(stats: Dict[str, Any], period_key: str) -> str:
 def _period_days(period_key: str) -> int | None:
     if period_key == "1d":
         return 1
-    if period_key == "3d":
-        return 3
     if period_key == "7d":
         return 7
+    if period_key == "30d":
+        return 30
     return None
+
+
+def _status_icon(status: str) -> str:
+    passed = {"TP1", "TP2", "BE"}
+    failed = {"SL", "EXP", "EXPIRED", "NO_FILL"}
+    if status in passed:
+        return "✅"
+    if status in failed:
+        return "❌"
+    return "⏳"
 
 
 def _format_signal_event_status(raw_status: str) -> str:
@@ -518,11 +529,26 @@ def _format_archive_list(
     page: int,
     pages: int,
     filter_on: bool,
+    outcome_counts: dict,
 ) -> str:
-    title = f"📚 Архив сигналов ({_period_label(period_key)})"
+    title = f"📊 История сигналов ({_period_label(period_key)})"
     lines = [title]
     if filter_on:
         lines.append("Фильтр: 80+")
+    lines.append(
+        f"✅ Прошло: {outcome_counts.get('passed', 0)} | "
+        f"❌ Не прошло: {outcome_counts.get('failed', 0)}"
+    )
+    lines.append(
+        "TP1: {tp1} | TP2: {tp2} | BE: {be} | SL: {sl} | EXP: {exp} | NF: {no_fill}".format(
+            tp1=outcome_counts.get("tp1", 0),
+            tp2=outcome_counts.get("tp2", 0),
+            be=outcome_counts.get("be", 0),
+            sl=outcome_counts.get("sl", 0),
+            exp=outcome_counts.get("exp", 0),
+            no_fill=outcome_counts.get("no_fill", 0),
+        )
+    )
     if not events:
         lines.append("Нет сигналов за период.")
         return "\n".join(lines)
@@ -530,55 +556,116 @@ def _format_archive_list(
     lines.append(f"Страница {page}/{pages}")
     lines.append("")
     for idx, event in enumerate(events, start=1):
-        status = _format_signal_event_status(str(event.get("status", "")))
+        status_icon = _status_icon(str(event.get("status", "")))
         lines.append(
-            f"{idx}) {event.get('symbol')} {event.get('side')} {int(event.get('score', 0))} "
-            f"| {event.get('timeframe')} | {_format_event_time(int(event.get('ts', 0)))} | {status}"
+            f"{status_icon} {idx}) Score {int(event.get('score', 0))} — "
+            f"{event.get('symbol')} {event.get('side')} | "
+            f"{_format_event_time(int(event.get('ts', 0)))}"
         )
     return "\n".join(lines)
 
 
 def _format_archive_detail(event: dict) -> str:
-    status = _format_signal_event_status(str(event.get("status", "")))
-    return "\n".join(
-        [
-            f"📌 {event.get('symbol')} {event.get('side')} {int(event.get('score', 0))} ({event.get('timeframe')})",
-            f"🕒 {_format_event_time(int(event.get('ts', 0)))}",
-            f"Статус: {status}",
-            f"POI: {float(event.get('poi_low')):.4f} - {float(event.get('poi_high')):.4f}",
-            f"SL: {float(event.get('sl')):.4f}",
-            f"TP1: {float(event.get('tp1')):.4f}",
-            f"TP2: {float(event.get('tp2')):.4f}",
-        ]
-    )
+    score = int(event.get("score", 0))
+    breakdown_lines: list[str] = []
+    raw_breakdown = event.get("breakdown_json")
+    if raw_breakdown:
+        try:
+            breakdown_items = json.loads(raw_breakdown)
+        except json.JSONDecodeError:
+            breakdown_items = []
+        if isinstance(breakdown_items, list):
+            label_map = {
+                "global_trend": "Глобальный тренд (1D)",
+                "local_trend": "Локальный тренд (1H)",
+                "near_key_level": "Реакция на ключевую зону (POI)",
+                "liquidity_sweep": "Снос ликвидности",
+                "volume_climax": "Объём относительно среднего",
+                "rsi_divergence": "RSI-дивергенция",
+                "atr_ok": "Волатильность (ATR)",
+                "bb_extreme": "Экстремум Bollinger",
+                "ma_trend_ok": "EMA-согласование",
+                "orderflow": "Ордерфлоу",
+                "whale_activity": "Китовая активность",
+                "ai_pattern": "AI-паттерны",
+                "market_regime": "Рыночный режим",
+            }
+            for item in breakdown_items:
+                if not isinstance(item, dict):
+                    continue
+                key = item.get("key")
+                label = item.get("label")
+                if key in label_map:
+                    label = label_map[key]
+                label = label or key or "Фактор"
+                delta = item.get("points", item.get("delta", 0))
+                try:
+                    delta_value = int(round(float(delta)))
+                except (TypeError, ValueError):
+                    delta_value = 0
+                sign = "−" if delta_value < 0 else "+"
+                breakdown_lines.append(f"• {label}: {sign}{abs(delta_value)}")
+
+    lines = [
+        f"📌 {event.get('symbol')} {event.get('side')} {score}",
+        f"🕒 {_format_event_time(int(event.get('ts', 0)))}",
+        f"POI: {float(event.get('poi_low')):.4f} - {float(event.get('poi_high')):.4f}",
+        f"SL: {float(event.get('sl')):.4f}",
+        f"TP1: {float(event.get('tp1')):.4f}",
+        f"TP2: {float(event.get('tp2')):.4f}",
+    ]
+    if breakdown_lines:
+        lines.extend(
+            [
+                "",
+                f"🧠 Почему выбран сигнал (Score {score}):",
+                *breakdown_lines,
+            ]
+        )
+    return "\n".join(lines)
 
 
 @dp.message(F.text == "📊 Статистика")
 async def stats_menu(message: Message):
-    stats = get_ai_signal_stats(days=7)
     await message.answer(
-        _format_ai_stats_message(stats, "7d"),
-        reply_markup=stats_inline_kb("7d"),
+        "📊 История сигналов\nВыбери период:",
+        reply_markup=stats_inline_kb(),
     )
 
 
-@dp.callback_query(F.data.regexp(r"^stats:(1d|3d|7d|all)$"))
-async def stats_callback(callback: CallbackQuery):
-    if callback.message is None:
+@dp.callback_query(F.data.regexp(r"^history:(1d|7d|30d|all)$"))
+async def history_callback(callback: CallbackQuery):
+    if callback.message is None or callback.from_user is None:
         return
     period_key = callback.data.split(":", 1)[1]
-    days = None
-    if period_key == "1d":
-        days = 1
-    elif period_key == "3d":
-        days = 3
-    elif period_key == "7d":
-        days = 7
-    stats = get_ai_signal_stats(days=days)
+    page = 1
+    filter_on = False
+    days = _period_days(period_key)
+    since_ts = int(time.time()) - days * 86400 if days is not None else None
+    min_score = 80 if filter_on else None
+    total = count_signal_events(
+        user_id=callback.from_user.id,
+        since_ts=since_ts,
+        min_score=min_score,
+    )
+    pages = max(1, (total + 9) // 10)
+    events_rows = list_signal_events(
+        user_id=callback.from_user.id,
+        since_ts=since_ts,
+        min_score=min_score,
+        limit=10,
+        offset=0,
+    )
+    events = [dict(row) for row in events_rows]
+    outcome_counts = get_signal_outcome_counts(
+        user_id=callback.from_user.id,
+        since_ts=since_ts,
+        min_score=min_score,
+    )
     await callback.answer()
     await callback.message.edit_text(
-        _format_ai_stats_message(stats, period_key),
-        reply_markup=stats_inline_kb(period_key),
+        _format_archive_list(period_key, events, page, pages, filter_on, outcome_counts),
+        reply_markup=_archive_inline_kb(period_key, page, pages, filter_on, events),
     )
 
 
@@ -591,10 +678,14 @@ def _archive_inline_kb(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for idx, event in enumerate(events, start=1):
+        status_icon = _status_icon(str(event.get("status", "")))
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{idx}. {event.get('symbol')} {event.get('side')}",
+                    text=(
+                        f"{status_icon} Score {int(event.get('score', 0))} — "
+                        f"{event.get('symbol')} {event.get('side')}"
+                    ),
                     callback_data=f"archive:detail:{period_key}:{page}:{int(filter_on)}:{event.get('id')}",
                 )
             ]
@@ -651,7 +742,7 @@ def _archive_detail_kb(period_key: str, page: int, filter_on: bool) -> InlineKey
     )
 
 
-@dp.callback_query(F.data.regexp(r"^archive:list:(1d|3d|7d|all):\d+:(0|1)$"))
+@dp.callback_query(F.data.regexp(r"^archive:list:(1d|7d|30d|all):\d+:(0|1)$"))
 async def archive_list(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
@@ -677,14 +768,19 @@ async def archive_list(callback: CallbackQuery):
         offset=(page - 1) * 10,
     )
     events = [dict(row) for row in events_rows]
+    outcome_counts = get_signal_outcome_counts(
+        user_id=callback.from_user.id,
+        since_ts=since_ts,
+        min_score=min_score,
+    )
     await callback.answer()
     await callback.message.edit_text(
-        _format_archive_list(period_key, events, page, pages, filter_on),
+        _format_archive_list(period_key, events, page, pages, filter_on, outcome_counts),
         reply_markup=_archive_inline_kb(period_key, page, pages, filter_on, events),
     )
 
 
-@dp.callback_query(F.data.regexp(r"^archive:detail:(1d|3d|7d|all):\d+:(0|1):\d+$"))
+@dp.callback_query(F.data.regexp(r"^archive:detail:(1d|7d|30d|all):\d+:(0|1):\d+$"))
 async def archive_detail(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
@@ -705,17 +801,14 @@ async def archive_detail(callback: CallbackQuery):
     )
 
 
-@dp.callback_query(F.data.regexp(r"^archive:back:(1d|3d|7d|all)$"))
+@dp.callback_query(F.data.regexp(r"^archive:back:(1d|7d|30d|all)$"))
 async def archive_back(callback: CallbackQuery):
     if callback.message is None:
         return
-    period_key = callback.data.split(":")[2]
-    days = _period_days(period_key)
-    stats = get_ai_signal_stats(days=days)
     await callback.answer()
     await callback.message.edit_text(
-        _format_ai_stats_message(stats, period_key),
-        reply_markup=stats_inline_kb(period_key),
+        "📊 История сигналов\nВыбери период:",
+        reply_markup=stats_inline_kb(),
     )
 
 @dp.callback_query(F.data == "ai_notify_on")
@@ -1541,6 +1634,14 @@ async def send_signal_to_all(signal_dict: Dict[str, Any]):
     text = _format_signal(signal_dict)
     sent_at = int(time.time())
     insert_signal_audit(signal_dict, tier="free", module="ai_signals", sent_at=sent_at)
+    reason = signal_dict.get("reason")
+    breakdown = (
+        signal_dict.get("score_breakdown")
+        or signal_dict.get("breakdown")
+        or []
+    )
+    reason_json = json.dumps(reason, ensure_ascii=False) if reason is not None else None
+    breakdown_json = json.dumps(breakdown, ensure_ascii=False) if breakdown is not None else None
 
     tasks = []
     recipients = []
@@ -1581,6 +1682,8 @@ async def send_signal_to_all(signal_dict: Dict[str, Any]):
                 tp2=float(signal_dict.get("tp2", 0.0)),
                 status="OPEN",
                 tg_message_id=int(res.message_id),
+                reason_json=reason_json,
+                breakdown_json=breakdown_json,
             )
         except Exception as exc:
             print(f"[ai_signals] Failed to log signal event for {chat_id}: {exc}")
