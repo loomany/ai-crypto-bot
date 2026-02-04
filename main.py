@@ -63,6 +63,12 @@ from db import (
     get_user_pref,
     set_user_pref,
     list_user_ids_with_pref,
+    is_user_locked,
+    ensure_trial_defaults,
+    try_consume_trial,
+    delete_user,
+    TRIAL_AI_LIMIT,
+    TRIAL_PUMP_LIMIT,
     get_state,
     set_state,
     kv_get_int,
@@ -118,6 +124,8 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
 PUMP_COOLDOWN_SYMBOL_SEC = int(os.getenv("PUMP_COOLDOWN_SYMBOL_SEC", "21600"))  # 6h
 PUMP_COOLDOWN_GLOBAL_SEC = int(os.getenv("PUMP_COOLDOWN_GLOBAL_SEC", "3600"))  # 1h
 PUMP_DAILY_LIMIT = int(os.getenv("PUMP_DAILY_LIMIT", "6"))
+TRIAL_AI_SUFFIX = "бесплатных AI-сигналов"
+TRIAL_PUMP_SUFFIX = "бесплатных Pump/Dump сигналов"
 
 
 def _env_bool(name: str, default: str = "0") -> bool:
@@ -412,6 +420,10 @@ async def cmd_start(message: Message):
                 f"Язык: {language}"
             )
             await message.bot.send_message(ADMIN_CHAT_ID, admin_text)
+        if is_new and not is_admin(message.chat.id):
+            set_user_pref(message.chat.id, "trial_ai_left", TRIAL_AI_LIMIT)
+            set_user_pref(message.chat.id, "trial_pump_left", TRIAL_PUMP_LIMIT)
+            set_user_pref(message.chat.id, "user_locked", 0)
     await message.answer(
         START_TEXT,
         reply_markup=build_main_menu_kb(
@@ -812,6 +824,7 @@ async def ai_notify_on(callback: CallbackQuery):
         if callback.message:
             await callback.message.answer("ℹ️ AI-уведомления уже включены.")
         return
+    ensure_trial_defaults(chat_id)
     set_user_pref(chat_id, "ai_signals_enabled", 1)
     await callback.answer()
     if callback.message:
@@ -846,6 +859,7 @@ async def pumpdump_notify_on(callback: CallbackQuery):
         if callback.message:
             await callback.message.answer("ℹ️ Pump/Dump уведомления уже включены.")
         return
+    ensure_trial_defaults(chat_id)
     set_user_pref(chat_id, "pumpdump_enabled", 1)
     await callback.answer()
     if callback.message:
@@ -871,6 +885,13 @@ async def pumpdump_notify_off(callback: CallbackQuery):
         await callback.message.answer("🚫 Pump/Dump уведомления отключены.")
 
 
+@dp.callback_query(F.data == "buy_subscription")
+async def buy_subscription(callback: CallbackQuery):
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer("Скоро добавим оплату 🙌")
+
+
 def _human_ago_ru(seconds: int) -> str:
     if seconds < 0:
         seconds = 0
@@ -881,6 +902,18 @@ def _human_ago_ru(seconds: int) -> str:
         return f"{minutes} мин назад"
     hours = minutes // 60
     return f"{hours} ч назад"
+
+
+def _parse_user_id_arg(text: str | None) -> int | None:
+    if not text:
+        return None
+    parts = text.strip().split()
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[1])
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_extra_kv(extra: str) -> dict:
@@ -1552,6 +1585,45 @@ async def system_menu(message: Message):
     )
 
 
+def _format_user_time(ts: int | None) -> str:
+    if not ts:
+        return "-"
+    dt = datetime.fromtimestamp(int(ts), tz=ALMATY_TZ)
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
+@dp.message(F.text == "👥 Пользователи")
+async def users_list(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        return
+    conn = sqlite3.connect(get_db_path())
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT chat_id, username, started_at, last_seen
+            FROM users
+            ORDER BY started_at DESC
+            LIMIT 50
+            """
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        await message.answer("Пользователей пока нет.")
+        return
+    lines = ["👥 Пользователи (последние 50):"]
+    for chat_id, username, started_at, last_seen in rows:
+        username_text = f"@{username}" if username else "-"
+        started_text = _format_user_time(started_at)
+        last_seen_text = _format_user_time(last_seen)
+        lines.append(
+            f"{chat_id} | {username_text} | {started_text} | {last_seen_text}"
+        )
+    await message.answer("\n".join(lines))
+
+
 @dp.message(F.text == "📡 Статус системы")
 async def status_button(message: Message):
     await message.answer(
@@ -1626,6 +1698,42 @@ async def show_stats(message: Message):
     )
 
 
+@dp.message(Command("lock"))
+async def lock_user_cmd(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        return
+    user_id = _parse_user_id_arg(message.text)
+    if user_id is None:
+        await message.answer("Использование: /lock <id>")
+        return
+    set_user_pref(user_id, "user_locked", 1)
+    await message.answer(f"✅ user_locked=1 для {user_id}")
+
+
+@dp.message(Command("unlock"))
+async def unlock_user_cmd(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        return
+    user_id = _parse_user_id_arg(message.text)
+    if user_id is None:
+        await message.answer("Использование: /unlock <id>")
+        return
+    set_user_pref(user_id, "user_locked", 0)
+    await message.answer(f"✅ user_locked=0 для {user_id}")
+
+
+@dp.message(Command("delete"))
+async def delete_user_cmd(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        return
+    user_id = _parse_user_id_arg(message.text)
+    if user_id is None:
+        await message.answer("Использование: /delete <id>")
+        return
+    delete_user(user_id)
+    await message.answer(f"✅ пользователь {user_id} удалён")
+
+
 def _trend_short_text(trend: str) -> str:
     if trend in ("bullish", "up"):
         return "бычий"
@@ -1689,6 +1797,23 @@ def _format_signal(signal: Dict[str, Any]) -> str:
         btc_change_6h_pct=float(reason.get("btc_change_6h_pct", 0.0)),
         btc_atr_1h_pct=float(reason.get("btc_atr_1h_pct", 0.0)),
     )
+
+
+def _subscription_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💳 Купить подписку",
+                    callback_data="buy_subscription",
+                )
+            ]
+        ]
+    )
+
+
+def _trial_suffix(left: int, limit: int, label: str) -> str:
+    return f"\n\n🎁 Осталось {left}/{limit} {label}"
 
 
 async def send_signal_to_all(signal_dict: Dict[str, Any]):
@@ -1757,15 +1882,37 @@ async def send_signal_to_all(signal_dict: Dict[str, Any]):
     reason_json = json.dumps(reason, ensure_ascii=False) if reason is not None else None
     breakdown_json = json.dumps(breakdown, ensure_ascii=False) if breakdown is not None else None
 
-    tasks = []
-    recipients = []
+    tasks: list[asyncio.Task] = []
+    recipients: list[tuple[int, bool]] = []
     for chat_id in subscribers:
+        if is_user_locked(chat_id):
+            continue
         # индивидуальный cooldown на пользователя
         if not can_send(chat_id, "ai_signals", dedup_key, COOLDOWN_FREE_SEC):
             skipped_dedup += 1
             continue
-        tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
-        recipients.append(chat_id)
+        if is_admin(chat_id):
+            tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
+            recipients.append((chat_id, True))
+            continue
+        ensure_trial_defaults(chat_id)
+        allowed, left = try_consume_trial(chat_id, "trial_ai_left", 1)
+        if allowed:
+            message_text = text + _trial_suffix(left, TRIAL_AI_LIMIT, TRIAL_AI_SUFFIX)
+            tasks.append(asyncio.create_task(bot.send_message(chat_id, message_text)))
+            recipients.append((chat_id, True))
+        else:
+            tasks.append(
+                asyncio.create_task(
+                    bot.send_message(
+                        chat_id,
+                        "🔒 Доступ к AI-сигналам по подписке.\n"
+                        "Нажми «Купить подписку».",
+                        reply_markup=_subscription_kb(),
+                    )
+                )
+            )
+            recipients.append((chat_id, False))
 
     print(
         "[ai_signals] deliver: "
@@ -1776,9 +1923,11 @@ async def send_signal_to_all(signal_dict: Dict[str, Any]):
         return
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    for chat_id, res in zip(recipients, results):
+    for (chat_id, should_log), res in zip(recipients, results):
         if isinstance(res, Exception):
             print(f"[ai_signals] Failed to send to {chat_id}: {res}")
+            continue
+        if not should_log:
             continue
         try:
             insert_signal_event(
@@ -2055,8 +2204,11 @@ async def pump_scan_once(bot: Bot) -> None:
             last_sent[symbol] = now_min
             for chat_id in subscribers:
                 try:
-                    if get_pumpdump_daily_count(chat_id, date_key) >= PUMP_DAILY_LIMIT:
-                        continue
+                    if not is_admin(chat_id):
+                        if get_pumpdump_daily_count(chat_id, date_key) >= PUMP_DAILY_LIMIT:
+                            continue
+                        if is_user_locked(chat_id):
+                            continue
                     time_bucket = int(time.time() // PUMP_COOLDOWN_GLOBAL_SEC)
                     dedup_global = f"pumpdump:global:{time_bucket}"
                     if not can_send(
@@ -2074,9 +2226,29 @@ async def pump_scan_once(bot: Bot) -> None:
                         PUMP_COOLDOWN_SYMBOL_SEC,
                     ):
                         continue
-                    await bot.send_message(chat_id, text, parse_mode="Markdown")
-                    increment_pumpdump_daily_count(chat_id, date_key)
-                    sent_count += 1
+                    if is_admin(chat_id):
+                        await bot.send_message(chat_id, text, parse_mode="Markdown")
+                        increment_pumpdump_daily_count(chat_id, date_key)
+                        sent_count += 1
+                        continue
+                    ensure_trial_defaults(chat_id)
+                    allowed, left = try_consume_trial(chat_id, "trial_pump_left", 1)
+                    if allowed:
+                        message_text = text + _trial_suffix(
+                            left,
+                            TRIAL_PUMP_LIMIT,
+                            TRIAL_PUMP_SUFFIX,
+                        )
+                        await bot.send_message(chat_id, message_text, parse_mode="Markdown")
+                        increment_pumpdump_daily_count(chat_id, date_key)
+                        sent_count += 1
+                    else:
+                        await bot.send_message(
+                            chat_id,
+                            "🔒 Доступ к Pump/Dump сигналам по подписке.\n"
+                            "Нажми «Купить подписку».",
+                            reply_markup=_subscription_kb(),
+                        )
                 except Exception as e:
                     print(f"[pumpdump] send failed chat_id={chat_id} symbol={symbol}: {e}")
                     continue
