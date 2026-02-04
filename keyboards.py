@@ -28,6 +28,7 @@ def build_system_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
     ]
     if is_admin:
         keyboard.insert(1, [KeyboardButton(text="🛠 Диагностика (админ)")])
+        keyboard.insert(2, [KeyboardButton(text="👥 Пользователи")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 

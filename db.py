@@ -4,6 +4,9 @@ from typing import Iterable, List, Optional, Tuple
 
 from db_path import get_db_path
 
+TRIAL_AI_LIMIT = 7
+TRIAL_PUMP_LIMIT = 7
+
 
 def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(get_db_path(), check_same_thread=False)
@@ -126,6 +129,89 @@ def list_user_ids_with_pref(key: str, value: int = 1) -> List[int]:
             (key, int(value)),
         )
         return [int(row["user_id"]) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def is_user_locked(user_id: int) -> bool:
+    return get_user_pref(user_id, "user_locked", 0) == 1
+
+
+def ensure_trial_defaults(user_id: int) -> None:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT key FROM user_prefs WHERE user_id = ? AND key IN (?, ?, ?)",
+            (
+                user_id,
+                "trial_ai_left",
+                "trial_pump_left",
+                "user_locked",
+            ),
+        )
+        existing = {row["key"] for row in cur.fetchall()}
+        now = int(time.time())
+        inserts = []
+        if "trial_ai_left" not in existing:
+            inserts.append((user_id, "trial_ai_left", TRIAL_AI_LIMIT, now))
+        if "trial_pump_left" not in existing:
+            inserts.append((user_id, "trial_pump_left", TRIAL_PUMP_LIMIT, now))
+        if "user_locked" not in existing:
+            inserts.append((user_id, "user_locked", 0, now))
+        if inserts:
+            conn.executemany(
+                """
+                INSERT INTO user_prefs (user_id, key, value, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, key) DO NOTHING
+                """,
+                inserts,
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def try_consume_trial(user_id: int, key: str, amount: int = 1) -> Tuple[bool, int]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE user_prefs
+            SET value = value - ?
+            WHERE user_id = ? AND key = ? AND value >= ?
+            """,
+            (int(amount), user_id, key, int(amount)),
+        )
+        if cur.rowcount <= 0:
+            conn.rollback()
+            return False, 0
+        cur = conn.execute(
+            "SELECT value FROM user_prefs WHERE user_id = ? AND key = ?",
+            (user_id, key),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        if row is None:
+            return True, 0
+        return True, int(row["value"])
+    finally:
+        conn.close()
+
+
+def delete_user(user_id: int) -> None:
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM users WHERE chat_id = ?", (user_id,))
+        conn.execute("DELETE FROM user_prefs WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM pumpdump_daily_counts WHERE chat_id = ?", (user_id,))
+        conn.execute("DELETE FROM ai_signals_subscribers WHERE chat_id = ?", (user_id,))
+        conn.execute("DELETE FROM alert_dedup WHERE chat_id = ?", (user_id,))
+        try:
+            conn.execute("DELETE FROM notify_settings WHERE chat_id = ?", (user_id,))
+        except sqlite3.OperationalError:
+            pass
+        conn.commit()
     finally:
         conn.close()
 
