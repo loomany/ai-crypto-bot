@@ -533,6 +533,7 @@ def _format_archive_list(
 ) -> str:
     title = f"📊 История сигналов ({_period_label(period_key)})"
     lines = [title]
+    lines.append("")
     lines.append(
         f"✅ Прошло: {outcome_counts.get('passed', 0)} | "
         f"❌ Не прошло: {outcome_counts.get('failed', 0)}"
@@ -552,6 +553,7 @@ def _format_archive_list(
             "👉 Прошло 12 часов, цена не дошла до входа.",
         ]
     )
+    lines.append("")
     if not events:
         lines.append("Нет сигналов за период.")
         return "\n".join(lines)
