@@ -100,7 +100,6 @@ from signal_audit_worker import signal_audit_worker_loop
 from keyboards import (
     ai_signals_inline_kb,
     build_main_menu_kb,
-    build_about_inline_kb,
     build_offer_inline_kb,
     build_payment_inline_kb,
     build_system_menu_kb,
@@ -1375,7 +1374,7 @@ async def test_admin(message: Message):
     await message.answer("\n".join(blocks).strip())
 
 
-@dp.message(F.text == "🛠 Диагностика (админ)")
+@dp.message(F.text == "🧪 Диагностика (админ)")
 async def test_admin_button(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
         await message.answer("⛔ Нет доступа")
@@ -1585,9 +1584,15 @@ async def status_cmd(message: Message):
 
 @dp.message(F.text == "ℹ️ О системе")
 async def system_menu(message: Message):
+    await show_system_menu(message)
+
+
+async def show_system_menu(message: Message) -> None:
     await message.answer(
-        "ℹ️ Раздел системы. Здесь статус работы и сервисные функции.",
-        reply_markup=build_about_inline_kb(),
+        "ℹ️ Раздел: О системе",
+        reply_markup=build_system_menu_kb(
+            is_admin=is_admin(message.from_user.id) if message.from_user else False
+        ),
     )
 
 
@@ -1595,10 +1600,21 @@ async def system_menu(message: Message):
 async def about_back_callback(callback: CallbackQuery):
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text("Возвращаемся в главное меню.")
         await callback.message.answer(
-            "Главное меню.",
-            reply_markup=build_main_menu_kb(
+            "ℹ️ Раздел: О системе",
+            reply_markup=build_system_menu_kb(
+                is_admin=is_admin(callback.from_user.id) if callback.from_user else False
+            ),
+        )
+
+
+@dp.callback_query(F.data == "system_back")
+async def system_back_callback(callback: CallbackQuery):
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(
+            "ℹ️ Раздел: О системе",
+            reply_markup=build_system_menu_kb(
                 is_admin=is_admin(callback.from_user.id) if callback.from_user else False
             ),
         )
@@ -1611,6 +1627,11 @@ async def subscription_contact_callback(callback: CallbackQuery):
     await callback.answer()
     if callback.message:
         await callback.message.answer(text)
+
+
+@dp.message(F.text == "💳 Оплатить подписку")
+async def subscription_offer_message(message: Message):
+    await message.answer(OFFER_TEXT_RU, reply_markup=build_offer_inline_kb())
 
 
 @dp.callback_query(F.data == "sub_pay")
@@ -1627,6 +1648,13 @@ async def subscription_accept_callback(callback: CallbackQuery):
     await callback.answer()
     if callback.message:
         await callback.message.edit_text(payment_text, reply_markup=build_payment_inline_kb())
+
+
+@dp.callback_query(F.data == "sub_pay_back")
+async def subscription_pay_back_callback(callback: CallbackQuery):
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(OFFER_TEXT_RU, reply_markup=build_offer_inline_kb())
 
 
 @dp.callback_query(F.data == "sub_copy_address")
@@ -1942,8 +1970,18 @@ async def user_delete_callback(callback: CallbackQuery):
     await callback.message.edit_text(text, reply_markup=markup)
 
 
-@dp.message(F.text == "📡 Статус системы")
+@dp.message(F.text == "🛰 Статус системы")
 async def status_button(message: Message):
+    await message.answer(
+        _format_user_bot_status(message.chat.id),
+        reply_markup=build_system_menu_kb(
+            is_admin=is_admin(message.from_user.id) if message.from_user else False
+        ),
+    )
+
+
+@dp.message(F.text == "🧪 Диагностика")
+async def diagnostics_button(message: Message):
     await message.answer(
         _format_user_bot_status(message.chat.id),
         reply_markup=build_system_menu_kb(

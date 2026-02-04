@@ -21,14 +21,21 @@ def build_main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
 
 
 def build_system_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
-    """Системное меню. Диагностика доступна только админу."""
-    keyboard = [
-        [KeyboardButton(text="📡 Статус системы")],
-        [KeyboardButton(text="⬅️ Назад")],
-    ]
+    """Системное меню."""
     if is_admin:
-        keyboard.insert(1, [KeyboardButton(text="🛠 Диагностика (админ)")])
-        keyboard.insert(2, [KeyboardButton(text="👥 Пользователи")])
+        keyboard = [
+            [KeyboardButton(text="🛰 Статус системы")],
+            [KeyboardButton(text="🧪 Диагностика (админ)")],
+            [KeyboardButton(text="👥 Пользователи")],
+            [KeyboardButton(text="💳 Оплатить подписку")],
+            [KeyboardButton(text="⬅️ Назад")],
+        ]
+    else:
+        keyboard = [
+            [KeyboardButton(text="🧪 Диагностика")],
+            [KeyboardButton(text="💳 Оплатить подписку")],
+            [KeyboardButton(text="⬅️ Назад")],
+        ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
@@ -100,7 +107,7 @@ def build_offer_inline_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="✅ Принять", callback_data="sub_accept")],
             [InlineKeyboardButton(text="💬 Связь с админом", callback_data="sub_contact")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="about_back")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="system_back")],
         ]
     )
 
@@ -111,6 +118,6 @@ def build_payment_inline_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📋 Скопировать адрес", callback_data="sub_copy_address")],
             [InlineKeyboardButton(text="📎 Отправить чек + ID", callback_data="sub_send_receipt")],
             [InlineKeyboardButton(text="💬 Связь с админом", callback_data="sub_contact")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="sub_pay")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="sub_pay_back")],
         ]
     )
