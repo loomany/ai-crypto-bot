@@ -5,9 +5,6 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from texts import admin_url
-
-
 def build_main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Главное меню."""
     keyboard = [
@@ -49,7 +46,6 @@ def ai_signals_inline_kb() -> InlineKeyboardMarkup:
                     callback_data="ai_notify_off",
                 )
             ],
-            [InlineKeyboardButton(text="✉️ Написать админу", url=admin_url())],
         ]
     )
 
@@ -69,7 +65,6 @@ def pumpdump_inline_kb() -> InlineKeyboardMarkup:
                     callback_data="pumpdump_notify_off",
                 )
             ],
-            [InlineKeyboardButton(text="✉️ Написать админу", url=admin_url())],
         ]
     )
 
