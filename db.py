@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import time
 from typing import Iterable, List, Optional, Tuple
@@ -257,6 +258,21 @@ def set_state(key: str, value: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def get_last_pumpdump_signal() -> Optional[dict]:
+    payload = get_state("last_pumpdump_signal")
+    if not payload:
+        return None
+    try:
+        parsed = json.loads(payload)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def set_last_pumpdump_signal(signal: dict) -> None:
+    set_state("last_pumpdump_signal", json.dumps(signal, ensure_ascii=False))
 
 
 def _get_kv_table(conn: sqlite3.Connection) -> str:
