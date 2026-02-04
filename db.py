@@ -205,8 +205,15 @@ def delete_user(user_id: int) -> None:
         conn.execute("DELETE FROM users WHERE chat_id = ?", (user_id,))
         conn.execute("DELETE FROM user_prefs WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM pumpdump_daily_counts WHERE chat_id = ?", (user_id,))
-        conn.execute("DELETE FROM ai_signals_subscribers WHERE chat_id = ?", (user_id,))
-        conn.execute("DELETE FROM alert_dedup WHERE chat_id = ?", (user_id,))
+        conn.execute("DELETE FROM signal_events WHERE user_id = ?", (user_id,))
+        try:
+            conn.execute("DELETE FROM ai_signals_subscribers WHERE chat_id = ?", (user_id,))
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("DELETE FROM alert_dedup WHERE chat_id = ?", (user_id,))
+        except sqlite3.OperationalError:
+            pass
         try:
             conn.execute("DELETE FROM notify_settings WHERE chat_id = ?", (user_id,))
         except sqlite3.OperationalError:
