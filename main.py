@@ -1074,31 +1074,54 @@ def _format_module_ru(key: str, st, now: float) -> str:
             lines.append(f"• Текущая позиция: {cur} / {universe}")
         elif cur:
             lines.append(f"• Текущая позиция: {cur}")
-        scan_symbol = st.current_symbol or "-"
-        lines.append(f"• Current scan symbol: {scan_symbol}")
         use_btc_gate = bool(st.state.get("use_btc_gate", False))
         lines.append(f"• BTC gate: {'enabled' if use_btc_gate else 'disabled'}")
         btc_cache = get_cached_btc_context()
         btc_error = get_btc_context_last_error()
+        btc_symbol = "BTCUSDT"
         if not use_btc_gate:
-            btc_line = "disabled (use_btc_gate=false)"
+            btc_line = (
+                f"{btc_symbol} (age=- ttl=- allow_longs=- allow_shorts=- reason=disabled)"
+            )
         elif btc_cache is None:
-            btc_line = f"error: {btc_error}" if btc_error else "pending"
+            reason = f"error:{btc_error}" if btc_error else "pending"
+            btc_line = (
+                f"{btc_symbol} (age=- ttl=- allow_longs=- allow_shorts=- reason={reason})"
+            )
         else:
             btc_ctx, age_sec, ttl_sec = btc_cache
             allow_longs = btc_ctx.get("allow_longs", False)
             allow_shorts = btc_ctx.get("allow_shorts", False)
-            ctx_reason = btc_ctx.get("ctx_reason")
-            last_cycle_ts = float(st.state.get("last_cycle_ts", 0.0))
-            last_refresh_ts = get_btc_context_last_refresh_ts()
-            label = "refreshed" if last_refresh_ts and last_refresh_ts >= last_cycle_ts else "cached"
+            ctx_reason = btc_ctx.get("ctx_reason") or "-"
             btc_line = (
-                f"{label} age={age_sec}s ttl={ttl_sec}s "
-                f"allow_longs={allow_longs} allow_shorts={allow_shorts}"
+                f"{btc_symbol} (age={age_sec}s ttl={ttl_sec}s "
+                f"allow_longs={allow_longs} allow_shorts={allow_shorts} "
+                f"reason={ctx_reason})"
             )
-            if ctx_reason:
-                btc_line = f"{btc_line} reason={ctx_reason}"
-        lines.append(f"• BTC context: {btc_line}")
+        current_symbol = st.current_symbol or None
+        extra_current = extra.get("current")
+
+        def _is_btc_candidate(symbol: str | None) -> bool:
+            return bool(symbol) and "BTC" in symbol
+        btc_candidate_symbol = None
+        market_scan_symbol = None
+        if _is_btc_candidate(current_symbol):
+            btc_candidate_symbol = current_symbol
+        elif current_symbol:
+            market_scan_symbol = current_symbol
+        if btc_candidate_symbol is None and _is_btc_candidate(extra_current):
+            btc_candidate_symbol = extra_current
+        if market_scan_symbol is None and extra_current and not _is_btc_candidate(extra_current):
+            market_scan_symbol = extra_current
+        btc_candidate_symbol = btc_candidate_symbol or "-"
+        market_scan_symbol = market_scan_symbol or "-"
+        pos_display = cur or "-"
+        total_display = universe or "-"
+        lines.append(f"BTC context: {btc_line}")
+        lines.append(f"BTC candidate scan: {btc_candidate_symbol}")
+        lines.append(
+            f"Market scan: {market_scan_symbol} ({pos_display} / {total_display})"
+        )
         cyc = extra.get("cycle")
         if cyc:
             lines.append(f"• Время цикла: ~{cyc}")
