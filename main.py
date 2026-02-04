@@ -1403,6 +1403,7 @@ async def test_ai_signal_all(message: Message):
         "tp1": 104.0,
         "tp2": 108.0,
         "score": 75,
+        "is_test": True,
         "reason": {
             "trend_1d": "up",
             "trend_4h": "up",
@@ -1453,6 +1454,7 @@ async def test_pumpdump_signal_all(message: Message):
         "change_5m": 3.5,
         "volume_mul": 2.1,
         "type": "pump",
+        "is_test": True,
     }
     text = (
         "🧪 ТЕСТОВЫЙ PUMP/DUMP (для проверки системы)\n\n"
@@ -2320,6 +2322,9 @@ async def send_signal_to_all(
     skipped_dedup = 0
     skipped_no_subs = 0
     subscribers = list(list_ai_subscribers())
+    meta = signal_dict.get("meta") if isinstance(signal_dict, dict) else {}
+    is_test = bool(signal_dict.get("is_test") or (isinstance(meta, dict) and meta.get("test")))
+    effective_bypass_cooldown = bypass_cooldown or is_test
     stats = {
         "sent": 0,
         "locked": 0,
@@ -2391,7 +2396,7 @@ async def send_signal_to_all(
             stats["locked"] += 1
             continue
         # индивидуальный cooldown на пользователя
-        if not bypass_cooldown:
+        if not effective_bypass_cooldown:
             if not can_send(chat_id, "ai_signals", dedup_key, COOLDOWN_FREE_SEC):
                 skipped_dedup += 1
                 continue
@@ -2453,6 +2458,7 @@ async def send_signal_to_all(
                 tp2=float(signal_dict.get("tp2", 0.0)),
                 status="OPEN",
                 tg_message_id=int(res.message_id),
+                is_test=is_test,
                 reason_json=reason_json,
                 breakdown_json=breakdown_json,
             )

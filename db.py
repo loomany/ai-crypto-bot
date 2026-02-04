@@ -477,9 +477,12 @@ def insert_signal_event(
     tp2: float,
     status: str,
     tg_message_id: int | None,
+    is_test: bool = False,
     reason_json: str | None = None,
     breakdown_json: str | None = None,
 ) -> int:
+    if is_test:
+        return 0
     conn = get_conn()
     try:
         cur = conn.execute(

@@ -77,6 +77,9 @@ def insert_signal_audit(
     *,
     sent_at: int | None = None,
 ) -> str:
+    meta = signal_dict.get("meta") if isinstance(signal_dict, dict) else {}
+    if signal_dict.get("is_test") or (isinstance(meta, dict) and meta.get("test")):
+        return ""
     signal_id = str(uuid.uuid4())
     entry_from, entry_to = signal_dict.get("entry_zone") or (0.0, 0.0)
     reason = signal_dict.get("reason") if isinstance(signal_dict.get("reason"), dict) else {}
