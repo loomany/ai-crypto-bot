@@ -177,6 +177,256 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PD_OFF_OK": "🚫 Pump/Dump уведомления отключены.",
         "NO_ACCESS": "⛔ Нет доступа",
         "SIGNAL_NOT_FOUND": "Сигнал не найден.",
+        "CONTACT_ADMIN_BLOCK": (
+            "💬 Связь с админом: {admin_contact}\n"
+            "При обращении укажите ваш ID: {user_id}"
+        ),
+        "AI_STATS_TITLE": "📊 Статистика AI-сигналов ({period})",
+        "AI_STATS_DISCLAIMER": "ℹ️ Это статистика отработки сценариев по рынку, не гарантия прибыли.",
+        "AI_STATS_NO_COMPLETED": "Нет завершенных сигналов за период.",
+        "AI_STATS_SIGNALS_COUNT": "Сигналов: {total}",
+        "AI_STATS_SUMMARY": "TP1+: {tp1} | TP2: {tp2} | SL: {sl} | Exp: {exp}",
+        "AI_STATS_WINRATE": "Winrate (TP1+): {winrate:.1f}%",
+        "AI_STATS_SCORE_LABEL": "Score:",
+        "AI_STATS_BUCKET_LINE": "{label}:  {total} (TP1+: {winrate:.0f}%)",
+        "HISTORY_TITLE": "📊 История сигналов ({period})",
+        "HISTORY_SUMMARY": "✅ Прошло: {passed} | ❌ Не прошло: {failed}",
+        "HISTORY_STATS_TITLE": "📊 Статистика ({period}) — по Score",
+        "HISTORY_SCORE_BUCKET_LINE": "{label}: ✅ {passed} / ❌ {failed}  ({percent}%)",
+        "HISTORY_NO_SIGNALS": "Нет сигналов за период.",
+        "STATUS_OPEN": "Открыт",
+        "STATUS_NO_FILL": "Нет входа",
+        "STATUS_AMBIGUOUS": "Спорно",
+        "ARCHIVE_DETAIL_LIFETIME": "⏱ Время жизни сценария: {hours} часов",
+        "ARCHIVE_DETAIL_REASON_HEADER": "🧠 Почему выбран сигнал (Score {score}):",
+        "NAV_PREV": "⬅️ Назад",
+        "NAV_NEXT": "Вперёд ➡️",
+        "NAV_BACK": "⬅️ Назад",
+        "PAYMENT_COPY_ADDRESS": "📋 Адрес для оплаты (TRX):\n{wallet}",
+        "RECEIPT_REQUEST_TEXT": (
+            "📎 Отправьте сюда чек (скрин/фото) одним сообщением.\n"
+            "Я автоматически прикреплю ваш ID и передам админу."
+        ),
+        "RECEIPT_SENT_CONFIRM": "✅ Чек отправлен админу. Ожидайте активацию.",
+        "USER_LIST_EMPTY": "Пользователей пока нет.",
+        "USER_LIST_HEADER": "👥 Пользователи (последние 50):",
+        "USER_CARD_TITLE": "👤 Карточка пользователя",
+        "USER_CARD_STATUS": "Статус: {status}",
+        "USER_CARD_SUBSCRIPTION": "Подписка: {subscription}",
+        "USER_CARD_AI_LEFT": "AI осталось: {left}/{limit}",
+        "USER_CARD_PD_LEFT": "Pump/Dump осталось: {left}/{limit}",
+        "USER_CARD_ACTIVE_UNTIL": "активна до {date}",
+        "USER_CARD_SUB_NONE": "нет",
+        "USER_CARD_STARTED_AT": "started_at: {date}",
+        "USER_CARD_LAST_SEEN": "last_seen: {date}",
+        "USER_BTN_UNLOCK": "🔓 Разблокировать",
+        "USER_BTN_LOCK": "🔒 Заблокировать",
+        "USER_BTN_DELETE": "🗑 Удалить",
+        "USER_DELETE_CONFIRM": (
+            "⚠️ Удалить пользователя {user_id}?\n\n"
+            "Это полностью удалит его из базы (включая лимиты/статусы)."
+        ),
+        "USER_DELETE_CONFIRM_YES": "✅ Да, удалить",
+        "USER_DELETE_CONFIRM_NO": "❌ Отмена",
+        "USER_DELETED_NOTICE": "Ваш аккаунт удалён администратором.",
+        "USER_DELETED_PREFIX": "✅ Пользователь удалён: {user_id}",
+        "USER_DELETED_ALERT": "✅ Пользователь удалён: {user_id}",
+        "USER_LOCKED_NOTICE": (
+            "⛔ Подписка приостановлена\n\n"
+            "Доступ к сигналам временно отключён администратором.\n"
+            "Для связи: {admin_contact}\n"
+            "Ваш ID: {user_id}"
+        ),
+        "USER_UNLOCKED_NOTICE": "Подписка активирована на 30 дней",
+        "TEST_NO_SUBSCRIBERS": (
+            "⚠️ Подписчиков нет. Включи уведомления на тест-аккаунте и повтори."
+        ),
+        "TEST_AI_PREFIX": (
+            "🧪 ТЕСТОВЫЙ AI-СИГНАЛ (для проверки системы)\n\n"
+            "⚠️ Это тест. Если лимит 0 — вместо текста должен прийти paywall.\n\n"
+        ),
+        "TEST_AI_DONE": (
+            "AI тест\n"
+            "✅ Тест AI завершён: sent={sent}, locked={locked}, "
+            "paywall={paywall}, errors={errors} (subscribers={subscribers})"
+        ),
+        "TEST_PD_PREFIX": "🧪 ТЕСТОВЫЙ PUMP/DUMP (для проверки системы)\n\n",
+        "TEST_PD_WARNING": "⚠️ Это тест. Если лимит 0 — вместо текста должен прийти paywall.",
+        "TEST_PD_DONE": (
+            "Pump/Dump тест\n"
+            "✅ Тест Pump/Dump завершён: sent={sent}, locked={locked}, "
+            "paywall={paywall}, errors={errors} (subscribers={subscribers})"
+        ),
+        "TEST_NOTIFY_TEXT": "🧪 Тестовое уведомление: доставка работает.",
+        "TEST_NOTIFY_ERROR": "❌ Ошибка: {error}",
+        "PURGE_TESTS_DONE": "✅ Удалено тестовых сигналов: {removed}",
+        "CMD_USAGE_LOCK": "Использование: /lock <id>",
+        "CMD_USAGE_UNLOCK": "Использование: /unlock <id>",
+        "CMD_USAGE_DELETE": "Использование: /delete <id>",
+        "CMD_LOCK_OK": "✅ user_locked=1 для {user_id}",
+        "CMD_UNLOCK_OK": "✅ user_locked=0 для {user_id}",
+        "CMD_DELETE_OK": "✅ пользователь {user_id} удалён",
+        "ADMIN_STATS_TITLE": "📊 Статистика сигналов (30d)",
+        "ADMIN_STATS_TOTAL": "• Всего: {total}",
+        "ADMIN_STATS_CLOSED": "• Закрыто: {closed}",
+        "ADMIN_STATS_FILLED_RATE": "• Filled rate: {rate:.1f}% ({filled} из {total})",
+        "ADMIN_STATS_WINRATE": "• Winrate (filled): {winrate:.1f}%",
+        "ADMIN_STATS_PROFIT_FACTOR": "• Profit factor: {profit_factor}",
+        "ADMIN_STATS_AVG_R": "• Avg R: {avg_r:.2f}",
+        "ADMIN_STATS_MEDIAN_R": "• Median R: {median_r:.2f}",
+        "ADMIN_STATS_STREAK": "• Streak: {streak}",
+        "ADMIN_STATS_LAST10": "Последние 10 сигналов:",
+        "ADMIN_STATS_NO_DATA": "• Нет данных",
+        "ADMIN_STATS_ROW": "• {symbol} {direction} → {outcome} ({pnl})",
+        "STATUS_HUMAN_SECONDS": "{seconds} сек",
+        "STATUS_HUMAN_MINUTES": "{minutes} мин",
+        "STATUS_HUMAN_HOURS": "{hours} ч",
+        "STATUS_AGO_SECONDS": "{seconds} сек назад",
+        "STATUS_AGO_MINUTES": "{minutes} мин назад",
+        "STATUS_AGO_HOURS": "{hours} ч назад",
+        "SCENARIO_TREND_BULLISH": "бычий",
+        "SCENARIO_TREND_BEARISH": "медвежий",
+        "SCENARIO_TREND_FLAT": "флет",
+        "SCENARIO_TREND_NEUTRAL": "нейтральный",
+        "SCENARIO_RSI_OVERBOUGHT": "перекуплен",
+        "SCENARIO_RSI_OVERSOLD": "перепродан",
+        "SCENARIO_RSI_NEUTRAL": "нейтр",
+        "SCENARIO_RSI_COMFORT": "комфортная зона",
+        "SCENARIO_RSI_OVERSOLD_ZONE": "зона перепроданности",
+        "SCENARIO_RSI_OVERBOUGHT_ZONE": "зона перекупленности",
+        "SCENARIO_POSSIBLE_LINE": "{emoji} Возможный {scenario}",
+        "SCENARIO_TIMEFRAME_LINE": "⏱ Таймфрейм сценария: {timeframe} | Вход: 5–15m",
+        "SCENARIO_LIFETIME_LINE": "⏱ Время жизни сценария: {hours} часов",
+        "SCENARIO_POI_HEADER": "Зона интереса (POI):",
+        "SCENARIO_CONDITIONS_HEADER": "Условия реализации:",
+        "SCENARIO_VALID_ABOVE": "• сценарий актуален, пока цена удерживается выше зоны",
+        "SCENARIO_VALID_BELOW": "• сценарий актуален, пока цена удерживается ниже зоны",
+        "SCENARIO_CONFIRMATION_LINE": "• вход рассматривается только после подтверждения на 5–15m",
+        "SCENARIO_CONFIRM_HEADER": "🔎 Подтверждение на 5–15m:",
+        "SCENARIO_CONFIRM_CLOSE": (
+            "• закрытие свечи по направлению (выше зоны для LONG / ниже для SHORT)"
+        ),
+        "SCENARIO_CONFIRM_HOLD": "• цена удерживается вне зоны без быстрого возврата",
+        "SCENARIO_INVALIDATION_HEADER": "Отмена сценария:",
+        "SCENARIO_INVALIDATION_LINE": "• если 1H свеча закроется {condition} {level}",
+        "SCENARIO_TARGETS_HEADER": "Потенциальные цели:",
+        "SCENARIO_CONTEXT_HEADER": "Краткий контекст:",
+        "SCENARIO_CONTEXT_TREND": "• Тренд 1D / 4H: {trend_1d} / {trend_4h}",
+        "SCENARIO_CONTEXT_RSI": "• RSI 1H: {rsi} ({zone})",
+        "SCENARIO_CONTEXT_VOLUME": "• Объём: {volume}x к среднему",
+        "SCENARIO_CONTEXT_RR": "• RR ≈ 1 : {rr}",
+        "SCENARIO_SCORE_LINE": "🧠 Score: {score} / 100",
+        "SCENARIO_MARKET_MODE_LINE": (
+            "🧭 Market Mode: {mode} (bias {bias}, BTC {btc_change:+.2f}%/6h, ATR1H {btc_atr:.1f}%)"
+        ),
+        "SCENARIO_BREAKDOWN_HEADER": "🧩 Детали Score (сумма баллов):",
+        "SCENARIO_BREAKDOWN_TOTAL": "= Итоговая оценка: {score}",
+        "SCENARIO_DISCLAIMER_1": (
+            "ℹ️ Score — внутренняя оценка качества сценария, основанная на рыночных факторах и условиях модели."
+        ),
+        "SCENARIO_DISCLAIMER_2": "ℹ️ Бот ищет сетапы, не гарантирует прибыль.",
+        "SCENARIO_DISCLAIMER_3": "ℹ️ Сценарий требует подтверждения перед входом.",
+        "SCENARIO_TP_NEEDS_REVIEW": "требуют уточнения",
+        "SCENARIO_CONDITION_BELOW": "ниже",
+        "SCENARIO_CONDITION_ABOVE": "выше",
+        "BREAKDOWN_GLOBAL_TREND": "Глобальный тренд (1D)",
+        "BREAKDOWN_LOCAL_TREND": "Локальный тренд (1H)",
+        "BREAKDOWN_NEAR_KEY_LEVEL": "Реакция на ключевую зону (POI)",
+        "BREAKDOWN_LIQUIDITY_SWEEP": "Снос ликвидности",
+        "BREAKDOWN_VOLUME_CLIMAX": "Объём относительно среднего",
+        "BREAKDOWN_RSI_DIVERGENCE": "RSI-дивергенция",
+        "BREAKDOWN_ATR_OK": "Волатильность (ATR)",
+        "BREAKDOWN_BB_EXTREME": "Экстремум Bollinger",
+        "BREAKDOWN_MA_TREND_OK": "EMA-согласование",
+        "BREAKDOWN_ORDERFLOW": "Ордерфлоу",
+        "BREAKDOWN_WHALE_ACTIVITY": "Китовая активность",
+        "BREAKDOWN_AI_PATTERN": "AI-паттерны",
+        "BREAKDOWN_MARKET_REGIME": "Рыночный режим",
+        "BREAKDOWN_FALLBACK": "Фактор",
+        "PUMP_HEADER_PUMP": "🚀 Pump/Dump Scanner: резкий импульс",
+        "PUMP_HEADER_DUMP": "📉 Pump/Dump Scanner: резкий импульс",
+        "PUMP_COIN_LINE": "Монета: {symbol}",
+        "PUMP_PRICE_LINE": "Текущая цена: {price}",
+        "PUMP_MOVE_HEADER": "Движение:",
+        "PUMP_MOVE_1M": "• за 1 мин: {change}%",
+        "PUMP_MOVE_5M": "• за 5 мин: {change}%",
+        "PUMP_VOLUME_LINE": "• объём: {volume:.2f}× от среднего",
+        "PUMP_NOTE_1": "ℹ️ Это уведомление о резком импульсе цены и объёма.",
+        "PUMP_NOTE_2": "Используется как сигнал внимания, а не готовая торговая идея.",
+        "PUMP_RISK_1": "⚠️ Резкие импульсы высокорисковые.",
+        "PUMP_RISK_2": "Бот не даёт точек входа и не управляет рисками.",
+        "PUMP_SOURCE": "Источник данных: Binance",
+        "ADMIN_NEW_USER": (
+            "🆕 Новый пользователь\n"
+            "ID: {user_id}\n"
+            "Username: {username}\n"
+            "Имя: {full_name}\n"
+            "Язык: {language}"
+        ),
+        "DIAG_TITLE": "🛠 Диагностика бота (админ)",
+        "DIAG_MARKET_HUB_TITLE": "🔧 MarketHub (базовый модуль рынка)",
+        "DIAG_STATUS_WORKING": "работает",
+        "DIAG_STATUS_NOT_STARTED": "не запускался",
+        "DIAG_MODULE_STATUS": "• Статус: {status}",
+        "DIAG_LAST_TICK": "• Последний тик: {tick}",
+        "DIAG_ERRORS": "• Ошибки: {error}",
+        "DIAG_ACTIVE_SYMBOLS": "• Активных пар в MarketHub (кеш свечей): {count}",
+        "DIAG_DB_TITLE": "🗄 База данных",
+        "DIAG_DB_PATH": "• Путь: {path}",
+        "DIAG_DB_MISSING": "• Файл не найден",
+        "DIAG_DB_SIZE": "• Размер: {size} байт",
+        "DIAG_DB_MODIFIED": "• Изменена: {mtime}",
+        "DIAG_MODULE_LAST_CYCLE": "• Последний цикл: {tick}",
+        "DIAG_MODULE_LAST_OK": "• Последний успешный запрос: {tick}",
+        "DIAG_MODULE_ERROR": "• Ошибка: {error}",
+        "DIAG_MODULE_WARNING": "• Предупреждение: {warning}",
+        "DIAG_USERS_HEADER": "Пользователи",
+        "DIAG_SUBSCRIBERS_LINE": "• Подписчиков: {count}",
+        "DIAG_MARKET_SCAN_HEADER": "Сканирование рынка",
+        "DIAG_MARKET_UNIVERSE": "• Монет в рынке: {count}",
+        "DIAG_MARKET_CHUNK": "• Монет за цикл: {count}",
+        "DIAG_MARKET_POSITION_TOTAL": "• Текущая позиция: {current} / {total}",
+        "DIAG_MARKET_POSITION": "• Текущая позиция: {current}",
+        "DIAG_CYCLE_TIME": "• Время цикла: ~{cycle}",
+        "DIAG_PRESCORE_HEADER": "Pre-score",
+        "DIAG_PRESCORE_THRESHOLD": "• threshold: {threshold}",
+        "DIAG_PRESCORE_FAILED": "• failed examples: {samples}",
+        "DIAG_PRESCORE_PASSED": "• passed examples: {samples}",
+        "DIAG_REQUESTS_HEADER": "Запросы к Binance",
+        "DIAG_REQUESTS_MADE": "• Запросов сделано: {count}",
+        "DIAG_CANDLES": "• Свечей получено: {count}",
+        "DIAG_CACHE": "• Кеш свечей: hit={hits} miss={misses}",
+        "DIAG_INFLIGHT": "• In-flight ожиданий свечей: {count}",
+        "DIAG_TICKER_REQ": "• Ticker/24h запросов: {count}",
+        "DIAG_DEEP_SCAN": "• Deep-scan за цикл: {count}",
+        "DIAG_PUMP_HEADER": "Поиск пампов / дампов",
+        "DIAG_PROGRESS": "• Прогресс: {progress}",
+        "DIAG_CHECKED": "• Проверено: {count}",
+        "DIAG_FOUND": "• Найдено сигналов: {count}",
+        "DIAG_SENT": "• Отправлено сигналов: {count}",
+        "DIAG_CURRENT_COIN": "• Текущая монета: {symbol}",
+        "DIAG_ROTATION": "• Rotation: {flag} (N={n}){cursor}",
+        "DIAG_ROTATION_SLICE": "• Rotation last slice size: {size}",
+        "DIAG_UNIVERSE_LINE": (
+            "• Universe size={universe} rotation_added={added} "
+            "final_candidates={final} scanned={scanned}"
+        ),
+        "DIAG_BINANCE_LAST_SUCCESS": "• Последний успешный ответ: {ago}",
+        "DIAG_BINANCE_LAST_SUCCESS_NO_DATA": "• Последний успешный ответ: нет данных",
+        "DIAG_BINANCE_TIMEOUTS": "• Таймауты подряд: {count}",
+        "DIAG_BINANCE_STAGE": "• Текущий этап: {stage}",
+        "DIAG_STABILITY_HEADER": "Стабильность",
+        "DIAG_SESSION_RESTARTS": "• Перезапусков сессии: {count}",
+        "DIAG_FAILS_TOP": "Причины (топ):",
+        "ADMIN_RECEIPT_TEXT": (
+            "🧾 Чек на подписку\n\n"
+            "User ID: {user_id}\n"
+            "Username: {username}\n"
+            "Дата/время: {timestamp}\n\n"
+            "Тариф: ${price} / {days} дней\n"
+            "Оплата: TRX (TRON)\n"
+            "Адрес: {wallet}"
+        ),
     },
     "en": {
         "START_TEXT": (
@@ -351,6 +601,256 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PD_OFF_OK": "🚫 Pump/Dump notifications disabled.",
         "NO_ACCESS": "⛔ Access denied",
         "SIGNAL_NOT_FOUND": "Signal not found.",
+        "CONTACT_ADMIN_BLOCK": (
+            "💬 Contact admin: {admin_contact}\n"
+            "When messaging, include your ID: {user_id}"
+        ),
+        "AI_STATS_TITLE": "📊 AI signal stats ({period})",
+        "AI_STATS_DISCLAIMER": "ℹ️ This is scenario performance statistics, not a profit guarantee.",
+        "AI_STATS_NO_COMPLETED": "No completed signals for the period.",
+        "AI_STATS_SIGNALS_COUNT": "Signals: {total}",
+        "AI_STATS_SUMMARY": "TP1+: {tp1} | TP2: {tp2} | SL: {sl} | Exp: {exp}",
+        "AI_STATS_WINRATE": "Winrate (TP1+): {winrate:.1f}%",
+        "AI_STATS_SCORE_LABEL": "Score:",
+        "AI_STATS_BUCKET_LINE": "{label}:  {total} (TP1+: {winrate:.0f}%)",
+        "HISTORY_TITLE": "📊 Signal history ({period})",
+        "HISTORY_SUMMARY": "✅ Success: {passed} | ❌ Fail: {failed}",
+        "HISTORY_STATS_TITLE": "📊 Stats ({period}) — by Score",
+        "HISTORY_SCORE_BUCKET_LINE": "{label}: ✅ {passed} / ❌ {failed}  ({percent}%)",
+        "HISTORY_NO_SIGNALS": "No signals for the period.",
+        "STATUS_OPEN": "Open",
+        "STATUS_NO_FILL": "No entry",
+        "STATUS_AMBIGUOUS": "Ambiguous",
+        "ARCHIVE_DETAIL_LIFETIME": "⏱ Scenario lifetime: {hours} hours",
+        "ARCHIVE_DETAIL_REASON_HEADER": "🧠 Why this signal was chosen (Score {score}):",
+        "NAV_PREV": "⬅️ Prev",
+        "NAV_NEXT": "Next ➡️",
+        "NAV_BACK": "⬅️ Back",
+        "PAYMENT_COPY_ADDRESS": "📋 Payment address (TRX):\n{wallet}",
+        "RECEIPT_REQUEST_TEXT": (
+            "📎 Send the receipt here (screenshot/photo) in one message.\n"
+            "I will attach your ID and forward it to the admin."
+        ),
+        "RECEIPT_SENT_CONFIRM": "✅ Receipt sent to admin. Please wait for activation.",
+        "USER_LIST_EMPTY": "No users yet.",
+        "USER_LIST_HEADER": "👥 Users (last 50):",
+        "USER_CARD_TITLE": "👤 User card",
+        "USER_CARD_STATUS": "Status: {status}",
+        "USER_CARD_SUBSCRIPTION": "Subscription: {subscription}",
+        "USER_CARD_AI_LEFT": "AI left: {left}/{limit}",
+        "USER_CARD_PD_LEFT": "Pump/Dump left: {left}/{limit}",
+        "USER_CARD_ACTIVE_UNTIL": "active until {date}",
+        "USER_CARD_SUB_NONE": "none",
+        "USER_CARD_STARTED_AT": "started_at: {date}",
+        "USER_CARD_LAST_SEEN": "last_seen: {date}",
+        "USER_BTN_UNLOCK": "🔓 Unblock",
+        "USER_BTN_LOCK": "🔒 Block",
+        "USER_BTN_DELETE": "🗑 Delete",
+        "USER_DELETE_CONFIRM": (
+            "⚠️ Delete user {user_id}?\n\n"
+            "This will remove them from the database (including limits/statuses)."
+        ),
+        "USER_DELETE_CONFIRM_YES": "✅ Yes, delete",
+        "USER_DELETE_CONFIRM_NO": "❌ Cancel",
+        "USER_DELETED_NOTICE": "Your account was deleted by an administrator.",
+        "USER_DELETED_PREFIX": "✅ User deleted: {user_id}",
+        "USER_DELETED_ALERT": "✅ User deleted: {user_id}",
+        "USER_LOCKED_NOTICE": (
+            "⛔ Subscription paused\n\n"
+            "Access to signals has been temporarily disabled by the administrator.\n"
+            "Contact: {admin_contact}\n"
+            "Your ID: {user_id}"
+        ),
+        "USER_UNLOCKED_NOTICE": "Subscription activated for 30 days",
+        "TEST_NO_SUBSCRIBERS": (
+            "⚠️ No subscribers. Enable notifications on a test account and try again."
+        ),
+        "TEST_AI_PREFIX": (
+            "🧪 TEST AI SIGNAL (system check)\n\n"
+            "⚠️ This is a test. If the limit is 0, a paywall should appear instead of this text.\n\n"
+        ),
+        "TEST_AI_DONE": (
+            "AI test\n"
+            "✅ AI test done: sent={sent}, locked={locked}, "
+            "paywall={paywall}, errors={errors} (subscribers={subscribers})"
+        ),
+        "TEST_PD_PREFIX": "🧪 TEST PUMP/DUMP (system check)\n\n",
+        "TEST_PD_WARNING": "⚠️ This is a test. If the limit is 0, a paywall should appear instead.",
+        "TEST_PD_DONE": (
+            "Pump/Dump test\n"
+            "✅ Pump/Dump test done: sent={sent}, locked={locked}, "
+            "paywall={paywall}, errors={errors} (subscribers={subscribers})"
+        ),
+        "TEST_NOTIFY_TEXT": "🧪 Test notification: delivery works.",
+        "TEST_NOTIFY_ERROR": "❌ Error: {error}",
+        "PURGE_TESTS_DONE": "✅ Test signals removed: {removed}",
+        "CMD_USAGE_LOCK": "Usage: /lock <id>",
+        "CMD_USAGE_UNLOCK": "Usage: /unlock <id>",
+        "CMD_USAGE_DELETE": "Usage: /delete <id>",
+        "CMD_LOCK_OK": "✅ user_locked=1 for {user_id}",
+        "CMD_UNLOCK_OK": "✅ user_locked=0 for {user_id}",
+        "CMD_DELETE_OK": "✅ user {user_id} deleted",
+        "ADMIN_STATS_TITLE": "📊 Signal stats (30d)",
+        "ADMIN_STATS_TOTAL": "• Total: {total}",
+        "ADMIN_STATS_CLOSED": "• Closed: {closed}",
+        "ADMIN_STATS_FILLED_RATE": "• Filled rate: {rate:.1f}% ({filled} of {total})",
+        "ADMIN_STATS_WINRATE": "• Winrate (filled): {winrate:.1f}%",
+        "ADMIN_STATS_PROFIT_FACTOR": "• Profit factor: {profit_factor}",
+        "ADMIN_STATS_AVG_R": "• Avg R: {avg_r:.2f}",
+        "ADMIN_STATS_MEDIAN_R": "• Median R: {median_r:.2f}",
+        "ADMIN_STATS_STREAK": "• Streak: {streak}",
+        "ADMIN_STATS_LAST10": "Last 10 signals:",
+        "ADMIN_STATS_NO_DATA": "• No data",
+        "ADMIN_STATS_ROW": "• {symbol} {direction} → {outcome} ({pnl})",
+        "STATUS_HUMAN_SECONDS": "{seconds} sec",
+        "STATUS_HUMAN_MINUTES": "{minutes} min",
+        "STATUS_HUMAN_HOURS": "{hours} h",
+        "STATUS_AGO_SECONDS": "{seconds} sec ago",
+        "STATUS_AGO_MINUTES": "{minutes} min ago",
+        "STATUS_AGO_HOURS": "{hours} h ago",
+        "SCENARIO_TREND_BULLISH": "bullish",
+        "SCENARIO_TREND_BEARISH": "bearish",
+        "SCENARIO_TREND_FLAT": "flat",
+        "SCENARIO_TREND_NEUTRAL": "neutral",
+        "SCENARIO_RSI_OVERBOUGHT": "overbought",
+        "SCENARIO_RSI_OVERSOLD": "oversold",
+        "SCENARIO_RSI_NEUTRAL": "neutral",
+        "SCENARIO_RSI_COMFORT": "comfort zone",
+        "SCENARIO_RSI_OVERSOLD_ZONE": "oversold zone",
+        "SCENARIO_RSI_OVERBOUGHT_ZONE": "overbought zone",
+        "SCENARIO_POSSIBLE_LINE": "{emoji} Potential {scenario}",
+        "SCENARIO_TIMEFRAME_LINE": "⏱ Scenario timeframe: {timeframe} | Entry: 5–15m",
+        "SCENARIO_LIFETIME_LINE": "⏱ Scenario lifetime: {hours} hours",
+        "SCENARIO_POI_HEADER": "Point of interest (POI):",
+        "SCENARIO_CONDITIONS_HEADER": "Execution conditions:",
+        "SCENARIO_VALID_ABOVE": "• the scenario is valid while price holds above the zone",
+        "SCENARIO_VALID_BELOW": "• the scenario is valid while price holds below the zone",
+        "SCENARIO_CONFIRMATION_LINE": "• entry is considered only after confirmation on 5–15m",
+        "SCENARIO_CONFIRM_HEADER": "🔎 Confirmation on 5–15m:",
+        "SCENARIO_CONFIRM_CLOSE": (
+            "• candle closes in direction (above the zone for LONG / below for SHORT)"
+        ),
+        "SCENARIO_CONFIRM_HOLD": "• price holds outside the zone without a quick return",
+        "SCENARIO_INVALIDATION_HEADER": "Scenario invalidation:",
+        "SCENARIO_INVALIDATION_LINE": "• if a 1H candle closes {condition} {level}",
+        "SCENARIO_TARGETS_HEADER": "Potential targets:",
+        "SCENARIO_CONTEXT_HEADER": "Brief context:",
+        "SCENARIO_CONTEXT_TREND": "• Trend 1D / 4H: {trend_1d} / {trend_4h}",
+        "SCENARIO_CONTEXT_RSI": "• RSI 1H: {rsi} ({zone})",
+        "SCENARIO_CONTEXT_VOLUME": "• Volume: {volume}x vs average",
+        "SCENARIO_CONTEXT_RR": "• RR ≈ 1 : {rr}",
+        "SCENARIO_SCORE_LINE": "🧠 Score: {score} / 100",
+        "SCENARIO_MARKET_MODE_LINE": (
+            "🧭 Market Mode: {mode} (bias {bias}, BTC {btc_change:+.2f}%/6h, ATR1H {btc_atr:.1f}%)"
+        ),
+        "SCENARIO_BREAKDOWN_HEADER": "🧩 Score details (sum of points):",
+        "SCENARIO_BREAKDOWN_TOTAL": "= Final score: {score}",
+        "SCENARIO_DISCLAIMER_1": (
+            "ℹ️ Score is an internal quality rating based on market factors and model conditions."
+        ),
+        "SCENARIO_DISCLAIMER_2": "ℹ️ The bot finds setups and does not guarantee profit.",
+        "SCENARIO_DISCLAIMER_3": "ℹ️ The scenario requires confirmation before entry.",
+        "SCENARIO_TP_NEEDS_REVIEW": "needs clarification",
+        "SCENARIO_CONDITION_BELOW": "below",
+        "SCENARIO_CONDITION_ABOVE": "above",
+        "BREAKDOWN_GLOBAL_TREND": "Global trend (1D)",
+        "BREAKDOWN_LOCAL_TREND": "Local trend (1H)",
+        "BREAKDOWN_NEAR_KEY_LEVEL": "Reaction to key zone (POI)",
+        "BREAKDOWN_LIQUIDITY_SWEEP": "Liquidity sweep",
+        "BREAKDOWN_VOLUME_CLIMAX": "Volume vs average",
+        "BREAKDOWN_RSI_DIVERGENCE": "RSI divergence",
+        "BREAKDOWN_ATR_OK": "Volatility (ATR)",
+        "BREAKDOWN_BB_EXTREME": "Bollinger extreme",
+        "BREAKDOWN_MA_TREND_OK": "EMA alignment",
+        "BREAKDOWN_ORDERFLOW": "Order flow",
+        "BREAKDOWN_WHALE_ACTIVITY": "Whale activity",
+        "BREAKDOWN_AI_PATTERN": "AI patterns",
+        "BREAKDOWN_MARKET_REGIME": "Market regime",
+        "BREAKDOWN_FALLBACK": "Factor",
+        "PUMP_HEADER_PUMP": "🚀 Pump/Dump Scanner: sharp impulse",
+        "PUMP_HEADER_DUMP": "📉 Pump/Dump Scanner: sharp impulse",
+        "PUMP_COIN_LINE": "Coin: {symbol}",
+        "PUMP_PRICE_LINE": "Current price: {price}",
+        "PUMP_MOVE_HEADER": "Move:",
+        "PUMP_MOVE_1M": "• 1m: {change}%",
+        "PUMP_MOVE_5M": "• 5m: {change}%",
+        "PUMP_VOLUME_LINE": "• volume: {volume:.2f}× vs average",
+        "PUMP_NOTE_1": "ℹ️ This is an alert about a sharp price/volume impulse.",
+        "PUMP_NOTE_2": "It is a heads-up signal, not a full trading idea.",
+        "PUMP_RISK_1": "⚠️ Sharp impulses are high risk.",
+        "PUMP_RISK_2": "The bot does not provide entries or manage risk.",
+        "PUMP_SOURCE": "Data source: Binance",
+        "ADMIN_NEW_USER": (
+            "🆕 New user\n"
+            "ID: {user_id}\n"
+            "Username: {username}\n"
+            "Name: {full_name}\n"
+            "Language: {language}"
+        ),
+        "DIAG_TITLE": "🛠 Bot diagnostics (admin)",
+        "DIAG_MARKET_HUB_TITLE": "🔧 MarketHub (base market module)",
+        "DIAG_STATUS_WORKING": "running",
+        "DIAG_STATUS_NOT_STARTED": "not started",
+        "DIAG_MODULE_STATUS": "• Status: {status}",
+        "DIAG_LAST_TICK": "• Last tick: {tick}",
+        "DIAG_ERRORS": "• Errors: {error}",
+        "DIAG_ACTIVE_SYMBOLS": "• Active pairs in MarketHub (candle cache): {count}",
+        "DIAG_DB_TITLE": "🗄 Database",
+        "DIAG_DB_PATH": "• Path: {path}",
+        "DIAG_DB_MISSING": "• File not found",
+        "DIAG_DB_SIZE": "• Size: {size} bytes",
+        "DIAG_DB_MODIFIED": "• Modified: {mtime}",
+        "DIAG_MODULE_LAST_CYCLE": "• Last cycle: {tick}",
+        "DIAG_MODULE_LAST_OK": "• Last successful request: {tick}",
+        "DIAG_MODULE_ERROR": "• Error: {error}",
+        "DIAG_MODULE_WARNING": "• Warning: {warning}",
+        "DIAG_USERS_HEADER": "Users",
+        "DIAG_SUBSCRIBERS_LINE": "• Subscribers: {count}",
+        "DIAG_MARKET_SCAN_HEADER": "Market scan",
+        "DIAG_MARKET_UNIVERSE": "• Coins in market: {count}",
+        "DIAG_MARKET_CHUNK": "• Coins per cycle: {count}",
+        "DIAG_MARKET_POSITION_TOTAL": "• Current position: {current} / {total}",
+        "DIAG_MARKET_POSITION": "• Current position: {current}",
+        "DIAG_CYCLE_TIME": "• Cycle time: ~{cycle}",
+        "DIAG_PRESCORE_HEADER": "Pre-score",
+        "DIAG_PRESCORE_THRESHOLD": "• threshold: {threshold}",
+        "DIAG_PRESCORE_FAILED": "• failed examples: {samples}",
+        "DIAG_PRESCORE_PASSED": "• passed examples: {samples}",
+        "DIAG_REQUESTS_HEADER": "Binance requests",
+        "DIAG_REQUESTS_MADE": "• Requests made: {count}",
+        "DIAG_CANDLES": "• Candles received: {count}",
+        "DIAG_CACHE": "• Candle cache: hit={hits} miss={misses}",
+        "DIAG_INFLIGHT": "• In-flight candle waits: {count}",
+        "DIAG_TICKER_REQ": "• Ticker/24h requests: {count}",
+        "DIAG_DEEP_SCAN": "• Deep-scan per cycle: {count}",
+        "DIAG_PUMP_HEADER": "Pump/dump scan",
+        "DIAG_PROGRESS": "• Progress: {progress}",
+        "DIAG_CHECKED": "• Checked: {count}",
+        "DIAG_FOUND": "• Signals found: {count}",
+        "DIAG_SENT": "• Signals sent: {count}",
+        "DIAG_CURRENT_COIN": "• Current coin: {symbol}",
+        "DIAG_ROTATION": "• Rotation: {flag} (N={n}){cursor}",
+        "DIAG_ROTATION_SLICE": "• Rotation last slice size: {size}",
+        "DIAG_UNIVERSE_LINE": (
+            "• Universe size={universe} rotation_added={added} "
+            "final_candidates={final} scanned={scanned}"
+        ),
+        "DIAG_BINANCE_LAST_SUCCESS": "• Last successful response: {ago}",
+        "DIAG_BINANCE_LAST_SUCCESS_NO_DATA": "• Last successful response: no data",
+        "DIAG_BINANCE_TIMEOUTS": "• Consecutive timeouts: {count}",
+        "DIAG_BINANCE_STAGE": "• Current stage: {stage}",
+        "DIAG_STABILITY_HEADER": "Stability",
+        "DIAG_SESSION_RESTARTS": "• Session restarts: {count}",
+        "DIAG_FAILS_TOP": "Top failure reasons:",
+        "ADMIN_RECEIPT_TEXT": (
+            "🧾 Subscription receipt\n\n"
+            "User ID: {user_id}\n"
+            "Username: {username}\n"
+            "Date/time: {timestamp}\n\n"
+            "Plan: ${price} / {days} days\n"
+            "Payment: TRX (TRON)\n"
+            "Address: {wallet}"
+        ),
     },
 }
 

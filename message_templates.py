@@ -2,21 +2,23 @@ from __future__ import annotations
 
 from typing import Optional
 
+import i18n
 
-def _trend_to_text(value: Optional[str]) -> str:
+
+def _trend_to_text(value: Optional[str], lang: str) -> str:
     if value in ("up", "bullish"):
-        return "бычий"
+        return i18n.t(lang, "SCENARIO_TREND_BULLISH")
     if value in ("down", "bearish"):
-        return "медвежий"
-    return "флет"
+        return i18n.t(lang, "SCENARIO_TREND_BEARISH")
+    return i18n.t(lang, "SCENARIO_TREND_FLAT")
 
 
-def _rsi_zone(value: float) -> str:
+def _rsi_zone(value: float, lang: str) -> str:
     if value >= 70:
-        return "перекуплен"
+        return i18n.t(lang, "SCENARIO_RSI_OVERBOUGHT")
     if value <= 30:
-        return "перепродан"
-    return "нейтр"
+        return i18n.t(lang, "SCENARIO_RSI_OVERSOLD")
+    return i18n.t(lang, "SCENARIO_RSI_NEUTRAL")
 
 
 def _format_price(value: float, precision: int) -> str:
@@ -29,6 +31,7 @@ def _format_pct(value: float) -> str:
 
 def format_scenario_message(
     *,
+    lang: str,
     symbol_text: str,
     side: str,
     timeframe: str,
@@ -49,6 +52,7 @@ def format_scenario_message(
     market_bias: Optional[str] = None,
     btc_change_6h_pct: float = 0.0,
     btc_atr_1h_pct: float = 0.0,
+    lifetime_hours: int = 12,
 ) -> str:
     is_long = side == "LONG"
     emoji = "📈" if is_long else "📉"
@@ -57,8 +61,16 @@ def format_scenario_message(
 
     score = max(0, min(100, int(score)))
 
-    holds_rule = "удерживается выше зоны" if is_long else "удерживается ниже зоны"
-    stop_condition = "ниже" if is_long else "выше"
+    holds_rule = (
+        i18n.t(lang, "SCENARIO_VALID_ABOVE")
+        if is_long
+        else i18n.t(lang, "SCENARIO_VALID_BELOW")
+    )
+    stop_condition = (
+        i18n.t(lang, "SCENARIO_CONDITION_BELOW")
+        if is_long
+        else i18n.t(lang, "SCENARIO_CONDITION_ABOVE")
+    )
     invalid_level = _format_price(sl, price_precision)
 
     tp_candidates = [tp1, tp2]
@@ -71,8 +83,8 @@ def format_scenario_message(
 
     if targets_invalid:
         tp_lines = [
-            "🎯 TP1: требуют уточнения",
-            "🎯 TP2: требуют уточнения",
+            f"🎯 TP1: {i18n.t(lang, 'SCENARIO_TP_NEEDS_REVIEW')}",
+            f"🎯 TP2: {i18n.t(lang, 'SCENARIO_TP_NEEDS_REVIEW')}",
         ]
     else:
         tp1_val, tp2_val = tp_candidates
@@ -85,19 +97,19 @@ def format_scenario_message(
 
     breakdown_items = score_breakdown or []
     label_map = {
-        "global_trend": "Глобальный тренд (1D)",
-        "local_trend": "Локальный тренд (1H)",
-        "near_key_level": "Реакция на ключевую зону (POI)",
-        "liquidity_sweep": "Снос ликвидности",
-        "volume_climax": "Объём относительно среднего",
-        "rsi_divergence": "RSI-дивергенция",
-        "atr_ok": "Волатильность (ATR)",
-        "bb_extreme": "Экстремум Bollinger",
-        "ma_trend_ok": "EMA-согласование",
-        "orderflow": "Ордерфлоу",
-        "whale_activity": "Китовая активность",
-        "ai_pattern": "AI-паттерны",
-        "market_regime": "Рыночный режим",
+        "global_trend": i18n.t(lang, "BREAKDOWN_GLOBAL_TREND"),
+        "local_trend": i18n.t(lang, "BREAKDOWN_LOCAL_TREND"),
+        "near_key_level": i18n.t(lang, "BREAKDOWN_NEAR_KEY_LEVEL"),
+        "liquidity_sweep": i18n.t(lang, "BREAKDOWN_LIQUIDITY_SWEEP"),
+        "volume_climax": i18n.t(lang, "BREAKDOWN_VOLUME_CLIMAX"),
+        "rsi_divergence": i18n.t(lang, "BREAKDOWN_RSI_DIVERGENCE"),
+        "atr_ok": i18n.t(lang, "BREAKDOWN_ATR_OK"),
+        "bb_extreme": i18n.t(lang, "BREAKDOWN_BB_EXTREME"),
+        "ma_trend_ok": i18n.t(lang, "BREAKDOWN_MA_TREND_OK"),
+        "orderflow": i18n.t(lang, "BREAKDOWN_ORDERFLOW"),
+        "whale_activity": i18n.t(lang, "BREAKDOWN_WHALE_ACTIVITY"),
+        "ai_pattern": i18n.t(lang, "BREAKDOWN_AI_PATTERN"),
+        "market_regime": i18n.t(lang, "BREAKDOWN_MARKET_REGIME"),
     }
     breakdown_lines = []
     for item in breakdown_items:
@@ -105,7 +117,7 @@ def format_scenario_message(
         label = item.get("label")
         if key in label_map:
             label = label_map[key]
-        label = label or key or "Фактор"
+        label = label or key or i18n.t(lang, "BREAKDOWN_FALLBACK")
         delta = item.get("points", item.get("delta", 0))
         try:
             delta_value = int(round(float(delta)))
@@ -116,48 +128,64 @@ def format_scenario_message(
 
     lines = [
         symbol_text,
-        f"{emoji} Возможный {scenario_text}",
-        f"⏱ Таймфрейм сценария: {timeframe} | Вход: 5–15m",
+        i18n.t(lang, "SCENARIO_POSSIBLE_LINE", emoji=emoji, scenario=scenario_text),
+        i18n.t(lang, "SCENARIO_TIMEFRAME_LINE", timeframe=timeframe),
+        i18n.t(lang, "SCENARIO_LIFETIME_LINE", hours=lifetime_hours),
         "",
-        "Зона интереса (POI):",
+        i18n.t(lang, "SCENARIO_POI_HEADER"),
         f"• {_format_price(entry_from, price_precision)} – {_format_price(entry_to, price_precision)}",
         "",
-        "Условия реализации:",
-        f"• сценарий актуален, пока цена {holds_rule}",
-        "• вход рассматривается только после подтверждения на 5–15m",
+        i18n.t(lang, "SCENARIO_CONDITIONS_HEADER"),
+        holds_rule,
+        i18n.t(lang, "SCENARIO_CONFIRMATION_LINE"),
         "",
-        "🔎 Подтверждение на 5–15m:",
-        (
-            "• закрытие свечи по направлению (выше зоны для LONG / ниже для SHORT)"
+        i18n.t(lang, "SCENARIO_CONFIRM_HEADER"),
+        i18n.t(lang, "SCENARIO_CONFIRM_CLOSE"),
+        i18n.t(lang, "SCENARIO_CONFIRM_HOLD"),
+        "",
+        i18n.t(lang, "SCENARIO_INVALIDATION_HEADER"),
+        i18n.t(
+            lang,
+            "SCENARIO_INVALIDATION_LINE",
+            condition=stop_condition,
+            level=invalid_level,
         ),
-        "• цена удерживается вне зоны без быстрого возврата",
         "",
-        "Отмена сценария:",
-        f"• если 1H свеча закроется {stop_condition} {invalid_level}",
-        "",
-        "Потенциальные цели:",
+        i18n.t(lang, "SCENARIO_TARGETS_HEADER"),
         *tp_lines,
         "",
-        "Краткий контекст:",
-        f"• Тренд 1D / 4H: {_trend_to_text(trend_1d)} / {_trend_to_text(trend_4h)}",
-        f"• RSI 1H: {rsi_1h:.1f} ({_rsi_zone(rsi_1h)})",
-        f"• Объём: {volume_ratio:.2f}x к среднему",
-        f"• RR ≈ 1 : {rr:.2f}",
+        i18n.t(lang, "SCENARIO_CONTEXT_HEADER"),
+        i18n.t(
+            lang,
+            "SCENARIO_CONTEXT_TREND",
+            trend_1d=_trend_to_text(trend_1d, lang),
+            trend_4h=_trend_to_text(trend_4h, lang),
+        ),
+        i18n.t(
+            lang,
+            "SCENARIO_CONTEXT_RSI",
+            rsi=f"{rsi_1h:.1f}",
+            zone=_rsi_zone(rsi_1h, lang),
+        ),
+        i18n.t(lang, "SCENARIO_CONTEXT_VOLUME", volume=f"{volume_ratio:.2f}"),
+        i18n.t(lang, "SCENARIO_CONTEXT_RR", rr=f"{rr:.2f}"),
         "",
-        f"🧠 Score: {score} / 100",
-        (
-            f"🧭 Market Mode: {market_mode or 'NORMAL'} "
-            f"(bias {market_bias or 'NEUTRAL'}, "
-            f"BTC {btc_change_6h_pct:+.2f}%/6h, "
-            f"ATR1H {btc_atr_1h_pct:.1f}%)"
+        i18n.t(lang, "SCENARIO_SCORE_LINE", score=score),
+        i18n.t(
+            lang,
+            "SCENARIO_MARKET_MODE_LINE",
+            mode=market_mode or "NORMAL",
+            bias=market_bias or "NEUTRAL",
+            btc_change=btc_change_6h_pct,
+            btc_atr=btc_atr_1h_pct,
         ),
         "",
-        "🧩 Детали Score (сумма баллов):",
+        i18n.t(lang, "SCENARIO_BREAKDOWN_HEADER"),
         *breakdown_lines,
-        f"= Итоговая оценка: {score}",
+        i18n.t(lang, "SCENARIO_BREAKDOWN_TOTAL", score=score),
         "",
-        "ℹ️ Score — внутренняя оценка качества сценария, основанная на рыночных факторах и условиях модели.",
-        "ℹ️ Бот ищет сетапы, не гарантирует прибыль.",
-        "ℹ️ Сценарий требует подтверждения перед входом.",
+        i18n.t(lang, "SCENARIO_DISCLAIMER_1"),
+        i18n.t(lang, "SCENARIO_DISCLAIMER_2"),
+        i18n.t(lang, "SCENARIO_DISCLAIMER_3"),
     ]
     return "\n".join(lines)
