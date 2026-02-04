@@ -83,3 +83,34 @@ def stats_inline_kb() -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+def build_about_inline_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить подписку", callback_data="sub_pay")],
+            [InlineKeyboardButton(text="💬 Связь с админом", callback_data="sub_contact")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="about_back")],
+        ]
+    )
+
+
+def build_offer_inline_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять", callback_data="sub_accept")],
+            [InlineKeyboardButton(text="💬 Связь с админом", callback_data="sub_contact")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="about_back")],
+        ]
+    )
+
+
+def build_payment_inline_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Скопировать адрес", callback_data="sub_copy_address")],
+            [InlineKeyboardButton(text="📎 Отправить чек + ID", callback_data="sub_send_receipt")],
+            [InlineKeyboardButton(text="💬 Связь с админом", callback_data="sub_contact")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="sub_pay")],
+        ]
+    )

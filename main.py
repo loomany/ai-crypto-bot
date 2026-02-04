@@ -100,11 +100,14 @@ from signal_audit_worker import signal_audit_worker_loop
 from keyboards import (
     ai_signals_inline_kb,
     build_main_menu_kb,
+    build_about_inline_kb,
+    build_offer_inline_kb,
+    build_payment_inline_kb,
     build_system_menu_kb,
     pumpdump_inline_kb,
     stats_inline_kb,
 )
-from texts import AI_SIGNALS_TEXT, PUMPDUMP_TEXT, START_TEXT
+from texts import AI_SIGNALS_TEXT, OFFER_TEXT_RU, PAYMENT_TEXT_RU_TRX, PUMPDUMP_TEXT, START_TEXT
 from settings import SIGNAL_TTL_SECONDS
 
 
@@ -126,6 +129,11 @@ PUMP_COOLDOWN_GLOBAL_SEC = int(os.getenv("PUMP_COOLDOWN_GLOBAL_SEC", "3600"))  #
 PUMP_DAILY_LIMIT = int(os.getenv("PUMP_DAILY_LIMIT", "6"))
 TRIAL_AI_SUFFIX = "бесплатных AI-сигналов"
 TRIAL_PUMP_SUFFIX = "бесплатных Pump/Dump сигналов"
+SUB_DAYS = 30
+SUB_PRICE_USD = 39
+PAY_WALLET_TRX = "TGnSveNVrBHytZyA5AfqAj3hDK3FbFCtBY"
+ADMIN_CONTACT = "@loomany"
+PREF_AWAITING_RECEIPT = "awaiting_receipt"
 
 
 def _env_bool(name: str, default: str = "0") -> bool:
@@ -1579,10 +1587,71 @@ async def status_cmd(message: Message):
 async def system_menu(message: Message):
     await message.answer(
         "ℹ️ Раздел системы. Здесь статус работы и сервисные функции.",
-        reply_markup=build_system_menu_kb(
-            is_admin=is_admin(message.from_user.id) if message.from_user else False
-        ),
+        reply_markup=build_about_inline_kb(),
     )
+
+
+@dp.callback_query(F.data == "about_back")
+async def about_back_callback(callback: CallbackQuery):
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text("Возвращаемся в главное меню.")
+        await callback.message.answer(
+            "Главное меню.",
+            reply_markup=build_main_menu_kb(
+                is_admin=is_admin(callback.from_user.id) if callback.from_user else False
+            ),
+        )
+
+
+@dp.callback_query(F.data == "sub_contact")
+async def subscription_contact_callback(callback: CallbackQuery):
+    user_id = callback.from_user.id if callback.from_user else 0
+    text = f"💬 Связь с админом: {ADMIN_CONTACT}\nПри обращении укажите ваш ID: {user_id}"
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(text)
+
+
+@dp.callback_query(F.data == "sub_pay")
+async def subscription_pay_callback(callback: CallbackQuery):
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(OFFER_TEXT_RU, reply_markup=build_offer_inline_kb())
+
+
+@dp.callback_query(F.data == "sub_accept")
+async def subscription_accept_callback(callback: CallbackQuery):
+    user_id = callback.from_user.id if callback.from_user else 0
+    payment_text = PAYMENT_TEXT_RU_TRX.format(wallet=PAY_WALLET_TRX, user_id=user_id)
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(payment_text, reply_markup=build_payment_inline_kb())
+
+
+@dp.callback_query(F.data == "sub_copy_address")
+async def subscription_copy_address_callback(callback: CallbackQuery):
+    if callback.from_user is None:
+        return
+    await callback.answer()
+    if callback.message:
+        await callback.message.bot.send_message(
+            callback.from_user.id,
+            f"📋 Адрес для оплаты (TRX):\n{PAY_WALLET_TRX}",
+        )
+
+
+@dp.callback_query(F.data == "sub_send_receipt")
+async def subscription_send_receipt_callback(callback: CallbackQuery):
+    if callback.from_user is None:
+        return
+    set_user_pref(callback.from_user.id, PREF_AWAITING_RECEIPT, 1)
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(
+            "📎 Отправьте сюда чек (скрин/фото) одним сообщением.\n"
+            "Я автоматически прикреплю ваш ID и передам админу."
+        )
 
 
 def _format_user_time(ts: int | None) -> str:
@@ -1891,6 +1960,39 @@ async def back_to_main(message: Message):
             is_admin=is_admin(message.from_user.id) if message.from_user else False
         ),
     )
+
+
+@dp.message(
+    lambda message: message.from_user is not None
+    and get_user_pref(message.from_user.id, PREF_AWAITING_RECEIPT, 0) == 1
+)
+async def receipt_message_handler(message: Message):
+    user = message.from_user
+    if user is None:
+        return
+    set_user_pref(user.id, PREF_AWAITING_RECEIPT, 0)
+    username_text = f"@{user.username}" if user.username else "-"
+    timestamp = datetime.now(ALMATY_TZ).strftime("%Y-%m-%d %H:%M")
+    admin_text = (
+        "🧾 Чек на подписку\n\n"
+        f"User ID: {user.id}\n"
+        f"Username: {username_text}\n"
+        f"Дата/время: {timestamp}\n\n"
+        f"Тариф: ${SUB_PRICE_USD} / {SUB_DAYS} дней\n"
+        "Оплата: TRX (TRON)\n"
+        f"Адрес: {PAY_WALLET_TRX}"
+    )
+    admin_chat_id = ADMIN_CHAT_ID or ADMIN_USER_ID
+    if admin_chat_id != 0:
+        try:
+            await message.bot.send_message(admin_chat_id, admin_text)
+        except Exception:
+            pass
+        try:
+            await message.copy_to(admin_chat_id)
+        except Exception:
+            pass
+    await message.answer("✅ Чек отправлен админу. Ожидайте активацию.")
 
 
 def _format_stats_message(stats: Dict[str, Any]) -> str:
