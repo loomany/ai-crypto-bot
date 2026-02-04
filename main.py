@@ -541,8 +541,6 @@ def _format_archive_list(
     lines.extend(
         [
             "",
-            "📈 Итоги за период",
-            "",
             f"TP1: {tp1_total}",
             "👉 Сигнал дал прибыль и закрылся в плюс.",
             "",
@@ -563,7 +561,6 @@ def _format_archive_list(
         lines.append("Нет сигналов за период.")
         return "\n".join(lines)
 
-    lines.append(f"Страница {page}/{pages}")
     lines.append("")
     for idx, event in enumerate(events, start=1):
         status_icon = _status_icon(str(event.get("status", "")))
