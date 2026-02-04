@@ -25,6 +25,8 @@ from binance_rest import (
 )
 from pump_detector import (
     PUMP_CHUNK_SIZE,
+    MIN_VOLUME_5M_USDT,
+    PUMP_VOLUME_MUL,
     get_candidate_symbols,
     scan_pumps_chunk,
     format_pump_message,
@@ -35,6 +37,11 @@ from signals import (
     get_btc_context,
     get_btc_context_last_error,
     get_btc_context_last_refresh_ts,
+    AI_MAX_DEEP_PER_CYCLE,
+    AI_STAGE_A_TOP_K,
+    PRE_SCORE_THRESHOLD,
+    MIN_PRE_SCORE,
+    FINAL_SCORE_THRESHOLD,
 )
 from market_access import get_quick_with_fallback
 from trading_core import compute_atr, compute_ema
@@ -1419,6 +1426,16 @@ async def test_admin(message: Message):
     use_btc_gate_value = "" if use_btc_gate_raw is None else use_btc_gate_raw
     blocks.append(f"BTC gate: {'enabled' if get_use_btc_gate() else 'disabled'}")
     blocks.append(f'USE_BTC_GATE raw: "{use_btc_gate_value}"')
+    blocks.append(
+        "CONFIG "
+        f"AI_MAX_DEEP_PER_CYCLE={AI_MAX_DEEP_PER_CYCLE} "
+        f"AI_STAGE_A_TOP_K={AI_STAGE_A_TOP_K} "
+        f"PRE_SCORE_THRESHOLD={PRE_SCORE_THRESHOLD} "
+        f"MIN_PRE_SCORE={MIN_PRE_SCORE} "
+        f"FINAL_SCORE_THRESHOLD={FINAL_SCORE_THRESHOLD} "
+        f"MIN_VOLUME_5M_USDT={MIN_VOLUME_5M_USDT} "
+        f"PUMP_VOLUME_MUL={PUMP_VOLUME_MUL}"
+    )
     ai_module = MODULES.get("ai_signals")
     if ai_module and ai_module.last_error:
         blocks.append(f"AI errors: {ai_module.last_error}")
