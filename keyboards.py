@@ -119,12 +119,12 @@ def build_about_inline_kb() -> InlineKeyboardMarkup:
     )
 
 
-def build_offer_inline_kb() -> InlineKeyboardMarkup:
+def build_offer_inline_kb(back_callback: str = "system_back") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✅ Принять", callback_data="sub_accept")],
             [InlineKeyboardButton(text="💬 Связь с админом", callback_data="sub_contact")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="system_back")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)],
         ]
     )
 
