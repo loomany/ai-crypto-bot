@@ -12,8 +12,7 @@ from health import (
 )
 from db import update_signal_events_status
 from signal_audit_db import fetch_open_signals, mark_signal_closed
-
-MAX_SIGNAL_AGE_SEC = 60 * 60 * 24
+from settings import SIGNAL_TTL_SECONDS
 
 
 def _parse_kline(kline: list[Any]) -> Optional[Dict[str, float]]:
@@ -121,7 +120,7 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
             }
 
     age_sec = int(time.time()) - sent_at
-    if age_sec < MAX_SIGNAL_AGE_SEC:
+    if age_sec < SIGNAL_TTL_SECONDS:
         return None
 
     last_close = candles[-1]["close"] if candles else None
@@ -155,7 +154,7 @@ async def evaluate_open_signals(
     budget_sec: int = 45,
 ) -> None:
     if open_signals is None:
-        open_signals = fetch_open_signals(MAX_SIGNAL_AGE_SEC)
+        open_signals = fetch_open_signals(SIGNAL_TTL_SECONDS)
     if not open_signals:
         return
 
@@ -222,7 +221,7 @@ async def signal_audit_worker_loop() -> None:
         start = time.time()
         BUDGET = 45
         mark_tick("signal_audit", extra="audit cycle")
-        open_signals = fetch_open_signals(MAX_SIGNAL_AGE_SEC)
+        open_signals = fetch_open_signals(SIGNAL_TTL_SECONDS)
         if not open_signals:
             mark_ok("signal_audit", extra="audit cycle")
             return

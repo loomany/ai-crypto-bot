@@ -96,6 +96,7 @@ from keyboards import (
     stats_inline_kb,
 )
 from texts import AI_SIGNALS_TEXT, PUMPDUMP_TEXT, START_TEXT
+from settings import SIGNAL_TTL_SECONDS
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -610,6 +611,7 @@ def _format_archive_detail(event: dict) -> str:
         f"SL: {float(event.get('sl')):.4f}",
         f"TP1: {float(event.get('tp1')):.4f}",
         f"TP2: {float(event.get('tp2')):.4f}",
+        f"⏱ Время жизни сценария: {SIGNAL_TTL_SECONDS // 3600} часов",
     ]
     if breakdown_lines:
         lines.extend(
@@ -641,11 +643,14 @@ async def history_callback(callback: CallbackQuery):
     total = count_signal_events(
         user_id=callback.from_user.id,
         since_ts=since_ts,
+        min_score=None,
     )
+    print(f"[history] period={period_key} total={total}")
     pages = max(1, (total + 9) // 10)
     events_rows = list_signal_events(
         user_id=callback.from_user.id,
         since_ts=since_ts,
+        min_score=None,
         limit=10,
         offset=0,
     )
@@ -653,6 +658,7 @@ async def history_callback(callback: CallbackQuery):
     outcome_counts = get_signal_outcome_counts(
         user_id=callback.from_user.id,
         since_ts=since_ts,
+        min_score=None,
     )
     await callback.answer()
     await callback.message.edit_text(
@@ -734,6 +740,7 @@ async def archive_list(callback: CallbackQuery):
     total = count_signal_events(
         user_id=callback.from_user.id,
         since_ts=since_ts,
+        min_score=None,
     )
     pages = max(1, (total + 9) // 10)
     if page > pages:
@@ -741,6 +748,7 @@ async def archive_list(callback: CallbackQuery):
     events_rows = list_signal_events(
         user_id=callback.from_user.id,
         since_ts=since_ts,
+        min_score=None,
         limit=10,
         offset=(page - 1) * 10,
     )
@@ -748,6 +756,7 @@ async def archive_list(callback: CallbackQuery):
     outcome_counts = get_signal_outcome_counts(
         user_id=callback.from_user.id,
         since_ts=since_ts,
+        min_score=None,
     )
     await callback.answer()
     await callback.message.edit_text(
