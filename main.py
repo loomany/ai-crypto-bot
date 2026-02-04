@@ -1592,36 +1592,285 @@ def _format_user_time(ts: int | None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
-@dp.message(F.text == "👥 Пользователи")
-async def users_list(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
+def _load_users(limit: int = 50) -> list[sqlite3.Row]:
     conn = sqlite3.connect(get_db_path())
+    conn.row_factory = sqlite3.Row
     try:
-        cur = conn.cursor()
-        cur.execute(
+        cur = conn.execute(
             """
             SELECT chat_id, username, started_at, last_seen
             FROM users
             ORDER BY started_at DESC
-            LIMIT 50
-            """
+            LIMIT ?
+            """,
+            (limit,),
         )
-        rows = cur.fetchall()
+        return cur.fetchall()
     finally:
         conn.close()
-    if not rows:
-        await message.answer("Пользователей пока нет.")
-        return
-    lines = ["👥 Пользователи (последние 50):"]
-    for chat_id, username, started_at, last_seen in rows:
+
+
+def _build_users_list_markup(rows: list[sqlite3.Row]) -> InlineKeyboardMarkup:
+    buttons: list[list[InlineKeyboardButton]] = []
+    for row in rows:
+        chat_id = int(row["chat_id"])
+        username = row["username"]
         username_text = f"@{username}" if username else "-"
-        started_text = _format_user_time(started_at)
-        last_seen_text = _format_user_time(last_seen)
-        lines.append(
-            f"{chat_id} | {username_text} | {started_text} | {last_seen_text}"
+        status_icon = "🔴" if is_user_locked(chat_id) else "🟢"
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{status_icon} {chat_id} ({username_text})",
+                    callback_data=f"user_view:{chat_id}",
+                )
+            ]
         )
-    await message.answer("\n".join(lines))
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data="admin_back",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _users_list_payload(prefix: str | None = None) -> tuple[str, InlineKeyboardMarkup | None]:
+    rows = _load_users()
+    if not rows:
+        markup = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="⬅️ Назад",
+                        callback_data="admin_back",
+                    )
+                ]
+            ]
+        )
+        return ("Пользователей пока нет.", markup)
+    header = "👥 Пользователи (последние 50):"
+    text = f"{prefix}\n\n{header}" if prefix else header
+    return text, _build_users_list_markup(rows)
+
+
+def _load_user_row(user_id: int) -> sqlite3.Row | None:
+    conn = sqlite3.connect(get_db_path())
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(
+            """
+            SELECT chat_id, username, started_at, last_seen
+            FROM users
+            WHERE chat_id = ?
+            """,
+            (user_id,),
+        )
+        return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def _build_user_card(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    ensure_trial_defaults(user_id)
+    row = _load_user_row(user_id)
+    username_text = "-"
+    started_text = "-"
+    last_seen_text = "-"
+    if row is not None:
+        username = row["username"]
+        username_text = f"@{username}" if username else "-"
+        started_text = _format_user_time(row["started_at"])
+        last_seen_text = _format_user_time(row["last_seen"])
+
+    locked = is_user_locked(user_id)
+    status_icon = "🔴" if locked else "🟢"
+    trial_ai_left = get_user_pref(user_id, "trial_ai_left", TRIAL_AI_LIMIT)
+    trial_pump_left = get_user_pref(user_id, "trial_pump_left", TRIAL_PUMP_LIMIT)
+
+    lines = [
+        "👤 Карточка пользователя",
+        "",
+        f"ID: {user_id}",
+        f"Username: {username_text}",
+        f"Статус: {status_icon}",
+        f"AI осталось: {trial_ai_left}/{TRIAL_AI_LIMIT}",
+        f"Pump/Dump осталось: {trial_pump_left}/{TRIAL_PUMP_LIMIT}",
+        f"started_at: {started_text}",
+        f"last_seen: {last_seen_text}",
+    ]
+
+    if locked:
+        lock_button = InlineKeyboardButton(
+            text="🔓 Разблокировать",
+            callback_data=f"user_unlock:{user_id}",
+        )
+    else:
+        lock_button = InlineKeyboardButton(
+            text="🔒 Заблокировать",
+            callback_data=f"user_lock:{user_id}",
+        )
+
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [lock_button],
+            [
+                InlineKeyboardButton(
+                    text="🗑 Удалить",
+                    callback_data=f"user_del_confirm:{user_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data="users_list",
+                )
+            ],
+        ]
+    )
+    return "\n".join(lines), markup
+
+
+async def _ensure_admin_callback(callback: CallbackQuery) -> bool:
+    if callback.from_user is None or not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа")
+        return False
+    return True
+
+
+@dp.message(F.text == "👥 Пользователи")
+async def users_list(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        return
+    text, markup = _users_list_payload()
+    await message.answer(text, reply_markup=markup)
+
+
+@dp.callback_query(F.data == "users_list")
+async def users_list_callback(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
+        return
+    text, markup = _users_list_payload()
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=markup)
+
+
+@dp.callback_query(F.data == "admin_back")
+async def admin_back_callback(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
+        return
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text("Возвращаемся в главное меню.")
+
+
+@dp.callback_query(F.data.regexp(r"^user_view:\d+$"))
+async def user_view_callback(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
+        return
+    if callback.message is None:
+        return
+    user_id = int(callback.data.split(":", 1)[1])
+    text, markup = _build_user_card(user_id)
+    await callback.answer()
+    await callback.message.edit_text(text, reply_markup=markup)
+
+
+@dp.callback_query(F.data.regexp(r"^user_lock:\d+$"))
+async def user_lock_callback(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
+        return
+    if callback.message is None:
+        return
+    user_id = int(callback.data.split(":", 1)[1])
+    set_user_pref(user_id, "user_locked", 1)
+    text, markup = _build_user_card(user_id)
+    await callback.answer()
+    await callback.message.edit_text(text, reply_markup=markup)
+    try:
+        await callback.message.bot.send_message(
+            user_id,
+            "⛔ Доступ к сигналам приостановлен\n\n"
+            "Ваша подписка/доступ временно приостановлены администратором.\n"
+            "Если это ошибка — напишите в поддержку.",
+        )
+    except Exception:
+        pass
+
+
+@dp.callback_query(F.data.regexp(r"^user_unlock:\d+$"))
+async def user_unlock_callback(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
+        return
+    if callback.message is None:
+        return
+    user_id = int(callback.data.split(":", 1)[1])
+    set_user_pref(user_id, "user_locked", 0)
+    text, markup = _build_user_card(user_id)
+    await callback.answer()
+    await callback.message.edit_text(text, reply_markup=markup)
+    try:
+        await callback.message.bot.send_message(
+            user_id,
+            "✅ Доступ к сигналам восстановлен\n\n"
+            "Ваша подписка/доступ продлены (возобновлены).\n"
+            "Спасибо!",
+        )
+    except Exception:
+        pass
+
+
+@dp.callback_query(F.data.regexp(r"^user_del_confirm:\d+$"))
+async def user_delete_confirm_callback(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
+        return
+    if callback.message is None:
+        return
+    user_id = int(callback.data.split(":", 1)[1])
+    text = (
+        f"⚠️ Удалить пользователя {user_id}?\n\n"
+        "Это полностью удалит его из базы (включая лимиты/статусы)."
+    )
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Да, удалить",
+                    callback_data=f"user_delete:{user_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data=f"user_view:{user_id}",
+                )
+            ],
+        ]
+    )
+    await callback.answer()
+    await callback.message.edit_text(text, reply_markup=markup)
+
+
+@dp.callback_query(F.data.regexp(r"^user_delete:\d+$"))
+async def user_delete_callback(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
+        return
+    if callback.message is None:
+        return
+    user_id = int(callback.data.split(":", 1)[1])
+    delete_user(user_id)
+    try:
+        await callback.message.bot.send_message(
+            user_id,
+            "Ваш аккаунт удалён администратором.",
+        )
+    except Exception:
+        pass
+    text, markup = _users_list_payload(prefix=f"✅ Пользователь удалён: {user_id}")
+    await callback.answer(f"✅ Пользователь удалён: {user_id}")
+    await callback.message.edit_text(text, reply_markup=markup)
 
 
 @dp.message(F.text == "📡 Статус системы")
