@@ -14,6 +14,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "чтобы продолжить получать сигналы.\n\n"
             "После включения просто жди — сигналы придут автоматически."
         ),
+        "SCORE_EXPLANATION": (
+            "ℹ️ Чем выше Score — тем чаще сигнал \"отрабатывает\".\n\n"
+            "TP1: {tp1}\n"
+            "👉 Сигнал дал прибыль и закрылся в плюс.\n"
+            "BE: {be}\n"
+            "👉 Сигнал ушёл в безубыток — риск снят.\n"
+            "SL: {sl}\n"
+            "👉 Сигнал закрылся по стоп-лоссу.\n"
+            "EXP: {exp}\n"
+            "👉 Прошло 12 часов после активации — сценарий устарел.\n"
+            "NF: {nf}\n"
+            "👉 Прошло 12 часов, цена не дошла до входа."
+        ),
         "AI_SIGNALS_TEXT": (
             "🤖 AI-сигналы — это готовые торговые сценарии по рынку (LONG/SHORT).\n\n"
             "Как бот находит сетап:\n"
@@ -59,6 +72,40 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SYS_USERS": "👥 Пользователи",
         "SYS_PAY": "💳 Оплатить подписку",
         "SYS_DIAG": "🧪 Диагностика",
+        "SYSTEM_STATUS_TEXT": (
+            "📡 Статус системы\n\n"
+            "{binance_line}\n\n"
+            "{ai_status_line}\n"
+            "{ai_last_cycle}\n"
+            "{ai_scan_line}\n"
+            "{ai_current_line}\n"
+            "{ai_cycle_line}"
+            "{ai_last_signal}\n\n"
+            "{pd_status_line}\n"
+            "{pd_last_cycle}\n"
+            "{pd_progress_line}\n"
+            "{pd_current_line}\n"
+            "{pd_last_signal}"
+        ),
+        "SYSTEM_STATUS_BINANCE_OK": "🔌 Связь с Binance: ✅ есть ({seconds_ago})",
+        "SYSTEM_STATUS_BINANCE_NO_DATA": "🔌 Связь с Binance: ⛔ нет свежих данных",
+        "SYSTEM_STATUS_AI_RUNNING_LINE": "🎯 AI-сигналы: ✅ работают",
+        "SYSTEM_STATUS_AI_STOPPED_LINE": "🎯 AI-сигналы: ⛔ не запущены",
+        "SYSTEM_STATUS_PD_RUNNING_LINE": "⚡ Pump / Dump: ✅ работает",
+        "SYSTEM_STATUS_PD_STOPPED_LINE": "⚡ Pump / Dump: ⛔ не запущен",
+        "SYSTEM_STATUS_LAST_CYCLE_LINE": "• последний цикл: {seconds_ago}",
+        "SYSTEM_STATUS_LAST_CYCLE_NO_DATA": "• последний цикл: нет данных",
+        "SYSTEM_STATUS_SCAN_LINE": "• скан рынка: {current} / {total}",
+        "SYSTEM_STATUS_SCAN_NO_DATA": "• скан рынка: нет данных",
+        "SYSTEM_STATUS_CURRENT_LINE": "• сейчас проверяю: {symbol}",
+        "SYSTEM_STATUS_CURRENT_NO_DATA": "• сейчас проверяю: нет данных",
+        "SYSTEM_STATUS_PROGRESS_LINE": "• прогресс: {current} / {total}",
+        "SYSTEM_STATUS_PROGRESS_NO_DATA": "• прогресс: нет данных",
+        "SYSTEM_STATUS_LAST_SIGNAL_LINE": "• последний сигнал: {text}",
+        "SYSTEM_STATUS_LAST_SIGNAL_NONE": "нет",
+        "SYSTEM_STATUS_LAST_SIGNAL_NONE_PD": "—",
+        "SYSTEM_STATUS_SECONDS_AGO": "{seconds} сек назад",
+        "SYSTEM_STATUS_CYCLE_LINE": "• скорость: ~{seconds} сек / цикл",
         "BTN_AI_ON": "🔔 Включить AI-уведомления",
         "BTN_AI_OFF": "🚫 Отключить AI-уведомления",
         "BTN_PD_ON": "🔔 Включить Pump/Dump-уведомления",
@@ -81,13 +128,15 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Нажимая «✅ Принять», вы подтверждаете согласие с условиями."
         ),
         "PAYMENT_TEXT_TRX": (
-            "💳 Оплата подписки (30 дней)\n"
-            "Стоимость: $39 в эквиваленте TRX (по текущему курсу на момент оплаты)\n\n"
-            "✅ Оплата принимается только TRX (TRON) на адрес:\n"
+            "Отправь TRX (TRON) на адрес:\n"
             "{wallet}\n\n"
-            "Ваш ID (укажите в комментарии/чеке):\n"
+            "Твой ID (укажи в комментарии / чеке):\n"
             "{user_id}\n\n"
-            "После оплаты нажмите «📎 Отправить чек + ID»."
+            "После оплаты нажми «Отправить чек + ID»."
+        ),
+        "PD_ENABLED_TEXT": (
+            "✅ Pump/Dump уведомления включены.\n"
+            "Бот будет присылать алерты при резких движениях рынка."
         ),
         "PAYWALL_AI": (
             "🔒 Доступ к AI-сигналам по подписке.\n"
@@ -131,12 +180,26 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "en": {
         "START_TEXT": (
-            "Enable notifications below — the bot runs automatically.\n\n"
-            "Free access:\n"
+            "Enable notifications below — the bot works automatically.\n\n"
+            "You have free access to:\n"
             "• 7 AI signals\n"
             "• 7 Pump/Dump signals\n\n"
-            "When the limit is reached, you’ll need a subscription to continue receiving signals.\n\n"
-            "After enabling, just wait — signals will arrive automatically."
+            "After the free limit is reached, a subscription is required\n"
+            "to continue receiving signals.\n\n"
+            "Once enabled, just wait — signals will arrive automatically."
+        ),
+        "SCORE_EXPLANATION": (
+            "ℹ️ The higher the Score, the more often the signal is successful.\n\n"
+            "TP1: {tp1}\n"
+            "👉 The signal hit take profit and closed in profit.\n"
+            "BE: {be}\n"
+            "👉 The signal moved to breakeven — risk removed.\n"
+            "SL: {sl}\n"
+            "👉 The signal closed by stop-loss.\n"
+            "EXP: {exp}\n"
+            "👉 12 hours passed after activation — the scenario expired.\n"
+            "NF: {nf}\n"
+            "👉 12 hours passed, price never reached the entry zone."
         ),
         "AI_SIGNALS_TEXT": (
             "🤖 AI signals are ready-made market scenarios (LONG/SHORT).\n\n"
@@ -205,14 +268,50 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "By clicking «✅ Accept», you confirm agreement with the terms."
         ),
         "PAYMENT_TEXT_TRX": (
-            "💳 Subscription payment (30 days)\n"
-            "Price: $39 in TRX equivalent (at current rate at time of payment)\n\n"
-            "✅ Payment accepted only in TRX (TRON) to the address:\n"
+            "Send TRX (TRON) to the address:\n"
             "{wallet}\n\n"
-            "Your ID (include in comment/receipt):\n"
+            "Your ID (include in comment / receipt):\n"
             "{user_id}\n\n"
-            "After payment tap «📎 Send receipt + ID»."
+            "After payment tap “Send receipt + ID”."
         ),
+        "PD_ENABLED_TEXT": (
+            "✅ Pump/Dump notifications enabled.\n"
+            "The bot will now send alerts on sharp market movements."
+        ),
+        "SYSTEM_STATUS_TEXT": (
+            "📡 System Status\n\n"
+            "{binance_line}\n\n"
+            "{ai_status_line}\n"
+            "{ai_last_cycle}\n"
+            "{ai_scan_line}\n"
+            "{ai_current_line}\n"
+            "{ai_cycle_line}"
+            "{ai_last_signal}\n\n"
+            "{pd_status_line}\n"
+            "{pd_last_cycle}\n"
+            "{pd_progress_line}\n"
+            "{pd_current_line}\n"
+            "{pd_last_signal}"
+        ),
+        "SYSTEM_STATUS_BINANCE_OK": "🔌 Binance connection: ✅ connected ({seconds_ago})",
+        "SYSTEM_STATUS_BINANCE_NO_DATA": "🔌 Binance connection: ⛔ no fresh data",
+        "SYSTEM_STATUS_AI_RUNNING_LINE": "🎯 AI signals: ✅ running",
+        "SYSTEM_STATUS_AI_STOPPED_LINE": "🎯 AI signals: ⛔ stopped",
+        "SYSTEM_STATUS_PD_RUNNING_LINE": "⚡ Pump / Dump: ✅ running",
+        "SYSTEM_STATUS_PD_STOPPED_LINE": "⚡ Pump / Dump: ⛔ stopped",
+        "SYSTEM_STATUS_LAST_CYCLE_LINE": "• last cycle: {seconds_ago}",
+        "SYSTEM_STATUS_LAST_CYCLE_NO_DATA": "• last cycle: no data",
+        "SYSTEM_STATUS_SCAN_LINE": "• market scan: {current} / {total}",
+        "SYSTEM_STATUS_SCAN_NO_DATA": "• market scan: no data",
+        "SYSTEM_STATUS_CURRENT_LINE": "• currently scanning: {symbol}",
+        "SYSTEM_STATUS_CURRENT_NO_DATA": "• currently scanning: no data",
+        "SYSTEM_STATUS_PROGRESS_LINE": "• progress: {current} / {total}",
+        "SYSTEM_STATUS_PROGRESS_NO_DATA": "• progress: no data",
+        "SYSTEM_STATUS_LAST_SIGNAL_LINE": "• last signal: {text}",
+        "SYSTEM_STATUS_LAST_SIGNAL_NONE": "none",
+        "SYSTEM_STATUS_LAST_SIGNAL_NONE_PD": "—",
+        "SYSTEM_STATUS_SECONDS_AGO": "{seconds} seconds ago",
+        "SYSTEM_STATUS_CYCLE_LINE": "• speed: ~{seconds} sec / cycle",
         "PAYWALL_AI": (
             "🔒 AI signals are available by subscription.\n"
             "Tap “Buy subscription” — I’ll show the instructions."
