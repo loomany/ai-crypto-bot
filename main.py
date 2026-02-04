@@ -85,6 +85,7 @@ from db import (
     get_signal_outcome_counts,
     get_signal_event,
     get_last_signal_event_by_module,
+    purge_test_signals,
 )
 from db_path import ensure_db_writable, get_db_path
 from market_cache import get_ticker_request_count, reset_ticker_request_count
@@ -673,14 +674,14 @@ async def history_callback(callback: CallbackQuery):
     days = _period_days(period_key)
     since_ts = int(time.time()) - days * 86400 if days is not None else None
     total = count_signal_events(
-        user_id=callback.from_user.id,
+        user_id=None,
         since_ts=since_ts,
         min_score=None,
     )
     print(f"[history] period={period_key} total={total}")
     pages = max(1, (total + 9) // 10)
     events_rows = list_signal_events(
-        user_id=callback.from_user.id,
+        user_id=None,
         since_ts=since_ts,
         min_score=None,
         limit=10,
@@ -688,7 +689,7 @@ async def history_callback(callback: CallbackQuery):
     )
     events = [dict(row) for row in events_rows]
     outcome_counts = get_signal_outcome_counts(
-        user_id=callback.from_user.id,
+        user_id=None,
         since_ts=since_ts,
         min_score=None,
     )
@@ -770,7 +771,7 @@ async def archive_list(callback: CallbackQuery):
     days = _period_days(period_key)
     since_ts = int(time.time()) - days * 86400 if days is not None else None
     total = count_signal_events(
-        user_id=callback.from_user.id,
+        user_id=None,
         since_ts=since_ts,
         min_score=None,
     )
@@ -778,7 +779,7 @@ async def archive_list(callback: CallbackQuery):
     if page > pages:
         page = pages
     events_rows = list_signal_events(
-        user_id=callback.from_user.id,
+        user_id=None,
         since_ts=since_ts,
         min_score=None,
         limit=10,
@@ -786,7 +787,7 @@ async def archive_list(callback: CallbackQuery):
     )
     events = [dict(row) for row in events_rows]
     outcome_counts = get_signal_outcome_counts(
-        user_id=callback.from_user.id,
+        user_id=None,
         since_ts=since_ts,
         min_score=None,
     )
@@ -804,7 +805,7 @@ async def archive_detail(callback: CallbackQuery):
     _, _, period_key, page_raw, event_id_raw = callback.data.split(":")
     page = max(1, int(page_raw))
     event = get_signal_event(
-        user_id=callback.from_user.id,
+        user_id=None,
         event_id=int(event_id_raw),
     )
     if event is None:
@@ -1497,6 +1498,15 @@ async def test_notify_cmd(message: Message):
     except Exception as e:
         print(f"[notify] test failed: {e}")
         await message.answer(f"❌ Ошибка: {e}")
+
+
+@dp.message(Command("purge_tests"))
+async def purge_tests_cmd(message: Message):
+    if message.from_user is None or not is_admin(message.from_user.id):
+        await message.answer("⛔ Нет доступа")
+        return
+    removed = purge_test_signals()
+    await message.answer(f"✅ Удалено тестовых сигналов: {removed}")
 
 
 @dp.message(Command("my_id"))
