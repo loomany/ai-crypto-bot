@@ -6,6 +6,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
+import i18n
+
 from binance_client import fetch_klines, Candle
 from binance_rest import binance_request_context, fetch_json
 from symbol_cache import (
@@ -333,32 +335,31 @@ def _format_symbol_pair(symbol: str) -> str:
     return f"{symbol} / USDT"
 
 
-def format_pump_message(signal: Dict[str, Any]) -> str:
+def format_pump_message(signal: Dict[str, Any], lang: str = "ru") -> str:
     symbol_pair = _format_symbol_pair(signal["symbol"])
     price = signal["price"]
     ch1 = signal["change_1m"]
     ch5 = signal["change_5m"]
     volume_mul = signal["volume_mul"]
 
-    header = (
-        "🚀 Pump/Dump Scanner: резкий импульс"
-        if signal["type"] == "pump"
-        else "📉 Pump/Dump Scanner: резкий импульс"
+    header = i18n.t(
+        lang,
+        "PUMP_HEADER_PUMP" if signal["type"] == "pump" else "PUMP_HEADER_DUMP",
     )
 
     text = (
         f"{header}\n\n"
-        f"Монета: {symbol_pair}\n"
-        f"Текущая цена: {_format_price(price)}\n\n"
-        "Движение:\n"
-        f"• за 1 мин: {_format_signed(ch1)}%\n"
-        f"• за 5 мин: {_format_signed(ch5)}%\n"
-        f"• объём: {volume_mul:.2f}× от среднего\n\n"
-        "ℹ️ Это уведомление о резком импульсе цены и объёма.\n"
-        "Используется как сигнал внимания, а не готовая торговая идея.\n\n"
-        "⚠️ Резкие импульсы высокорисковые.\n"
-        "Бот не даёт точек входа и не управляет рисками.\n\n"
-        "Источник данных: Binance"
+        f"{i18n.t(lang, 'PUMP_COIN_LINE', symbol=symbol_pair)}\n"
+        f"{i18n.t(lang, 'PUMP_PRICE_LINE', price=_format_price(price))}\n\n"
+        f"{i18n.t(lang, 'PUMP_MOVE_HEADER')}\n"
+        f"{i18n.t(lang, 'PUMP_MOVE_1M', change=_format_signed(ch1))}\n"
+        f"{i18n.t(lang, 'PUMP_MOVE_5M', change=_format_signed(ch5))}\n"
+        f"{i18n.t(lang, 'PUMP_VOLUME_LINE', volume=volume_mul)}\n\n"
+        f"{i18n.t(lang, 'PUMP_NOTE_1')}\n"
+        f"{i18n.t(lang, 'PUMP_NOTE_2')}\n\n"
+        f"{i18n.t(lang, 'PUMP_RISK_1')}\n"
+        f"{i18n.t(lang, 'PUMP_RISK_2')}\n\n"
+        f"{i18n.t(lang, 'PUMP_SOURCE')}"
     )
     return text
 

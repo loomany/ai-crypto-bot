@@ -483,12 +483,14 @@ async def cmd_start(message: Message):
             username = f"@{user.username}" if user.username else "-"
             full_name = user.full_name or "-"
             language = user.language_code or "-"
-            admin_text = (
-                "🆕 Новый пользователь\n"
-                f"ID: {message.chat.id}\n"
-                f"Username: {username}\n"
-                f"Имя: {full_name}\n"
-                f"Язык: {language}"
+            admin_lang = get_user_lang(ADMIN_CHAT_ID) or "ru"
+            admin_text = i18n.t(
+                admin_lang,
+                "ADMIN_NEW_USER",
+                user_id=message.chat.id,
+                username=username,
+                full_name=full_name,
+                language=language,
             )
             await message.bot.send_message(ADMIN_CHAT_ID, admin_text)
         if is_new and not is_admin(message.chat.id):
@@ -557,23 +559,23 @@ async def pumpdump_menu(message: Message):
     )
 
 
-def _period_label(period_key: str) -> str:
+def _period_label(period_key: str, lang: str) -> str:
     mapping = {
-        "1d": "1 день",
-        "7d": "7 дней",
-        "30d": "30 дней",
-        "all": "Все время",
+        "1d": i18n.t(lang, "PERIOD_1D"),
+        "7d": i18n.t(lang, "PERIOD_7D"),
+        "30d": i18n.t(lang, "PERIOD_30D"),
+        "all": i18n.t(lang, "PERIOD_ALL"),
     }
-    return mapping.get(period_key, "Все время")
+    return mapping.get(period_key, i18n.t(lang, "PERIOD_ALL"))
 
 
-def _format_ai_stats_message(stats: Dict[str, Any], period_key: str) -> str:
-    title = f"📊 Статистика AI-сигналов ({_period_label(period_key)})"
+def _format_ai_stats_message(stats: Dict[str, Any], period_key: str, lang: str) -> str:
+    title = i18n.t(lang, "AI_STATS_TITLE", period=_period_label(period_key, lang))
     total = stats.get("total", 0)
-    disclaimer = "ℹ️ Это статистика отработки сценариев по рынку, не гарантия прибыли."
+    disclaimer = i18n.t(lang, "AI_STATS_DISCLAIMER")
 
     if total == 0:
-        return f"{title}\nНет завершенных сигналов за период.\n\n{disclaimer}"
+        return f"{title}\n{i18n.t(lang, 'AI_STATS_NO_COMPLETED')}\n\n{disclaimer}"
 
     tp1 = stats.get("tp1", 0)
     tp2 = stats.get("tp2", 0)
@@ -586,16 +588,22 @@ def _format_ai_stats_message(stats: Dict[str, Any], period_key: str) -> str:
         data = buckets.get(key, {"total": 0, "winrate": 0.0})
         total_bucket = data.get("total", 0)
         win_bucket = data.get("winrate", 0.0)
-        return f"{label}:  {total_bucket} (TP1+: {win_bucket:.0f}%)"
+        return i18n.t(
+            lang,
+            "AI_STATS_BUCKET_LINE",
+            label=label,
+            total=total_bucket,
+            winrate=win_bucket,
+        )
 
     lines = [
         title,
         "",
-        f"Сигналов: {total}",
-        f"TP1+: {tp1} | TP2: {tp2} | SL: {sl} | Exp: {exp}",
-        f"Winrate (TP1+): {winrate:.1f}%",
+        i18n.t(lang, "AI_STATS_SIGNALS_COUNT", total=total),
+        i18n.t(lang, "AI_STATS_SUMMARY", tp1=tp1, tp2=tp2, sl=sl, exp=exp),
+        i18n.t(lang, "AI_STATS_WINRATE", winrate=winrate),
         "",
-        "Score:",
+        i18n.t(lang, "AI_STATS_SCORE_LABEL"),
         _bucket_line("0–69", "0-69"),
         _bucket_line("70–79", "70-79"),
         _bucket_line("80+", "80-100"),
@@ -625,17 +633,17 @@ def _status_icon(status: str) -> str:
     return "⏳"
 
 
-def _format_signal_event_status(raw_status: str) -> str:
+def _format_signal_event_status(raw_status: str, lang: str) -> str:
     status_map = {
-        "OPEN": "Открыт",
+        "OPEN": i18n.t(lang, "STATUS_OPEN"),
         "TP1": "TP1",
         "TP2": "TP2",
         "SL": "SL",
         "EXP": "EXP",
         "EXPIRED": "EXP",
         "BE": "BE",
-        "NO_FILL": "Нет входа",
-        "AMBIGUOUS": "Спорно",
+        "NO_FILL": i18n.t(lang, "STATUS_NO_FILL"),
+        "AMBIGUOUS": i18n.t(lang, "STATUS_AMBIGUOUS"),
     }
     return status_map.get(raw_status, raw_status)
 
@@ -654,12 +662,16 @@ def _format_archive_list(
     outcome_counts: dict,
     score_bucket_counts: dict[str, dict[str, int]],
 ) -> str:
-    title = f"📊 История сигналов ({_period_label(period_key)})"
+    title = i18n.t(lang, "HISTORY_TITLE", period=_period_label(period_key, lang))
     lines = [title]
     lines.append("")
     lines.append(
-        f"✅ Прошло: {outcome_counts.get('passed', 0)} | "
-        f"❌ Не прошло: {outcome_counts.get('failed', 0)}"
+        i18n.t(
+            lang,
+            "HISTORY_SUMMARY",
+            passed=outcome_counts.get("passed", 0),
+            failed=outcome_counts.get("failed", 0),
+        )
     )
     def _score_bucket_line(bucket_key: str, label: str) -> str:
         bucket = score_bucket_counts.get(bucket_key, {})
@@ -667,13 +679,24 @@ def _format_archive_list(
         failed = int(bucket.get("failed", 0))
         total = passed + failed
         percent = round((passed / total) * 100) if total > 0 else 0
-        return f"{label}: ✅ {passed} / ❌ {failed}  ({percent}%)"
+        return i18n.t(
+            lang,
+            "HISTORY_SCORE_BUCKET_LINE",
+            label=label,
+            passed=passed,
+            failed=failed,
+            percent=percent,
+        )
 
     tp1_total = outcome_counts.get("tp1", 0) + outcome_counts.get("tp2", 0)
     lines.extend(
         [
             "",
-            f"📊 Статистика ({_period_label(period_key)}) — по Score",
+            i18n.t(
+                lang,
+                "HISTORY_STATS_TITLE",
+                period=_period_label(period_key, lang),
+            ),
             _score_bucket_line("90-100", "90–100"),
             _score_bucket_line("80-89", "80–89"),
             _score_bucket_line("70-79", "70–79"),
@@ -691,7 +714,7 @@ def _format_archive_list(
     )
     lines.append("")
     if not events:
-        lines.append("Нет сигналов за период.")
+        lines.append(i18n.t(lang, "HISTORY_NO_SIGNALS"))
         return "\n".join(lines)
 
     for idx, event in enumerate(events, start=1):
@@ -704,7 +727,7 @@ def _format_archive_list(
     return "\n".join(lines)
 
 
-def _format_archive_detail(event: dict) -> str:
+def _format_archive_detail(event: dict, lang: str) -> str:
     score = int(event.get("score", 0))
     breakdown_lines: list[str] = []
     raw_breakdown = event.get("breakdown_json")
@@ -715,19 +738,19 @@ def _format_archive_detail(event: dict) -> str:
             breakdown_items = []
         if isinstance(breakdown_items, list):
             label_map = {
-                "global_trend": "Глобальный тренд (1D)",
-                "local_trend": "Локальный тренд (1H)",
-                "near_key_level": "Реакция на ключевую зону (POI)",
-                "liquidity_sweep": "Снос ликвидности",
-                "volume_climax": "Объём относительно среднего",
-                "rsi_divergence": "RSI-дивергенция",
-                "atr_ok": "Волатильность (ATR)",
-                "bb_extreme": "Экстремум Bollinger",
-                "ma_trend_ok": "EMA-согласование",
-                "orderflow": "Ордерфлоу",
-                "whale_activity": "Китовая активность",
-                "ai_pattern": "AI-паттерны",
-                "market_regime": "Рыночный режим",
+                "global_trend": i18n.t(lang, "BREAKDOWN_GLOBAL_TREND"),
+                "local_trend": i18n.t(lang, "BREAKDOWN_LOCAL_TREND"),
+                "near_key_level": i18n.t(lang, "BREAKDOWN_NEAR_KEY_LEVEL"),
+                "liquidity_sweep": i18n.t(lang, "BREAKDOWN_LIQUIDITY_SWEEP"),
+                "volume_climax": i18n.t(lang, "BREAKDOWN_VOLUME_CLIMAX"),
+                "rsi_divergence": i18n.t(lang, "BREAKDOWN_RSI_DIVERGENCE"),
+                "atr_ok": i18n.t(lang, "BREAKDOWN_ATR_OK"),
+                "bb_extreme": i18n.t(lang, "BREAKDOWN_BB_EXTREME"),
+                "ma_trend_ok": i18n.t(lang, "BREAKDOWN_MA_TREND_OK"),
+                "orderflow": i18n.t(lang, "BREAKDOWN_ORDERFLOW"),
+                "whale_activity": i18n.t(lang, "BREAKDOWN_WHALE_ACTIVITY"),
+                "ai_pattern": i18n.t(lang, "BREAKDOWN_AI_PATTERN"),
+                "market_regime": i18n.t(lang, "BREAKDOWN_MARKET_REGIME"),
             }
             for item in breakdown_items:
                 if not isinstance(item, dict):
@@ -736,7 +759,7 @@ def _format_archive_detail(event: dict) -> str:
                 label = item.get("label")
                 if key in label_map:
                     label = label_map[key]
-                label = label or key or "Фактор"
+                label = label or key or i18n.t(lang, "BREAKDOWN_FALLBACK")
                 delta = item.get("points", item.get("delta", 0))
                 try:
                     delta_value = int(round(float(delta)))
@@ -752,13 +775,17 @@ def _format_archive_detail(event: dict) -> str:
         f"SL: {float(event.get('sl')):.4f}",
         f"TP1: {float(event.get('tp1')):.4f}",
         f"TP2: {float(event.get('tp2')):.4f}",
-        f"⏱ Время жизни сценария: {SIGNAL_TTL_SECONDS // 3600} часов",
+        i18n.t(
+            lang,
+            "ARCHIVE_DETAIL_LIFETIME",
+            hours=SIGNAL_TTL_SECONDS // 3600,
+        ),
     ]
     if breakdown_lines:
         lines.extend(
             [
                 "",
-                f"🧠 Почему выбран сигнал (Score {score}):",
+                i18n.t(lang, "ARCHIVE_DETAIL_REASON_HEADER", score=score),
                 *breakdown_lines,
             ]
         )
@@ -820,11 +847,12 @@ async def history_callback(callback: CallbackQuery):
             outcome_counts,
             score_bucket_counts,
         ),
-        reply_markup=_archive_inline_kb(period_key, page, pages, events),
+        reply_markup=_archive_inline_kb(lang, period_key, page, pages, events),
     )
 
 
 def _archive_inline_kb(
+    lang: str,
     period_key: str,
     page: int,
     pages: int,
@@ -849,14 +877,14 @@ def _archive_inline_kb(
     if page > 1:
         nav_row.append(
             InlineKeyboardButton(
-                text="⬅️ Prev",
+                text=i18n.t(lang, "NAV_PREV"),
                 callback_data=f"archive:list:{period_key}:{page - 1}",
             )
         )
     if page < pages:
         nav_row.append(
             InlineKeyboardButton(
-                text="Next ➡️",
+                text=i18n.t(lang, "NAV_NEXT"),
                 callback_data=f"archive:list:{period_key}:{page + 1}",
             )
         )
@@ -865,7 +893,7 @@ def _archive_inline_kb(
     rows.append(
         [
             InlineKeyboardButton(
-                text="⬅️ Назад",
+                text=i18n.t(lang, "NAV_BACK"),
                 callback_data=f"archive:back:{period_key}",
             )
         ]
@@ -873,12 +901,12 @@ def _archive_inline_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _archive_detail_kb(period_key: str, page: int) -> InlineKeyboardMarkup:
+def _archive_detail_kb(lang: str, period_key: str, page: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="⬅️ Назад",
+                    text=i18n.t(lang, "NAV_BACK"),
                     callback_data=f"archive:list:{period_key}:{page}",
                 )
             ]
@@ -933,7 +961,7 @@ async def archive_list(callback: CallbackQuery):
             outcome_counts,
             score_bucket_counts,
         ),
-        reply_markup=_archive_inline_kb(period_key, page, pages, events),
+        reply_markup=_archive_inline_kb(lang, period_key, page, pages, events),
     )
 
 
@@ -952,9 +980,11 @@ async def archive_detail(callback: CallbackQuery):
         await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
         return
     await callback.answer()
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    lang = lang or "ru"
     await callback.message.edit_text(
-        _format_archive_detail(dict(event)),
-        reply_markup=_archive_detail_kb(period_key, page),
+        _format_archive_detail(dict(event), lang),
+        reply_markup=_archive_detail_kb(lang, period_key, page),
     )
 
 
@@ -1055,16 +1085,16 @@ async def subscription_paywall_callback(callback: CallbackQuery):
         )
 
 
-def _human_ago_ru(seconds: int) -> str:
+def _human_ago(seconds: int, lang: str) -> str:
     if seconds < 0:
         seconds = 0
     if seconds < 60:
-        return f"{seconds} сек назад"
+        return i18n.t(lang, "STATUS_AGO_SECONDS", seconds=seconds)
     minutes = seconds // 60
     if minutes < 60:
-        return f"{minutes} мин назад"
+        return i18n.t(lang, "STATUS_AGO_MINUTES", minutes=minutes)
     hours = minutes // 60
-    return f"{hours} ч назад"
+    return i18n.t(lang, "STATUS_AGO_HOURS", hours=hours)
 
 
 def _parse_user_id_arg(text: str | None) -> int | None:
@@ -1114,11 +1144,11 @@ def _parse_extra_kv(extra: str) -> dict:
     return out
 
 
-def _format_fails_top(fails: dict, top_n: int = 5) -> str:
+def _format_fails_top(fails: dict, lang: str, top_n: int = 5) -> str:
     if not fails:
         return ""
     ordered = sorted(fails.items(), key=lambda item: item[1], reverse=True)[:top_n]
-    lines = ["Причины (топ):"]
+    lines = [i18n.t(lang, "DIAG_FAILS_TOP")]
     for reason, count in ordered:
         lines.append(f"• {reason} — {count}")
     return "\n".join(lines)
@@ -1163,40 +1193,44 @@ def _take_rotation_slice(
     return rotation_slice, cursor, len(ordered)
 
 
-def _format_market_hub_ru(now: float) -> str:
+def _format_market_hub(now: float, lang: str) -> str:
     # MARKET_HUB уже есть в проекте
     if MARKET_HUB.last_ok_at:
         ok_ago = int(now - MARKET_HUB.last_ok_at)
-        last_tick = _human_ago_ru(ok_ago)
+        last_tick = _human_ago(ok_ago, lang)
     else:
-        last_tick = "нет данных"
+        last_tick = i18n.t(lang, "SYSTEM_STATUS_LAST_CYCLE_NO_DATA")
 
-    err = MARKET_HUB.last_error or "нет"
+    err = MARKET_HUB.last_error or i18n.t(lang, "SYSTEM_STATUS_LAST_CYCLE_NO_DATA")
     symbols_count = len(getattr(MARKET_HUB, "_symbols", []) or [])
     return (
-        "🔧 MarketHub (базовый модуль рынка)\n"
-        "• Статус: работает\n"
-        f"• Последний тик: {last_tick}\n"
-        f"• Ошибки: {err}\n"
-        f"• Активных пар в MarketHub (кеш свечей): {symbols_count}"
+        f"{i18n.t(lang, 'DIAG_MARKET_HUB_TITLE')}\n"
+        f"{i18n.t(lang, 'DIAG_MODULE_STATUS', status=i18n.t(lang, 'DIAG_STATUS_WORKING'))}\n"
+        f"{i18n.t(lang, 'DIAG_LAST_TICK', tick=last_tick)}\n"
+        f"{i18n.t(lang, 'DIAG_ERRORS', error=err)}\n"
+        f"{i18n.t(lang, 'DIAG_ACTIVE_SYMBOLS', count=symbols_count)}"
     )
 
 
-def _format_db_status() -> str:
+def _format_db_status(lang: str) -> str:
     path = get_db_path()
     if not os.path.exists(path):
-        return f"🗄 База данных\n• Путь: {path}\n• Файл не найден"
+        return (
+            f"{i18n.t(lang, 'DIAG_DB_TITLE')}\n"
+            f"{i18n.t(lang, 'DIAG_DB_PATH', path=path)}\n"
+            f"{i18n.t(lang, 'DIAG_DB_MISSING')}"
+        )
     size_bytes = os.path.getsize(path)
     mtime = datetime.fromtimestamp(os.path.getmtime(path))
     return (
-        "🗄 База данных\n"
-        f"• Путь: {path}\n"
-        f"• Размер: {size_bytes} байт\n"
-        f"• Изменена: {mtime:%Y-%m-%d %H:%M:%S}"
+        f"{i18n.t(lang, 'DIAG_DB_TITLE')}\n"
+        f"{i18n.t(lang, 'DIAG_DB_PATH', path=path)}\n"
+        f"{i18n.t(lang, 'DIAG_DB_SIZE', size=size_bytes)}\n"
+        f"{i18n.t(lang, 'DIAG_DB_MODIFIED', mtime=f'{mtime:%Y-%m-%d %H:%M:%S}')}"
     )
 
 
-def _format_module_ru(key: str, st, now: float) -> str:
+def _format_module(key: str, st, now: float, lang: str) -> str:
     # st — это ModuleStatus из health.py
     def _short_symbol(symbol: str) -> str:
         if symbol.endswith("USDT"):
@@ -1211,52 +1245,56 @@ def _format_module_ru(key: str, st, now: float) -> str:
         return ", ".join(formatted)
 
     if st.last_tick:
-        tick = _human_ago_ru(int(now - st.last_tick))
-        status_line = "работает"
+        tick = _human_ago(int(now - st.last_tick), lang)
+        status_line = i18n.t(lang, "DIAG_STATUS_WORKING")
     else:
-        tick = "ещё не запускался"
-        status_line = "не запускался"
+        tick = i18n.t(lang, "DIAG_STATUS_NOT_STARTED")
+        status_line = i18n.t(lang, "DIAG_STATUS_NOT_STARTED")
 
     ok_line = ""
     if st.last_ok:
-        ok_line = f"• Последний успешный запрос: {_human_ago_ru(int(now - st.last_ok))}"
+        ok_line = i18n.t(
+            lang,
+            "DIAG_MODULE_LAST_OK",
+            tick=_human_ago(int(now - st.last_ok), lang),
+        )
 
     extra = _parse_extra_kv(st.extra or "")
 
     # Общие поля
     lines = [
         f"{st.name}",
-        f"• Статус: {status_line}",
-        f"• Последний цикл: {tick}",
+        i18n.t(lang, "DIAG_MODULE_STATUS", status=status_line),
+        i18n.t(lang, "DIAG_MODULE_LAST_CYCLE", tick=tick),
     ]
     if ok_line:
         lines.append(ok_line)
 
     if st.last_error:
-        lines.append(f"• Ошибка: {st.last_error}")
+        lines.append(i18n.t(lang, "DIAG_MODULE_ERROR", error=st.last_error))
     if st.last_warn:
-        lines.append(f"• Предупреждение: {st.last_warn}")
+        lines.append(i18n.t(lang, "DIAG_MODULE_WARNING", warning=st.last_warn))
 
     # Подписчики
     subs = extra.get("подписчиков")
     if subs is not None:
         lines.append("")
-        lines.append("Пользователи")
-        lines.append(f"• Подписчиков: {subs}")
+        lines.append(i18n.t(lang, "DIAG_USERS_HEADER"))
+        lines.append(i18n.t(lang, "DIAG_SUBSCRIBERS_LINE", count=subs))
 
     # Сканирование / прогресс (берём из st + extra)
     # AI-сигналы
     if key == "ai_signals":
         lines.append("")
-        lines.append("Сканирование рынка")
+        lines.append(i18n.t(lang, "DIAG_MARKET_SCAN_HEADER"))
         universe = extra.get("universe") or (
             str(st.total_symbols) if st.total_symbols else None
         )
         if universe:
-            lines.append(f"• Монет в рынке: {universe}")
+            lines.append(i18n.t(lang, "DIAG_MARKET_UNIVERSE", count=universe))
         chunk = extra.get("chunk")
         if chunk:
-            lines.append(f"• Монет за цикл: {chunk}")
+            lines.append(i18n.t(lang, "DIAG_MARKET_CHUNK", count=chunk))
         exclude_btc = os.getenv("EXCLUDE_BTC_FROM_AI_UNIVERSE", "0").lower() in (
             "1",
             "true",
@@ -1269,9 +1307,11 @@ def _format_module_ru(key: str, st, now: float) -> str:
         # cursor
         cur = extra.get("cursor") or (str(st.cursor) if st.cursor else None)
         if cur and universe:
-            lines.append(f"• Текущая позиция: {cur} / {universe}")
+            lines.append(
+                i18n.t(lang, "DIAG_MARKET_POSITION_TOTAL", current=cur, total=universe)
+            )
         elif cur:
-            lines.append(f"• Текущая позиция: {cur}")
+            lines.append(i18n.t(lang, "DIAG_MARKET_POSITION", current=cur))
         use_btc_gate = bool(st.state.get("use_btc_gate", False))
         lines.append(f"• BTC gate: {'enabled' if use_btc_gate else 'disabled'}")
         btc_cache = get_cached_btc_context()
@@ -1322,7 +1362,7 @@ def _format_module_ru(key: str, st, now: float) -> str:
         )
         cyc = extra.get("cycle")
         if cyc:
-            lines.append(f"• Время цикла: ~{cyc}")
+            lines.append(i18n.t(lang, "DIAG_CYCLE_TIME", cycle=cyc))
 
         pre_score = (st.last_stats or {}).get("pre_score") if st.last_stats else None
         if pre_score:
@@ -1341,21 +1381,36 @@ def _format_module_ru(key: str, st, now: float) -> str:
             failed_samples = pre_score.get("failed_samples") or []
             passed_samples = pre_score.get("passed_samples") or []
             lines.append("")
-            lines.append("Pre-score")
-            lines.append(f"• threshold: {threshold_str}")
+            lines.append(i18n.t(lang, "DIAG_PRESCORE_HEADER"))
+            lines.append(i18n.t(lang, "DIAG_PRESCORE_THRESHOLD", threshold=threshold_str))
             summary = f"• checked: {checked} | passed: {passed} | failed: {failed}"
             if pass_rate_str:
                 summary += f" | pass rate: {pass_rate_str}"
             lines.append(summary)
             if failed_samples:
-                lines.append(f"• failed examples: {_format_samples(failed_samples)}")
+                lines.append(
+                    i18n.t(
+                        lang,
+                        "DIAG_PRESCORE_FAILED",
+                        samples=_format_samples(failed_samples),
+                    )
+                )
             if passed_samples:
-                lines.append(f"• passed examples: {_format_samples(passed_samples)}")
+                lines.append(
+                    i18n.t(
+                        lang,
+                        "DIAG_PRESCORE_PASSED",
+                        samples=_format_samples(passed_samples),
+                    )
+                )
 
         if st.fails_top or st.near_miss or st.universe_debug:
             lines.append("")
             if st.fails_top:
-                lines.append(st.fails_top)
+                if isinstance(st.fails_top, dict):
+                    lines.append(_format_fails_top(st.fails_top, lang))
+                else:
+                    lines.append(str(st.fails_top))
             if st.near_miss:
                 lines.append(st.near_miss)
             if st.universe_debug:
@@ -1371,42 +1426,49 @@ def _format_module_ru(key: str, st, now: float) -> str:
         deep_scans = extra.get("deep_scans")
         if req or kl or hits or misses or inflight or ticker_req or deep_scans:
             lines.append("")
-            lines.append("Запросы к Binance")
+            lines.append(i18n.t(lang, "DIAG_REQUESTS_HEADER"))
             if req:
-                lines.append(f"• Запросов сделано: {req}")
+                lines.append(i18n.t(lang, "DIAG_REQUESTS_MADE", count=req))
             if kl:
-                lines.append(f"• Свечей получено: {kl}")
+                lines.append(i18n.t(lang, "DIAG_CANDLES", count=kl))
             if hits or misses:
-                lines.append(f"• Кеш свечей: hit={hits or 0} miss={misses or 0}")
+                lines.append(
+                    i18n.t(
+                        lang,
+                        "DIAG_CACHE",
+                        hits=hits or 0,
+                        misses=misses or 0,
+                    )
+                )
             if inflight:
-                lines.append(f"• In-flight ожиданий свечей: {inflight}")
+                lines.append(i18n.t(lang, "DIAG_INFLIGHT", count=inflight))
             if ticker_req:
-                lines.append(f"• Ticker/24h запросов: {ticker_req}")
+                lines.append(i18n.t(lang, "DIAG_TICKER_REQ", count=ticker_req))
             if deep_scans:
-                lines.append(f"• Deep-scan за цикл: {deep_scans}")
+                lines.append(i18n.t(lang, "DIAG_DEEP_SCAN", count=deep_scans))
 
     # Pump/Dump
     if key == "pumpdump":
         lines.append("")
-        lines.append("Поиск пампов / дампов")
+        lines.append(i18n.t(lang, "DIAG_PUMP_HEADER"))
         prog = extra.get("progress")
         checked = extra.get("checked")
         found = extra.get("found")
         sent = extra.get("sent")
         if prog:
-            lines.append(f"• Прогресс: {prog}")
+            lines.append(i18n.t(lang, "DIAG_PROGRESS", progress=prog))
         if checked:
-            lines.append(f"• Проверено: {checked}")
+            lines.append(i18n.t(lang, "DIAG_CHECKED", count=checked))
         if found is not None:
-            lines.append(f"• Найдено сигналов: {found}")
+            lines.append(i18n.t(lang, "DIAG_FOUND", count=found))
         if sent is not None:
-            lines.append(f"• Отправлено сигналов: {sent}")
+            lines.append(i18n.t(lang, "DIAG_SENT", count=sent))
         current = extra.get("current") or (st.current_symbol or None)
         if current:
-            lines.append(f"• Текущая монета: {current}")
+            lines.append(i18n.t(lang, "DIAG_CURRENT_COIN", symbol=current))
         cyc = extra.get("cycle")
         if cyc:
-            lines.append(f"• Время цикла: ~{cyc}")
+            lines.append(i18n.t(lang, "DIAG_CYCLE_TIME", cycle=cyc))
         rotation_flag = extra.get("rotation")
         rotation_n = extra.get("rotation_n")
         rotation_cursor = extra.get("rotation_cursor")
@@ -1418,20 +1480,38 @@ def _format_module_ru(key: str, st, now: float) -> str:
         if rotation_flag is not None:
             cursor_line = f" cursor={rotation_cursor}" if rotation_cursor else ""
             n_line = f"{rotation_n}" if rotation_n is not None else "0"
-            lines.append(f"• Rotation: {rotation_flag} (N={n_line}){cursor_line}")
+            lines.append(
+                i18n.t(
+                    lang,
+                    "DIAG_ROTATION",
+                    flag=rotation_flag,
+                    n=n_line,
+                    cursor=cursor_line,
+                )
+            )
         if rotation_slice is not None:
-            lines.append(f"• Rotation last slice size: {rotation_slice}")
+            lines.append(
+                i18n.t(lang, "DIAG_ROTATION_SLICE", size=rotation_slice)
+            )
         if universe_size or rotation_added or final_candidates or scanned:
             lines.append(
-                "• Universe size="
-                f"{universe_size or 0} rotation_added={rotation_added or 0} "
-                f"final_candidates={final_candidates or 0} scanned={scanned or 0}"
+                i18n.t(
+                    lang,
+                    "DIAG_UNIVERSE_LINE",
+                    universe=universe_size or 0,
+                    added=rotation_added or 0,
+                    final=final_candidates or 0,
+                    scanned=scanned or 0,
+                )
             )
 
         if st.fails_top or st.universe_debug:
             lines.append("")
             if st.fails_top:
-                lines.append(st.fails_top)
+                if isinstance(st.fails_top, dict):
+                    lines.append(_format_fails_top(st.fails_top, lang))
+                else:
+                    lines.append(str(st.fails_top))
             if st.universe_debug:
                 lines.append(st.universe_debug)
         hits = extra.get("klines_hits")
@@ -1442,35 +1522,51 @@ def _format_module_ru(key: str, st, now: float) -> str:
         kl = extra.get("klines")
         if req or kl or hits or misses or inflight or ticker_req:
             lines.append("")
-            lines.append("Запросы к Binance")
+            lines.append(i18n.t(lang, "DIAG_REQUESTS_HEADER"))
             if req:
-                lines.append(f"• Запросов сделано: {req}")
+                lines.append(i18n.t(lang, "DIAG_REQUESTS_MADE", count=req))
             if kl:
-                lines.append(f"• Свечей получено: {kl}")
+                lines.append(i18n.t(lang, "DIAG_CANDLES", count=kl))
             if hits or misses:
-                lines.append(f"• Кеш свечей: hit={hits or 0} miss={misses or 0}")
+                lines.append(
+                    i18n.t(
+                        lang,
+                        "DIAG_CACHE",
+                        hits=hits or 0,
+                        misses=misses or 0,
+                    )
+                )
             if inflight:
-                lines.append(f"• In-flight ожиданий свечей: {inflight}")
+                lines.append(i18n.t(lang, "DIAG_INFLIGHT", count=inflight))
             if ticker_req:
-                lines.append(f"• Ticker/24h запросов: {ticker_req}")
+                lines.append(i18n.t(lang, "DIAG_TICKER_REQ", count=ticker_req))
 
     # Binance секция (общая)
     lines.append("")
-    lines.append("Запросы к Binance")
+    lines.append(i18n.t(lang, "DIAG_REQUESTS_HEADER"))
     if st.binance_last_success_ts:
         lines.append(
-            f"• Последний успешный ответ: "
-            f"{_human_ago_ru(int(now - st.binance_last_success_ts))}"
+            i18n.t(
+                lang,
+                "DIAG_BINANCE_LAST_SUCCESS",
+                ago=_human_ago(int(now - st.binance_last_success_ts), lang),
+            )
         )
     else:
-        lines.append("• Последний успешный ответ: нет данных")
-    lines.append(f"• Таймауты подряд: {st.binance_consecutive_timeouts}")
-    lines.append(f"• Текущий этап: {st.binance_current_stage or '—'}")
+        lines.append(i18n.t(lang, "DIAG_BINANCE_LAST_SUCCESS_NO_DATA"))
+    lines.append(
+        i18n.t(lang, "DIAG_BINANCE_TIMEOUTS", count=st.binance_consecutive_timeouts)
+    )
+    lines.append(
+        i18n.t(lang, "DIAG_BINANCE_STAGE", stage=st.binance_current_stage or "—")
+    )
 
     # стабильность
     lines.append("")
-    lines.append("Стабильность")
-    lines.append(f"• Перезапусков сессии: {st.binance_session_restarts}")
+    lines.append(i18n.t(lang, "DIAG_STABILITY_HEADER"))
+    lines.append(
+        i18n.t(lang, "DIAG_SESSION_RESTARTS", count=st.binance_session_restarts)
+    )
 
     return "\n".join(lines)
 
@@ -1505,7 +1601,7 @@ async def test_admin(message: Message):
 
     now = time.time()
     blocks = []
-    blocks.append("🛠 Диагностика бота (админ)\n")
+    blocks.append(f"{i18n.t(lang, 'DIAG_TITLE')}\n")
     use_btc_gate_raw = os.getenv("USE_BTC_GATE")
     use_btc_gate_value = "" if use_btc_gate_raw is None else use_btc_gate_raw
     blocks.append(f"BTC gate: {'enabled' if get_use_btc_gate() else 'disabled'}")
@@ -1524,9 +1620,9 @@ async def test_admin(message: Message):
     if ai_module and ai_module.last_error:
         blocks.append(f"AI errors: {ai_module.last_error}")
     blocks.append("")
-    blocks.append(_format_db_status())
+    blocks.append(_format_db_status(lang))
     blocks.append("")
-    blocks.append(_format_market_hub_ru(now))
+    blocks.append(_format_market_hub(now, lang))
     blocks.append("")
 
     hidden = _hidden_status_modules()
@@ -1535,7 +1631,7 @@ async def test_admin(message: Message):
             continue
         if key not in ("ai_signals", "pumpdump"):
             continue
-        blocks.append(_format_module_ru(key, st, now))
+        blocks.append(_format_module(key, st, now, lang))
         blocks.append("\n" + ("—" * 22) + "\n")
 
     lang = get_user_lang(message.chat.id) or "ru"
@@ -1576,10 +1672,10 @@ async def test_ai_signal_all(message: Message):
             "volume_ratio": 1.5,
             "rr": 2.0,
         },
-        "title_prefix": (
-            "🧪 ТЕСТОВЫЙ AI-СИГНАЛ (для проверки системы)\n\n"
-            "⚠️ Это тест. Если лимит 0 — вместо текста должен прийти paywall.\n\n"
-        ),
+        "title_prefix": {
+            "ru": i18n.t("ru", "TEST_AI_PREFIX"),
+            "en": i18n.t("en", "TEST_AI_PREFIX"),
+        },
     }
     stats = await send_signal_to_all(
         signal_dict,
@@ -1588,16 +1684,18 @@ async def test_ai_signal_all(message: Message):
         return_stats=True,
     )
     if stats["subscribers"] <= 0:
-        await message.answer(
-            "⚠️ Подписчиков нет. Включи уведомления на тест-аккаунте и повтори."
-        )
+        await message.answer(i18n.t(lang, "TEST_NO_SUBSCRIBERS"))
         return
     await message.answer(
-        "AI тест\n"
-        "✅ Тест AI завершён: "
-        f"sent={stats['sent']}, locked={stats['locked']}, "
-        f"paywall={stats['paywall']}, errors={stats['errors']} "
-        f"(subscribers={stats['subscribers']})"
+        i18n.t(
+            lang,
+            "TEST_AI_DONE",
+            sent=stats["sent"],
+            locked=stats["locked"],
+            paywall=stats["paywall"],
+            errors=stats["errors"],
+            subscribers=stats["subscribers"],
+        )
     )
 
 
@@ -1609,9 +1707,7 @@ async def test_pumpdump_signal_all(message: Message):
         return
     subscribers = get_pumpdump_subscribers()
     if not subscribers:
-        await message.answer(
-            "⚠️ Подписчиков нет. Включи уведомления на тест-аккаунте и повтори."
-        )
+        await message.answer(i18n.t(lang, "TEST_NO_SUBSCRIBERS"))
         return
     signal_dict = {
         "symbol": "TESTUSDT",
@@ -1622,26 +1718,27 @@ async def test_pumpdump_signal_all(message: Message):
         "type": "pump",
         "is_test": True,
     }
-    text = (
-        "🧪 ТЕСТОВЫЙ PUMP/DUMP (для проверки системы)\n\n"
-        f"{format_pump_message(signal_dict)}\n\n"
-        "⚠️ Это тест. Если лимит 0 — вместо текста должен прийти paywall."
-    )
     stats = await _deliver_pumpdump_signal_stats(
         bot=message.bot,
-        text=text,
+        signal=signal_dict,
         symbol=signal_dict["symbol"],
         subscribers=subscribers,
         allow_admin_bypass=False,
         bypass_cooldown=True,
         bypass_limits=True,
+        prefix_key="TEST_PD_PREFIX",
+        suffix_key="TEST_PD_WARNING",
     )
     await message.answer(
-        "Pump/Dump тест\n"
-        "✅ Тест Pump/Dump завершён: "
-        f"sent={stats['sent']}, locked={stats['locked']}, "
-        f"paywall={stats['paywall']}, errors={stats['errors']} "
-        f"(subscribers={stats['subscribers']})"
+        i18n.t(
+            lang,
+            "TEST_PD_DONE",
+            sent=stats["sent"],
+            locked=stats["locked"],
+            paywall=stats["paywall"],
+            errors=stats["errors"],
+            subscribers=stats["subscribers"],
+        )
     )
 
 
@@ -1657,12 +1754,12 @@ async def test_notify_cmd(message: Message):
     try:
         await message.bot.send_message(
             target_chat_id,
-            "🧪 Тестовое уведомление: доставка работает.",
+            i18n.t(lang, "TEST_NOTIFY_TEXT"),
         )
         print("[notify] test sent ok")
     except Exception as e:
         print(f"[notify] test failed: {e}")
-        await message.answer(f"❌ Ошибка: {e}")
+        await message.answer(i18n.t(lang, "TEST_NOTIFY_ERROR", error=e))
 
 
 @dp.message(Command("purge_tests"))
@@ -1672,25 +1769,13 @@ async def purge_tests_cmd(message: Message):
         await message.answer(i18n.t(lang, "NO_ACCESS"))
         return
     removed = purge_test_signals()
-    await message.answer(f"✅ Удалено тестовых сигналов: {removed}")
+    await message.answer(i18n.t(lang, "PURGE_TESTS_DONE", removed=removed))
 
 
 @dp.message(Command("my_id"))
 async def my_id_cmd(message: Message):
     user_id = message.from_user.id if message.from_user else "unknown"
     await message.answer(f"user_id={user_id}\nchat_id={message.chat.id}")
-
-
-def _human_ago(seconds: int) -> str:
-    if seconds < 0:
-        seconds = 0
-    if seconds < 60:
-        return f"{seconds} сек"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes} мин"
-    hours = minutes // 60
-    return f"{hours} ч"
 
 
 def _format_user_bot_status(chat_id: int) -> str:
@@ -1931,7 +2016,13 @@ async def system_back_callback(callback: CallbackQuery):
 @dp.callback_query(F.data == "sub_contact")
 async def subscription_contact_callback(callback: CallbackQuery):
     user_id = callback.from_user.id if callback.from_user else 0
-    text = f"💬 Связь с админом: {ADMIN_CONTACT}\nПри обращении укажите ваш ID: {user_id}"
+    lang = get_user_lang(user_id) or "ru"
+    text = i18n.t(
+        lang,
+        "CONTACT_ADMIN_BLOCK",
+        admin_contact=ADMIN_CONTACT,
+        user_id=user_id,
+    )
     await callback.answer()
     if callback.message:
         await callback.message.answer(text)
@@ -2006,7 +2097,11 @@ async def subscription_copy_address_callback(callback: CallbackQuery):
     if callback.message:
         await callback.message.bot.send_message(
             callback.from_user.id,
-            f"📋 Адрес для оплаты (TRX):\n{PAY_WALLET_TRX}",
+            i18n.t(
+                get_user_lang(callback.from_user.id) or "ru",
+                "PAYMENT_COPY_ADDRESS",
+                wallet=PAY_WALLET_TRX,
+            ),
         )
 
 
@@ -2018,8 +2113,7 @@ async def subscription_send_receipt_callback(callback: CallbackQuery):
     await callback.answer()
     if callback.message:
         await callback.message.answer(
-            "📎 Отправьте сюда чек (скрин/фото) одним сообщением.\n"
-            "Я автоматически прикреплю ваш ID и передам админу."
+            i18n.t(get_user_lang(callback.from_user.id) or "ru", "RECEIPT_REQUEST_TEXT")
         )
 
 
@@ -2048,7 +2142,7 @@ def _load_users(limit: int = 50) -> list[sqlite3.Row]:
         conn.close()
 
 
-def _build_users_list_markup(rows: list[sqlite3.Row]) -> InlineKeyboardMarkup:
+def _build_users_list_markup(rows: list[sqlite3.Row], lang: str) -> InlineKeyboardMarkup:
     buttons: list[list[InlineKeyboardButton]] = []
     for row in rows:
         chat_id = int(row["chat_id"])
@@ -2066,7 +2160,7 @@ def _build_users_list_markup(rows: list[sqlite3.Row]) -> InlineKeyboardMarkup:
     buttons.append(
         [
             InlineKeyboardButton(
-                text="⬅️ Назад",
+                text=i18n.t(lang, "NAV_BACK"),
                 callback_data="admin_back",
             )
         ]
@@ -2074,23 +2168,26 @@ def _build_users_list_markup(rows: list[sqlite3.Row]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def _users_list_payload(prefix: str | None = None) -> tuple[str, InlineKeyboardMarkup | None]:
+def _users_list_payload(
+    lang: str,
+    prefix: str | None = None,
+) -> tuple[str, InlineKeyboardMarkup | None]:
     rows = _load_users()
     if not rows:
         markup = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="⬅️ Назад",
+                        text=i18n.t(lang, "NAV_BACK"),
                         callback_data="admin_back",
                     )
                 ]
             ]
         )
-        return ("Пользователей пока нет.", markup)
-    header = "👥 Пользователи (последние 50):"
+        return (i18n.t(lang, "USER_LIST_EMPTY"), markup)
+    header = i18n.t(lang, "USER_LIST_HEADER")
     text = f"{prefix}\n\n{header}" if prefix else header
-    return text, _build_users_list_markup(rows)
+    return text, _build_users_list_markup(rows, lang)
 
 
 def _load_user_row(user_id: int) -> sqlite3.Row | None:
@@ -2110,7 +2207,7 @@ def _load_user_row(user_id: int) -> sqlite3.Row | None:
         conn.close()
 
 
-def _build_user_card(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+def _build_user_card(user_id: int, lang: str) -> tuple[str, InlineKeyboardMarkup]:
     ensure_trial_defaults(user_id)
     row = _load_user_row(user_id)
     username_text = "-"
@@ -2128,32 +2225,32 @@ def _build_user_card(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     trial_pump_left = get_user_pref(user_id, "trial_pump_left", TRIAL_PUMP_LIMIT)
     sub_until = get_user_pref(user_id, "sub_until", 0)
     subscription_text = (
-        f"активна до {_format_user_time(sub_until)}"
+        i18n.t(lang, "USER_CARD_ACTIVE_UNTIL", date=_format_user_time(sub_until))
         if is_sub_active(user_id)
-        else "нет"
+        else i18n.t(lang, "USER_CARD_SUB_NONE")
     )
 
     lines = [
-        "👤 Карточка пользователя",
+        i18n.t(lang, "USER_CARD_TITLE"),
         "",
         f"ID: {user_id}",
         f"Username: {username_text}",
-        f"Статус: {status_icon}",
-        f"Подписка: {subscription_text}",
-        f"AI осталось: {trial_ai_left}/{TRIAL_AI_LIMIT}",
-        f"Pump/Dump осталось: {trial_pump_left}/{TRIAL_PUMP_LIMIT}",
-        f"started_at: {started_text}",
-        f"last_seen: {last_seen_text}",
+        i18n.t(lang, "USER_CARD_STATUS", status=status_icon),
+        i18n.t(lang, "USER_CARD_SUBSCRIPTION", subscription=subscription_text),
+        i18n.t(lang, "USER_CARD_AI_LEFT", left=trial_ai_left, limit=TRIAL_AI_LIMIT),
+        i18n.t(lang, "USER_CARD_PD_LEFT", left=trial_pump_left, limit=TRIAL_PUMP_LIMIT),
+        i18n.t(lang, "USER_CARD_STARTED_AT", date=started_text),
+        i18n.t(lang, "USER_CARD_LAST_SEEN", date=last_seen_text),
     ]
 
     if locked:
         lock_button = InlineKeyboardButton(
-            text="🔓 Разблокировать",
+            text=i18n.t(lang, "USER_BTN_UNLOCK"),
             callback_data=f"user_unlock:{user_id}",
         )
     else:
         lock_button = InlineKeyboardButton(
-            text="🔒 Заблокировать",
+            text=i18n.t(lang, "USER_BTN_LOCK"),
             callback_data=f"user_lock:{user_id}",
         )
 
@@ -2162,13 +2259,13 @@ def _build_user_card(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
             [lock_button],
             [
                 InlineKeyboardButton(
-                    text="🗑 Удалить",
+                    text=i18n.t(lang, "USER_BTN_DELETE"),
                     callback_data=f"user_del_confirm:{user_id}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="⬅️ Назад",
+                    text=i18n.t(lang, "NAV_BACK"),
                     callback_data="users_list",
                 )
             ],
@@ -2189,7 +2286,8 @@ async def _ensure_admin_callback(callback: CallbackQuery) -> bool:
 async def users_list(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
         return
-    text, markup = _users_list_payload()
+    lang = get_user_lang(message.from_user.id) or "ru"
+    text, markup = _users_list_payload(lang)
     await message.answer(text, reply_markup=markup)
 
 
@@ -2197,7 +2295,8 @@ async def users_list(message: Message):
 async def users_list_callback(callback: CallbackQuery):
     if not await _ensure_admin_callback(callback):
         return
-    text, markup = _users_list_payload()
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    text, markup = _users_list_payload(lang or "ru")
     await callback.answer()
     if callback.message:
         await callback.message.edit_text(text, reply_markup=markup)
@@ -2220,7 +2319,8 @@ async def user_view_callback(callback: CallbackQuery):
     if callback.message is None:
         return
     user_id = int(callback.data.split(":", 1)[1])
-    text, markup = _build_user_card(user_id)
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    text, markup = _build_user_card(user_id, lang or "ru")
     await callback.answer()
     await callback.message.edit_text(text, reply_markup=markup)
 
@@ -2233,16 +2333,19 @@ async def user_lock_callback(callback: CallbackQuery):
         return
     user_id = int(callback.data.split(":", 1)[1])
     set_user_pref(user_id, "user_locked", 1)
-    text, markup = _build_user_card(user_id)
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    text, markup = _build_user_card(user_id, lang or "ru")
     await callback.answer()
     await callback.message.edit_text(text, reply_markup=markup)
     try:
         await callback.message.bot.send_message(
             user_id,
-            "⛔ Подписка приостановлена\n\n"
-            "Доступ к сигналам временно отключён администратором.\n"
-            "Для связи: @loomany\n"
-            f"Ваш ID: {user_id}",
+            i18n.t(
+                get_user_lang(user_id) or "ru",
+                "USER_LOCKED_NOTICE",
+                admin_contact=ADMIN_CONTACT,
+                user_id=user_id,
+            ),
         )
     except Exception:
         pass
@@ -2260,13 +2363,14 @@ async def user_unlock_callback(callback: CallbackQuery):
     old_sub_until = get_user_pref(user_id, "sub_until", 0)
     new_sub_until = max(old_sub_until, now) + 30 * 24 * 3600
     set_user_pref(user_id, "sub_until", new_sub_until)
-    text, markup = _build_user_card(user_id)
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    text, markup = _build_user_card(user_id, lang or "ru")
     await callback.answer()
     await callback.message.edit_text(text, reply_markup=markup)
     try:
         await callback.message.bot.send_message(
             user_id,
-            "Подписка активирована на 30 дней",
+            i18n.t(get_user_lang(user_id) or "ru", "USER_UNLOCKED_NOTICE"),
         )
     except Exception:
         pass
@@ -2279,21 +2383,20 @@ async def user_delete_confirm_callback(callback: CallbackQuery):
     if callback.message is None:
         return
     user_id = int(callback.data.split(":", 1)[1])
-    text = (
-        f"⚠️ Удалить пользователя {user_id}?\n\n"
-        "Это полностью удалит его из базы (включая лимиты/статусы)."
-    )
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    lang = lang or "ru"
+    text = i18n.t(lang, "USER_DELETE_CONFIRM", user_id=user_id)
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Да, удалить",
+                    text=i18n.t(lang, "USER_DELETE_CONFIRM_YES"),
                     callback_data=f"user_delete:{user_id}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="❌ Отмена",
+                    text=i18n.t(lang, "USER_DELETE_CONFIRM_NO"),
                     callback_data=f"user_view:{user_id}",
                 )
             ],
@@ -2314,12 +2417,17 @@ async def user_delete_callback(callback: CallbackQuery):
     try:
         await callback.message.bot.send_message(
             user_id,
-            "Ваш аккаунт удалён администратором.",
+            i18n.t(get_user_lang(user_id) or "ru", "USER_DELETED_NOTICE"),
         )
     except Exception:
         pass
-    text, markup = _users_list_payload(prefix=f"✅ Пользователь удалён: {user_id}")
-    await callback.answer(f"✅ Пользователь удалён: {user_id}")
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    lang = lang or "ru"
+    text, markup = _users_list_payload(
+        lang,
+        prefix=i18n.t(lang, "USER_DELETED_PREFIX", user_id=user_id),
+    )
+    await callback.answer(i18n.t(lang, "USER_DELETED_ALERT", user_id=user_id))
     await callback.message.edit_text(text, reply_markup=markup)
 
 
@@ -2368,14 +2476,16 @@ async def receipt_message_handler(message: Message):
     set_user_pref(user.id, PREF_AWAITING_RECEIPT, 0)
     username_text = f"@{user.username}" if user.username else "-"
     timestamp = datetime.now(ALMATY_TZ).strftime("%Y-%m-%d %H:%M")
-    admin_text = (
-        "🧾 Чек на подписку\n\n"
-        f"User ID: {user.id}\n"
-        f"Username: {username_text}\n"
-        f"Дата/время: {timestamp}\n\n"
-        f"Тариф: ${SUB_PRICE_USD} / {SUB_DAYS} дней\n"
-        "Оплата: TRX (TRON)\n"
-        f"Адрес: {PAY_WALLET_TRX}"
+    admin_lang = get_user_lang(ADMIN_CHAT_ID or ADMIN_USER_ID) or "ru"
+    admin_text = i18n.t(
+        admin_lang,
+        "ADMIN_RECEIPT_TEXT",
+        user_id=user.id,
+        username=username_text,
+        timestamp=timestamp,
+        price=SUB_PRICE_USD,
+        days=SUB_DAYS,
+        wallet=PAY_WALLET_TRX,
     )
     admin_chat_id = ADMIN_CHAT_ID or ADMIN_USER_ID
     if admin_chat_id != 0:
@@ -2387,10 +2497,10 @@ async def receipt_message_handler(message: Message):
             await message.copy_to(admin_chat_id)
         except Exception:
             pass
-    await message.answer("✅ Чек отправлен админу. Ожидайте активацию.")
+    await message.answer(i18n.t(get_user_lang(user.id) or "ru", "RECEIPT_SENT_CONFIRM"))
 
 
-def _format_stats_message(stats: Dict[str, Any]) -> str:
+def _format_stats_message(stats: Dict[str, Any], lang: str) -> str:
     total = stats.get("total", 0)
     closed = stats.get("closed", 0)
     filled_closed = stats.get("filled_closed", 0)
@@ -2405,22 +2515,28 @@ def _format_stats_message(stats: Dict[str, Any]) -> str:
     pf_text = f"{profit_factor:.2f}" if isinstance(profit_factor, (int, float)) else "—"
 
     lines = [
-        "📊 Статистика сигналов (30d)",
+        i18n.t(lang, "ADMIN_STATS_TITLE"),
         "",
-        f"• Всего: {total}",
-        f"• Закрыто: {closed}",
-        f"• Filled rate: {filled_rate:.1f}% ({filled_closed} из {total})",
-        f"• Winrate (filled): {winrate:.1f}%",
-        f"• Profit factor: {pf_text}",
-        f"• Avg R: {avg_r:.2f}",
-        f"• Median R: {median_r:.2f}",
-        f"• Streak: {streak}",
+        i18n.t(lang, "ADMIN_STATS_TOTAL", total=total),
+        i18n.t(lang, "ADMIN_STATS_CLOSED", closed=closed),
+        i18n.t(
+            lang,
+            "ADMIN_STATS_FILLED_RATE",
+            rate=filled_rate,
+            filled=filled_closed,
+            total=total,
+        ),
+        i18n.t(lang, "ADMIN_STATS_WINRATE", winrate=winrate),
+        i18n.t(lang, "ADMIN_STATS_PROFIT_FACTOR", profit_factor=pf_text),
+        i18n.t(lang, "ADMIN_STATS_AVG_R", avg_r=avg_r),
+        i18n.t(lang, "ADMIN_STATS_MEDIAN_R", median_r=median_r),
+        i18n.t(lang, "ADMIN_STATS_STREAK", streak=streak),
         "",
-        "Последние 10 сигналов:",
+        i18n.t(lang, "ADMIN_STATS_LAST10"),
     ]
 
     if not last10:
-        lines.append("• Нет данных")
+        lines.append(i18n.t(lang, "ADMIN_STATS_NO_DATA"))
     else:
         for row in last10:
             symbol = row.get("symbol", "-")
@@ -2428,7 +2544,16 @@ def _format_stats_message(stats: Dict[str, Any]) -> str:
             outcome = row.get("outcome", "-")
             pnl_r = row.get("pnl_r")
             pnl_text = f"{pnl_r:+.2f}R" if isinstance(pnl_r, (int, float)) else "-"
-            lines.append(f"• {symbol} {direction.upper()} → {outcome} ({pnl_text})")
+            lines.append(
+                i18n.t(
+                    lang,
+                    "ADMIN_STATS_ROW",
+                    symbol=symbol,
+                    direction=direction.upper(),
+                    outcome=outcome,
+                    pnl=pnl_text,
+                )
+            )
 
     return "\n".join(lines)
 
@@ -2440,7 +2565,7 @@ async def show_stats(message: Message):
     stats = get_public_stats(days=30)
     lang = get_user_lang(message.chat.id) or "ru"
     await message.answer(
-        _format_stats_message(stats),
+        _format_stats_message(stats, lang),
         reply_markup=build_main_menu_kb(lang, is_admin=True),
     )
 
@@ -2451,10 +2576,12 @@ async def lock_user_cmd(message: Message):
         return
     user_id = _parse_user_id_arg(message.text)
     if user_id is None:
-        await message.answer("Использование: /lock <id>")
+        await message.answer(i18n.t(get_user_lang(message.chat.id) or "ru", "CMD_USAGE_LOCK"))
         return
     set_user_pref(user_id, "user_locked", 1)
-    await message.answer(f"✅ user_locked=1 для {user_id}")
+    await message.answer(
+        i18n.t(get_user_lang(message.chat.id) or "ru", "CMD_LOCK_OK", user_id=user_id)
+    )
 
 
 @dp.message(Command("unlock"))
@@ -2463,14 +2590,18 @@ async def unlock_user_cmd(message: Message):
         return
     user_id = _parse_user_id_arg(message.text)
     if user_id is None:
-        await message.answer("Использование: /unlock <id>")
+        await message.answer(
+            i18n.t(get_user_lang(message.chat.id) or "ru", "CMD_USAGE_UNLOCK")
+        )
         return
     set_user_pref(user_id, "user_locked", 0)
     now = int(time.time())
     old_sub_until = get_user_pref(user_id, "sub_until", 0)
     new_sub_until = max(old_sub_until, now) + 30 * 24 * 3600
     set_user_pref(user_id, "sub_until", new_sub_until)
-    await message.answer(f"✅ user_locked=0 для {user_id}")
+    await message.answer(
+        i18n.t(get_user_lang(message.chat.id) or "ru", "CMD_UNLOCK_OK", user_id=user_id)
+    )
 
 
 @dp.message(Command("delete"))
@@ -2479,33 +2610,37 @@ async def delete_user_cmd(message: Message):
         return
     user_id = _parse_user_id_arg(message.text)
     if user_id is None:
-        await message.answer("Использование: /delete <id>")
+        await message.answer(
+            i18n.t(get_user_lang(message.chat.id) or "ru", "CMD_USAGE_DELETE")
+        )
         return
     delete_user(user_id)
-    await message.answer(f"✅ пользователь {user_id} удалён")
+    await message.answer(
+        i18n.t(get_user_lang(message.chat.id) or "ru", "CMD_DELETE_OK", user_id=user_id)
+    )
 
 
-def _trend_short_text(trend: str) -> str:
+def _trend_short_text(trend: str, lang: str) -> str:
     if trend in ("bullish", "up"):
-        return "бычий"
+        return i18n.t(lang, "SCENARIO_TREND_BULLISH")
     if trend in ("bearish", "down"):
-        return "медвежий"
-    return "нейтральный"
+        return i18n.t(lang, "SCENARIO_TREND_BEARISH")
+    return i18n.t(lang, "SCENARIO_TREND_NEUTRAL")
 
 
-def _rsi_short_zone(rsi: float) -> str:
+def _rsi_short_zone(rsi: float, lang: str) -> str:
     if 40 <= rsi <= 60:
-        return "комфортная зона"
+        return i18n.t(lang, "SCENARIO_RSI_COMFORT")
     if rsi < 40:
-        return "зона перепроданности"
-    return "зона перекупленности"
+        return i18n.t(lang, "SCENARIO_RSI_OVERSOLD_ZONE")
+    return i18n.t(lang, "SCENARIO_RSI_OVERBOUGHT_ZONE")
 
 
 def _format_signed_number(value: float, decimals: int = 1) -> str:
     sign = "−" if value < 0 else "+"
     return f"{sign}{abs(value):.{decimals}f}"
 
-def _format_signal(signal: Dict[str, Any]) -> str:
+def _format_signal(signal: Dict[str, Any], lang: str) -> str:
     entry_low, entry_high = signal["entry_zone"]
     symbol = signal["symbol"]
     if symbol.endswith("USDT"):
@@ -2527,6 +2662,7 @@ def _format_signal(signal: Dict[str, Any]) -> str:
     breakdown = signal.get("score_breakdown") or signal.get("breakdown") or []
 
     text = format_scenario_message(
+        lang=lang,
         symbol_text=symbol_text,
         side=side,
         timeframe="1H",
@@ -2547,8 +2683,11 @@ def _format_signal(signal: Dict[str, Any]) -> str:
         market_bias=reason.get("market_bias"),
         btc_change_6h_pct=float(reason.get("btc_change_6h_pct", 0.0)),
         btc_atr_1h_pct=float(reason.get("btc_atr_1h_pct", 0.0)),
+        lifetime_hours=SIGNAL_TTL_SECONDS // 3600,
     )
     prefix = signal.get("title_prefix")
+    if isinstance(prefix, dict):
+        prefix = prefix.get(lang) or prefix.get("ru")
     if prefix:
         return f"{prefix}{text}"
     return text
@@ -2685,7 +2824,6 @@ async def send_signal_to_all(
 
     dedup_key = f"{symbol}:{direction}:1h:{time_bucket}:{e1}-{e2}"
 
-    text = _format_signal(signal_dict)
     sent_at = int(time.time())
     insert_signal_audit(signal_dict, tier="free", module="ai_signals", sent_at=sent_at)
     reason = signal_dict.get("reason")
@@ -2708,19 +2846,20 @@ async def send_signal_to_all(
             if not can_send(chat_id, "ai_signals", dedup_key, COOLDOWN_FREE_SEC):
                 skipped_dedup += 1
                 continue
+        lang = get_user_lang(chat_id) or "ru"
+        message_text = _format_signal(signal_dict, lang)
         if allow_admin_bypass and is_admin(chat_id):
-            tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
+            tasks.append(asyncio.create_task(bot.send_message(chat_id, message_text)))
             recipients.append((chat_id, True, "signal"))
             continue
         if is_sub_active(chat_id):
-            tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
+            tasks.append(asyncio.create_task(bot.send_message(chat_id, message_text)))
             recipients.append((chat_id, True, "signal"))
             continue
         ensure_trial_defaults(chat_id)
-        lang = get_user_lang(chat_id) or "ru"
         allowed, left = try_consume_trial(chat_id, "trial_ai_left", 1)
         if allowed:
-            message_text = text + i18n.t(
+            message_text = message_text + i18n.t(
                 lang,
                 "TRIAL_SUFFIX_AI",
                 left=left,
@@ -2891,12 +3030,14 @@ async def _compute_candidate_score(symbol: str) -> tuple[int, str]:
 async def _deliver_pumpdump_signal_stats(
     *,
     bot: Bot,
-    text: str,
+    signal: Dict[str, Any],
     symbol: str,
     subscribers: list[int],
     allow_admin_bypass: bool = True,
     bypass_cooldown: bool = False,
     bypass_limits: bool = False,
+    prefix_key: str | None = None,
+    suffix_key: str | None = None,
 ) -> dict[str, int]:
     sent_count = 0
     recipient_count = 0
@@ -2907,6 +3048,12 @@ async def _deliver_pumpdump_signal_stats(
 
     for chat_id in subscribers:
         try:
+            lang = get_user_lang(chat_id) or "ru"
+            message_text = format_pump_message(signal, lang)
+            if prefix_key:
+                message_text = f"{i18n.t(lang, prefix_key)}{message_text}"
+            if suffix_key:
+                message_text = f"{message_text}\n\n{i18n.t(lang, suffix_key)}"
             is_admin_user = is_admin(chat_id) if allow_admin_bypass else False
             if not is_admin_user:
                 if not bypass_limits:
@@ -2934,22 +3081,21 @@ async def _deliver_pumpdump_signal_stats(
                 ):
                     continue
             if is_admin_user:
-                await bot.send_message(chat_id, text, parse_mode="Markdown")
+                await bot.send_message(chat_id, message_text, parse_mode="Markdown")
                 increment_pumpdump_daily_count(chat_id, date_key)
                 sent_count += 1
                 recipient_count += 1
                 continue
             if is_sub_active(chat_id):
-                await bot.send_message(chat_id, text, parse_mode="Markdown")
+                await bot.send_message(chat_id, message_text, parse_mode="Markdown")
                 increment_pumpdump_daily_count(chat_id, date_key)
                 sent_count += 1
                 recipient_count += 1
                 continue
             ensure_trial_defaults(chat_id)
-            lang = get_user_lang(chat_id) or "ru"
             allowed, left = try_consume_trial(chat_id, "trial_pump_left", 1)
             if allowed:
-                message_text = text + i18n.t(
+                message_text = message_text + i18n.t(
                     lang,
                     "TRIAL_SUFFIX_PD",
                     left=left,
@@ -2986,14 +3132,14 @@ async def _deliver_pumpdump_signal_stats(
 async def _deliver_pumpdump_signal(
     *,
     bot: Bot,
-    text: str,
+    signal: Dict[str, Any],
     symbol: str,
     subscribers: list[int],
     allow_admin_bypass: bool = True,
 ) -> tuple[int, int]:
     stats = await _deliver_pumpdump_signal_stats(
         bot=bot,
-        text=text,
+        signal=signal,
         symbol=symbol,
         subscribers=subscribers,
         allow_admin_bypass=allow_admin_bypass,
@@ -3151,12 +3297,10 @@ async def pump_scan_once(bot: Bot) -> None:
             if last_sent.get(symbol) == now_min:
                 continue
 
-            text = format_pump_message(sig)
-
             last_sent[symbol] = now_min
             sent_delta, _ = await _deliver_pumpdump_signal(
                 bot=bot,
-                text=text,
+                signal=sig,
                 symbol=symbol,
                 subscribers=subscribers,
                 allow_admin_bypass=True,
@@ -3180,12 +3324,11 @@ async def pump_scan_once(bot: Bot) -> None:
         cache_stats = get_klines_cache_stats("pumpdump")
         ticker_count = get_ticker_request_count("pumpdump")
         fails = stats.get("fails", {}) if isinstance(stats, dict) else {}
-        fails_top_str = _format_fails_top(fails)
         fails_top = sorted(fails.items(), key=lambda x: x[1], reverse=True)[:3]
         fails_str = ",".join([f"{k}={v}" for k, v in fails_top]) if fails_top else "-"
         if module_state:
             module_state.last_stats = stats
-            module_state.fails_top = fails_top_str
+            module_state.fails_top = fails
         if log_level >= 1:
             print(f"[pumpdump] cycle done: found={found} sent={sent_count}")
         mark_ok(
@@ -3395,7 +3538,7 @@ async def watchlist_scan_once() -> None:
     module_state = MODULES.get("ai_signals")
     if module_state and isinstance(stats, dict):
         module_state.last_stats = stats
-        module_state.fails_top = _format_fails_top(stats.get("fails", {}))
+        module_state.fails_top = stats.get("fails", {})
         module_state.near_miss = _format_near_miss(stats.get("near_miss", {}))
     deep_scans_done = stats.get("deep_scans_done", 0) if isinstance(stats, dict) else 0
     sent_count = 0
