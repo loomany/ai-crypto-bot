@@ -108,9 +108,11 @@ from signal_audit_db import (
     insert_signal_audit,
 )
 from signal_audit_worker import signal_audit_worker_loop
+import i18n
 from keyboards import (
     ai_signals_inline_kb,
     build_admin_diagnostics_kb,
+    build_lang_select_kb,
     build_main_menu_kb,
     build_offer_inline_kb,
     build_payment_inline_kb,
@@ -118,7 +120,6 @@ from keyboards import (
     pumpdump_inline_kb,
     stats_inline_kb,
 )
-from texts import AI_SIGNALS_TEXT, OFFER_TEXT_RU, PAYMENT_TEXT_RU_TRX, PUMPDUMP_TEXT, START_TEXT
 from settings import SIGNAL_TTL_SECONDS
 
 
@@ -138,8 +139,6 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
 PUMP_COOLDOWN_SYMBOL_SEC = int(os.getenv("PUMP_COOLDOWN_SYMBOL_SEC", "21600"))  # 6h
 PUMP_COOLDOWN_GLOBAL_SEC = int(os.getenv("PUMP_COOLDOWN_GLOBAL_SEC", "3600"))  # 1h
 PUMP_DAILY_LIMIT = int(os.getenv("PUMP_DAILY_LIMIT", "6"))
-TRIAL_AI_SUFFIX = "бесплатных AI-сигналов"
-TRIAL_PUMP_SUFFIX = "бесплатных Pump/Dump сигналов"
 SUB_DAYS = 30
 SUB_PRICE_USD = 39
 PAY_WALLET_TRX = "TGnSveNVrBHytZyA5AfqAj3hDK3FbFCtBY"
@@ -316,6 +315,42 @@ def increment_pumpdump_daily_count(chat_id: int, date_key: str) -> None:
         conn.close()
 
 
+def _clean_lang(lang: str | None) -> str | None:
+    if not lang:
+        return None
+    raw = lang.strip().lower()
+    if raw.startswith("ru"):
+        return "ru"
+    if raw.startswith("en"):
+        return "en"
+    return None
+
+
+def get_user_lang(chat_id: int) -> str | None:
+    conn = sqlite3.connect(get_db_path())
+    try:
+        cur = conn.execute("SELECT language FROM users WHERE chat_id = ?", (chat_id,))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    return _clean_lang(row[0])
+
+
+def set_user_lang(chat_id: int, lang: str) -> None:
+    normalized = i18n.normalize_lang(lang)
+    conn = sqlite3.connect(get_db_path())
+    try:
+        conn.execute(
+            "UPDATE users SET language = ?, last_seen = ? WHERE chat_id = ?",
+            (normalized, int(time.time()), chat_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def upsert_user(
     chat_id: int,
     username: str | None,
@@ -328,8 +363,12 @@ def upsert_user(
     conn = sqlite3.connect(get_db_path())
     try:
         cur = conn.cursor()
-        cur.execute("SELECT 1 FROM users WHERE chat_id = ?", (chat_id,))
-        exists = cur.fetchone() is not None
+        cur.execute("SELECT language FROM users WHERE chat_id = ?", (chat_id,))
+        row = cur.fetchone()
+        exists = row is not None
+        existing_lang = _clean_lang(row[0]) if row else None
+        incoming_lang = _clean_lang(language)
+        resolved_lang = existing_lang or incoming_lang
         if not exists:
             cur.execute(
                 """
@@ -344,7 +383,7 @@ def upsert_user(
                     first_name,
                     last_name,
                     full_name,
-                    language,
+                    resolved_lang,
                     now,
                     now,
                 ),
@@ -364,7 +403,7 @@ def upsert_user(
                 first_name,
                 last_name,
                 full_name,
-                language,
+                resolved_lang,
                 now,
                 chat_id,
             ),
@@ -426,6 +465,7 @@ CANDIDATE_SCORE_MIN = int(os.getenv("CANDIDATE_SCORE_MIN", "40"))
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     user = message.from_user
+    lang: str | None = None
     if user is not None:
         is_new = upsert_user(
             chat_id=message.chat.id,
@@ -435,6 +475,7 @@ async def cmd_start(message: Message):
             full_name=user.full_name,
             language=user.language_code,
         )
+        lang = get_user_lang(message.chat.id)
         if is_new and ADMIN_CHAT_ID != 0:
             username = f"@{user.username}" if user.username else "-"
             full_name = user.full_name or "-"
@@ -451,29 +492,63 @@ async def cmd_start(message: Message):
             set_user_pref(message.chat.id, "trial_ai_left", TRIAL_AI_LIMIT)
             set_user_pref(message.chat.id, "trial_pump_left", TRIAL_PUMP_LIMIT)
             set_user_pref(message.chat.id, "user_locked", 0)
+    if not lang:
+        await message.answer(
+            i18n.t("ru", "LANG_PICK_TEXT"),
+            reply_markup=build_lang_select_kb(),
+        )
+        return
     await message.answer(
-        START_TEXT,
+        i18n.t(lang, "START_TEXT"),
         reply_markup=build_main_menu_kb(
-            is_admin=is_admin(message.from_user.id) if message.from_user else False
+            lang,
+            is_admin=is_admin(message.from_user.id) if message.from_user else False,
         ),
     )
 
 
-@dp.message(F.text == "🎯 AI-сигналы")
+@dp.callback_query(F.data.in_({"lang:ru", "lang:en"}))
+async def lang_select_callback(callback: CallbackQuery):
+    if callback.from_user is None:
+        return
+    lang = i18n.normalize_lang(callback.data.split(":", 1)[1])
+    set_user_lang(callback.from_user.id, lang)
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            i18n.t(lang, "START_TEXT"),
+            reply_markup=build_main_menu_kb(
+                lang,
+                is_admin=is_admin(callback.from_user.id),
+            ),
+        )
+
+
+@dp.message(F.text.in_(i18n.all_labels("MENU_AI")))
 async def ai_signals_menu(message: Message):
-    status = "✅ включено" if get_user_pref(message.chat.id, "ai_signals_enabled", 0) else "⛔ выключено"
+    lang = get_user_lang(message.chat.id) or "ru"
+    status = (
+        i18n.t(lang, "STATUS_ON")
+        if get_user_pref(message.chat.id, "ai_signals_enabled", 0)
+        else i18n.t(lang, "STATUS_OFF")
+    )
     await message.answer(
-        f"{AI_SIGNALS_TEXT}\n\nСтатус: {status}",
-        reply_markup=ai_signals_inline_kb(),
+        f"{i18n.t(lang, 'AI_SIGNALS_TEXT')}\n\n{i18n.t(lang, 'STATUS_LABEL')}: {status}",
+        reply_markup=ai_signals_inline_kb(lang),
     )
 
 
-@dp.message(F.text == "⚡ Pump / Dump")
+@dp.message(F.text.in_(i18n.all_labels("MENU_PD")))
 async def pumpdump_menu(message: Message):
-    status = "✅ включено" if get_user_pref(message.chat.id, "pumpdump_enabled", 0) else "⛔ выключено"
+    lang = get_user_lang(message.chat.id) or "ru"
+    status = (
+        i18n.t(lang, "STATUS_ON")
+        if get_user_pref(message.chat.id, "pumpdump_enabled", 0)
+        else i18n.t(lang, "STATUS_OFF")
+    )
     await message.answer(
-        f"{PUMPDUMP_TEXT}\n\nСтатус: {status}",
-        reply_markup=pumpdump_inline_kb(),
+        f"{i18n.t(lang, 'PUMPDUMP_TEXT')}\n\n{i18n.t(lang, 'STATUS_LABEL')}: {status}",
+        reply_markup=pumpdump_inline_kb(lang),
     )
 
 
@@ -691,11 +766,12 @@ def _format_archive_detail(event: dict) -> str:
     return "\n".join(lines)
 
 
-@dp.message(F.text == "📊 Статистика")
+@dp.message(F.text.in_(i18n.all_labels("MENU_STATS")))
 async def stats_menu(message: Message):
+    lang = get_user_lang(message.chat.id) or "ru"
     await message.answer(
-        "📊 История сигналов\nВыбери период:",
-        reply_markup=stats_inline_kb(),
+        i18n.t(lang, "STATS_PICK_TEXT"),
+        reply_markup=stats_inline_kb(lang),
     )
 
 
@@ -880,10 +956,12 @@ async def archive_detail(callback: CallbackQuery):
 async def archive_back(callback: CallbackQuery):
     if callback.message is None:
         return
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    lang = lang or "ru"
     await callback.answer()
     await callback.message.edit_text(
-        "📊 История сигналов\nВыбери период:",
-        reply_markup=stats_inline_kb(),
+        i18n.t(lang, "STATS_PICK_TEXT"),
+        reply_markup=stats_inline_kb(lang),
     )
 
 @dp.callback_query(F.data == "ai_notify_on")
@@ -1454,13 +1532,14 @@ async def test_admin(message: Message):
         blocks.append(_format_module_ru(key, st, now))
         blocks.append("\n" + ("—" * 22) + "\n")
 
+    lang = get_user_lang(message.chat.id) or "ru"
     await message.answer(
         "\n".join(blocks).strip(),
-        reply_markup=build_admin_diagnostics_kb(),
+        reply_markup=build_admin_diagnostics_kb(lang),
     )
 
 
-@dp.message(F.text == "🧪 Диагностика (админ)")
+@dp.message(F.text.in_(i18n.all_labels("SYS_DIAG_ADMIN")))
 async def test_admin_button(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
         await message.answer("⛔ Нет доступа")
@@ -1468,7 +1547,7 @@ async def test_admin_button(message: Message):
     await test_admin(message)
 
 
-@dp.message(F.text == "🧪 Тест AI (всем)")
+@dp.message(F.text.in_(i18n.all_labels("SYS_TEST_AI")))
 async def test_ai_signal_all(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
         await message.answer("⛔ Нет доступа")
@@ -1514,7 +1593,7 @@ async def test_ai_signal_all(message: Message):
     )
 
 
-@dp.message(F.text == "🧪 Тест Pump/Dump (всем)")
+@dp.message(F.text.in_(i18n.all_labels("SYS_TEST_PD")))
 async def test_pumpdump_signal_all(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
         await message.answer("⛔ Нет доступа")
@@ -1757,15 +1836,17 @@ async def status_cmd(message: Message):
     await message.answer(_format_user_bot_status(message.chat.id))
 
 
-@dp.message(F.text == "ℹ️ О системе")
+@dp.message(F.text.in_(i18n.all_labels("MENU_SYSTEM")))
 async def system_menu(message: Message):
     await show_system_menu(message)
 
 
 async def show_system_menu(message: Message) -> None:
+    lang = get_user_lang(message.chat.id) or "ru"
     await message.answer(
-        "ℹ️ Раздел: О системе",
+        i18n.t(lang, "SYSTEM_SECTION_TEXT"),
         reply_markup=build_system_menu_kb(
+            lang,
             is_admin=is_admin(message.from_user.id) if message.from_user else False
         ),
     )
@@ -1775,9 +1856,12 @@ async def show_system_menu(message: Message) -> None:
 async def about_back_callback(callback: CallbackQuery):
     await callback.answer()
     if callback.message:
+        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+        lang = lang or "ru"
         await callback.message.answer(
-            "ℹ️ Раздел: О системе",
+            i18n.t(lang, "SYSTEM_SECTION_TEXT"),
             reply_markup=build_system_menu_kb(
+                lang,
                 is_admin=is_admin(callback.from_user.id) if callback.from_user else False
             ),
         )
@@ -1787,9 +1871,12 @@ async def about_back_callback(callback: CallbackQuery):
 async def system_back_callback(callback: CallbackQuery):
     await callback.answer()
     if callback.message:
+        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+        lang = lang or "ru"
         await callback.message.answer(
-            "ℹ️ Раздел: О системе",
+            i18n.t(lang, "SYSTEM_SECTION_TEXT"),
             reply_markup=build_system_menu_kb(
+                lang,
                 is_admin=is_admin(callback.from_user.id) if callback.from_user else False
             ),
         )
@@ -1804,7 +1891,7 @@ async def subscription_contact_callback(callback: CallbackQuery):
         await callback.message.answer(text)
 
 
-@dp.message(F.text == "💳 Оплатить подписку")
+@dp.message(F.text.in_(i18n.all_labels("SYS_PAY")))
 async def subscription_offer_message(message: Message):
     if message.from_user is None:
         return
@@ -1828,10 +1915,14 @@ async def subscription_pay_callback(callback: CallbackQuery):
 @dp.callback_query(F.data == "sub_accept")
 async def subscription_accept_callback(callback: CallbackQuery):
     user_id = callback.from_user.id if callback.from_user else 0
-    payment_text = PAYMENT_TEXT_RU_TRX.format(wallet=PAY_WALLET_TRX, user_id=user_id)
+    lang = get_user_lang(user_id) or "ru"
+    payment_text = i18n.t(lang, "PAYMENT_TEXT_TRX", wallet=PAY_WALLET_TRX, user_id=user_id)
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text(payment_text, reply_markup=build_payment_inline_kb())
+        await callback.message.edit_text(
+            payment_text,
+            reply_markup=build_payment_inline_kb(lang),
+        )
 
 
 @dp.callback_query(F.data == "sub_pay_back")
@@ -1843,9 +1934,11 @@ async def subscription_pay_back_callback(callback: CallbackQuery):
         get_user_pref(callback.from_user.id, "last_sub_source", SUB_SOURCE_SYSTEM)
     )
     if callback.message:
+        lang = get_user_lang(callback.from_user.id) or "ru"
         await callback.message.edit_text(
-            OFFER_TEXT_RU,
+            i18n.t(lang, "OFFER_TEXT"),
             reply_markup=build_offer_inline_kb(
+                lang,
                 back_callback=_subscribe_back_callback(source)
             ),
         )
@@ -2045,7 +2138,7 @@ async def _ensure_admin_callback(callback: CallbackQuery) -> bool:
     return True
 
 
-@dp.message(F.text == "👥 Пользователи")
+@dp.message(F.text.in_(i18n.all_labels("SYS_USERS")))
 async def users_list(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
         return
@@ -2182,32 +2275,36 @@ async def user_delete_callback(callback: CallbackQuery):
     await callback.message.edit_text(text, reply_markup=markup)
 
 
-@dp.message(F.text == "🛰 Статус системы")
+@dp.message(F.text.in_(i18n.all_labels("SYS_STATUS")))
 async def status_button(message: Message):
     await message.answer(
         _format_user_bot_status(message.chat.id),
         reply_markup=build_system_menu_kb(
+            get_user_lang(message.chat.id) or "ru",
             is_admin=is_admin(message.from_user.id) if message.from_user else False
         ),
     )
 
 
-@dp.message(F.text == "🧪 Диагностика")
+@dp.message(F.text.in_(i18n.all_labels("SYS_DIAG")))
 async def diagnostics_button(message: Message):
     await message.answer(
         _format_user_bot_status(message.chat.id),
         reply_markup=build_system_menu_kb(
+            get_user_lang(message.chat.id) or "ru",
             is_admin=is_admin(message.from_user.id) if message.from_user else False
         ),
     )
 
 
-@dp.message(F.text == "⬅️ Назад")
+@dp.message(F.text.in_(i18n.all_labels("MENU_BACK")))
 async def back_to_main(message: Message):
+    lang = get_user_lang(message.chat.id) or "ru"
     await message.answer(
-        "Возвращаемся в главное меню.",
+        i18n.t(lang, "BACK_TO_MAIN_TEXT"),
         reply_markup=build_main_menu_kb(
-            is_admin=is_admin(message.from_user.id) if message.from_user else False
+            lang,
+            is_admin=is_admin(message.from_user.id) if message.from_user else False,
         ),
     )
 
@@ -2293,9 +2390,10 @@ async def show_stats(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
         return
     stats = get_public_stats(days=30)
+    lang = get_user_lang(message.chat.id) or "ru"
     await message.answer(
         _format_stats_message(stats),
-        reply_markup=build_main_menu_kb(is_admin=True),
+        reply_markup=build_main_menu_kb(lang, is_admin=True),
     )
 
 
@@ -2408,12 +2506,12 @@ def _format_signal(signal: Dict[str, Any]) -> str:
     return text
 
 
-def _subscription_kb_for(source: str) -> InlineKeyboardMarkup:
+def _subscription_kb_for(source: str, lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="💳 Купить подписку",
+                    text=i18n.t(lang, "BTN_BUY_SUB"),
                     callback_data=f"sub_paywall:{source}",
                 )
             ]
@@ -2461,15 +2559,12 @@ async def show_subscribe_offer(
     edit: bool = False,
 ) -> None:
     set_user_pref(user_id, "last_sub_source", _subscribe_source_code(source))
-    reply_markup = build_offer_inline_kb(back_callback=_subscribe_back_callback(source))
+    lang = get_user_lang(user_id) or "ru"
+    reply_markup = build_offer_inline_kb(lang, back_callback=_subscribe_back_callback(source))
     if edit:
-        await message.edit_text(OFFER_TEXT_RU, reply_markup=reply_markup)
+        await message.edit_text(i18n.t(lang, "OFFER_TEXT"), reply_markup=reply_markup)
         return
-    await message.answer(OFFER_TEXT_RU, reply_markup=reply_markup)
-
-
-def _trial_suffix(left: int, limit: int, label: str) -> str:
-    return f"\n\n🎁 Осталось {left}/{limit} {label}"
+    await message.answer(i18n.t(lang, "OFFER_TEXT"), reply_markup=reply_markup)
 
 
 async def send_signal_to_all(
@@ -2574,9 +2669,15 @@ async def send_signal_to_all(
             recipients.append((chat_id, True, "signal"))
             continue
         ensure_trial_defaults(chat_id)
+        lang = get_user_lang(chat_id) or "ru"
         allowed, left = try_consume_trial(chat_id, "trial_ai_left", 1)
         if allowed:
-            message_text = text + _trial_suffix(left, TRIAL_AI_LIMIT, TRIAL_AI_SUFFIX)
+            message_text = text + i18n.t(
+                lang,
+                "TRIAL_SUFFIX_AI",
+                left=left,
+                limit=TRIAL_AI_LIMIT,
+            )
             tasks.append(asyncio.create_task(bot.send_message(chat_id, message_text)))
             recipients.append((chat_id, True, "signal"))
         else:
@@ -2586,9 +2687,8 @@ async def send_signal_to_all(
                 asyncio.create_task(
                     bot.send_message(
                         chat_id,
-                        "🔒 Доступ к AI-сигналам по подписке.\n"
-                        "Нажми «Купить подписку» — покажу инструкцию.",
-                        reply_markup=_subscription_kb_for("ai"),
+                        i18n.t(lang, "PAYWALL_AI"),
+                        reply_markup=_subscription_kb_for("ai", lang),
                     )
                 )
             )
@@ -2798,12 +2898,14 @@ async def _deliver_pumpdump_signal_stats(
                 recipient_count += 1
                 continue
             ensure_trial_defaults(chat_id)
+            lang = get_user_lang(chat_id) or "ru"
             allowed, left = try_consume_trial(chat_id, "trial_pump_left", 1)
             if allowed:
-                message_text = text + _trial_suffix(
-                    left,
-                    TRIAL_PUMP_LIMIT,
-                    TRIAL_PUMP_SUFFIX,
+                message_text = text + i18n.t(
+                    lang,
+                    "TRIAL_SUFFIX_PD",
+                    left=left,
+                    limit=TRIAL_PUMP_LIMIT,
                 )
                 await bot.send_message(chat_id, message_text, parse_mode="Markdown")
                 increment_pumpdump_daily_count(chat_id, date_key)
@@ -2814,9 +2916,8 @@ async def _deliver_pumpdump_signal_stats(
                     continue
                 await bot.send_message(
                     chat_id,
-                    "🔒 Доступ к Pump/Dump сигналам по подписке.\n"
-                    "Нажми «Купить подписку» — покажу инструкцию.",
-                    reply_markup=_subscription_kb_for("pump"),
+                    i18n.t(lang, "PAYWALL_PD"),
+                    reply_markup=_subscription_kb_for("pump", lang),
                 )
                 paywall_count += 1
                 recipient_count += 1

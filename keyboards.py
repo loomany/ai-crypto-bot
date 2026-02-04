@@ -5,69 +5,71 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-def build_main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
+import i18n
+
+def build_main_menu_kb(lang: str, is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Главное меню."""
     keyboard = [
         [
-            KeyboardButton(text="🎯 AI-сигналы"),
-            KeyboardButton(text="⚡ Pump / Dump"),
+            KeyboardButton(text=i18n.t(lang, "MENU_AI")),
+            KeyboardButton(text=i18n.t(lang, "MENU_PD")),
         ],
         [
-            KeyboardButton(text="📊 Статистика"),
-            KeyboardButton(text="ℹ️ О системе"),
+            KeyboardButton(text=i18n.t(lang, "MENU_STATS")),
+            KeyboardButton(text=i18n.t(lang, "MENU_SYSTEM")),
         ],
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-def build_system_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
+def build_system_menu_kb(lang: str, is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Системное меню."""
     if is_admin:
         keyboard = [
             [
-                KeyboardButton(text="🛰 Статус системы"),
-                KeyboardButton(text="🧪 Диагностика (админ)"),
+                KeyboardButton(text=i18n.t(lang, "SYS_STATUS")),
+                KeyboardButton(text=i18n.t(lang, "SYS_DIAG_ADMIN")),
             ],
             [
-                KeyboardButton(text="👥 Пользователи"),
-                KeyboardButton(text="💳 Оплатить подписку"),
+                KeyboardButton(text=i18n.t(lang, "SYS_USERS")),
+                KeyboardButton(text=i18n.t(lang, "SYS_PAY")),
             ],
-            [KeyboardButton(text="⬅️ Назад")],
+            [KeyboardButton(text=i18n.t(lang, "MENU_BACK"))],
         ]
     else:
         keyboard = [
             [
-                KeyboardButton(text="🧪 Диагностика"),
-                KeyboardButton(text="💳 Оплатить подписку"),
+                KeyboardButton(text=i18n.t(lang, "SYS_DIAG")),
+                KeyboardButton(text=i18n.t(lang, "SYS_PAY")),
             ],
-            [KeyboardButton(text="⬅️ Назад")],
+            [KeyboardButton(text=i18n.t(lang, "MENU_BACK"))],
         ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-def build_admin_diagnostics_kb() -> ReplyKeyboardMarkup:
+def build_admin_diagnostics_kb(lang: str) -> ReplyKeyboardMarkup:
     keyboard = [
         [
-            KeyboardButton(text="🧪 Тест AI (всем)"),
-            KeyboardButton(text="🧪 Тест Pump/Dump (всем)"),
+            KeyboardButton(text=i18n.t(lang, "SYS_TEST_AI")),
+            KeyboardButton(text=i18n.t(lang, "SYS_TEST_PD")),
         ],
-        [KeyboardButton(text="⬅️ Назад")],
+        [KeyboardButton(text=i18n.t(lang, "MENU_BACK"))],
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-def ai_signals_inline_kb() -> InlineKeyboardMarkup:
+def ai_signals_inline_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔔 Включить AI-уведомления",
+                    text=i18n.t(lang, "BTN_AI_ON"),
                     callback_data="ai_notify_on",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🚫 Отключить AI-уведомления",
+                    text=i18n.t(lang, "BTN_AI_OFF"),
                     callback_data="ai_notify_off",
                 )
             ],
@@ -75,18 +77,18 @@ def ai_signals_inline_kb() -> InlineKeyboardMarkup:
     )
 
 
-def pumpdump_inline_kb() -> InlineKeyboardMarkup:
+def pumpdump_inline_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔔 Включить Pump/Dump-уведомления",
+                    text=i18n.t(lang, "BTN_PD_ON"),
                     callback_data="pumpdump_notify_on",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🚫 Отключить Pump/Dump-уведомления",
+                    text=i18n.t(lang, "BTN_PD_OFF"),
                     callback_data="pumpdump_notify_off",
                 )
             ],
@@ -94,16 +96,16 @@ def pumpdump_inline_kb() -> InlineKeyboardMarkup:
     )
 
 
-def stats_inline_kb() -> InlineKeyboardMarkup:
+def stats_inline_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="1 день", callback_data="history:1d"),
-                InlineKeyboardButton(text="7 дней", callback_data="history:7d"),
+                InlineKeyboardButton(text=i18n.t(lang, "PERIOD_1D"), callback_data="history:1d"),
+                InlineKeyboardButton(text=i18n.t(lang, "PERIOD_7D"), callback_data="history:7d"),
             ],
             [
-                InlineKeyboardButton(text="30 дней", callback_data="history:30d"),
-                InlineKeyboardButton(text="Все время", callback_data="history:all"),
+                InlineKeyboardButton(text=i18n.t(lang, "PERIOD_30D"), callback_data="history:30d"),
+                InlineKeyboardButton(text=i18n.t(lang, "PERIOD_ALL"), callback_data="history:all"),
             ],
         ]
     )
@@ -119,22 +121,33 @@ def build_about_inline_kb() -> InlineKeyboardMarkup:
     )
 
 
-def build_offer_inline_kb(back_callback: str = "system_back") -> InlineKeyboardMarkup:
+def build_offer_inline_kb(lang: str, back_callback: str = "system_back") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Принять", callback_data="sub_accept")],
-            [InlineKeyboardButton(text="💬 Связь с админом", callback_data="sub_contact")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)],
+            [InlineKeyboardButton(text=i18n.t(lang, "BTN_ACCEPT"), callback_data="sub_accept")],
+            [InlineKeyboardButton(text=i18n.t(lang, "BTN_CONTACT_ADMIN"), callback_data="sub_contact")],
+            [InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data=back_callback)],
         ]
     )
 
 
-def build_payment_inline_kb() -> InlineKeyboardMarkup:
+def build_payment_inline_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📋 Скопировать адрес", callback_data="sub_copy_address")],
-            [InlineKeyboardButton(text="📎 Отправить чек + ID", callback_data="sub_send_receipt")],
-            [InlineKeyboardButton(text="💬 Связь с админом", callback_data="sub_contact")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="sub_pay_back")],
+            [InlineKeyboardButton(text=i18n.t(lang, "BTN_COPY_ADDRESS"), callback_data="sub_copy_address")],
+            [InlineKeyboardButton(text=i18n.t(lang, "BTN_SEND_RECEIPT"), callback_data="sub_send_receipt")],
+            [InlineKeyboardButton(text=i18n.t(lang, "BTN_CONTACT_ADMIN"), callback_data="sub_contact")],
+            [InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data="sub_pay_back")],
+        ]
+    )
+
+
+def build_lang_select_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=i18n.t("ru", "LANG_RU"), callback_data="lang:ru"),
+                InlineKeyboardButton(text=i18n.t("en", "LANG_EN"), callback_data="lang:en"),
+            ]
         ]
     )
