@@ -537,15 +537,27 @@ def _format_archive_list(
         f"✅ Прошло: {outcome_counts.get('passed', 0)} | "
         f"❌ Не прошло: {outcome_counts.get('failed', 0)}"
     )
-    lines.append(
-        "TP1: {tp1} | TP2: {tp2} | BE: {be} | SL: {sl} | EXP: {exp} | NF: {no_fill}".format(
-            tp1=outcome_counts.get("tp1", 0),
-            tp2=outcome_counts.get("tp2", 0),
-            be=outcome_counts.get("be", 0),
-            sl=outcome_counts.get("sl", 0),
-            exp=outcome_counts.get("exp", 0),
-            no_fill=outcome_counts.get("no_fill", 0),
-        )
+    tp1_total = outcome_counts.get("tp1", 0) + outcome_counts.get("tp2", 0)
+    lines.extend(
+        [
+            "",
+            "📈 Итоги за период",
+            "",
+            f"TP1: {tp1_total}",
+            "👉 Сигнал дал прибыль и закрылся в плюс.",
+            "",
+            f"BE: {outcome_counts.get('be', 0)}",
+            "👉 Сигнал ушёл в безубыток — риск снят.",
+            "",
+            f"SL: {outcome_counts.get('sl', 0)}",
+            "👉 Сигнал закрылся по стоп-лоссу.",
+            "",
+            f"EXP: {outcome_counts.get('exp', 0)}",
+            "👉 Прошло 12 часов после активации — сценарий устарел.",
+            "",
+            f"NF: {outcome_counts.get('no_fill', 0)}",
+            "👉 Прошло 12 часов, цена не дошла до входа.",
+        ]
     )
     if not events:
         lines.append("Нет сигналов за период.")
