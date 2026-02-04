@@ -45,6 +45,17 @@ def build_system_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
+def build_admin_diagnostics_kb() -> ReplyKeyboardMarkup:
+    keyboard = [
+        [
+            KeyboardButton(text="🧪 Тест AI (всем)"),
+            KeyboardButton(text="🧪 Тест Pump/Dump (всем)"),
+        ],
+        [KeyboardButton(text="⬅️ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
 def ai_signals_inline_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
