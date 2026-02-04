@@ -85,7 +85,8 @@ from db import (
     get_signal_outcome_counts,
     get_signal_score_bucket_counts,
     get_signal_event,
-    get_last_signal_event_by_module,
+    get_last_pumpdump_signal,
+    set_last_pumpdump_signal,
     purge_test_signals,
 )
 from db_path import ensure_db_writable, get_db_path
@@ -1614,34 +1615,25 @@ def _format_user_bot_status(chat_id: int) -> str:
         return f"• последний сигнал: {symbol} {side} (Score {score}) — {stamp}"
 
     def _format_last_pumpdump() -> str:
-        row = get_last_signal_event_by_module("pumpdump")
-        if row is None:
-            return "• последний импульс: не найден"
-        payload = dict(row)
-        reason_json = payload.get("reason_json")
-        change_pct = None
-        if reason_json:
-            try:
-                parsed = json.loads(reason_json)
-            except (TypeError, ValueError):
-                parsed = None
-            if isinstance(parsed, dict):
-                for key in ("change_pct", "change_5m", "change_1m"):
-                    if key in parsed:
-                        try:
-                            change_pct = float(parsed[key])
-                        except (TypeError, ValueError):
-                            change_pct = None
-                        if change_pct is not None:
-                            break
-        if change_pct is None:
-            return "• последний импульс: не найден"
+        payload = get_last_pumpdump_signal()
+        if not payload:
+            return "• последний сигнал: —"
         symbol = str(payload.get("symbol", "-"))
-        arrow = "⬆️" if change_pct >= 0 else "⬇️"
-        change_text = f"{change_pct:+.1f}%"
+        direction = str(payload.get("direction", "")).upper()
+        direction_text = "PUMP" if direction == "PUMP" else "DUMP" if direction == "DUMP" else direction
+        change_raw = payload.get("change_5m")
+        change_text = ""
+        if change_raw is not None:
+            try:
+                change_val = float(change_raw)
+                change_text = f" ({change_val:+.1f}%)"
+            except (TypeError, ValueError):
+                change_text = ""
         ts = int(payload.get("ts", 0) or 0)
         stamp = _format_event_time(ts) if ts else "-"
-        return f"• последний импульс: {symbol} {arrow} {change_text} — {stamp}"
+        if direction_text:
+            return f"• последний сигнал: {symbol} {direction_text}{change_text} — {stamp}"
+        return f"• последний сигнал: {symbol} — {stamp}"
 
     binance_ts = max(
         (st.binance_last_success_ts for st in MODULES.values() if st.binance_last_success_ts),
@@ -2908,6 +2900,16 @@ async def pump_scan_once(bot: Bot) -> None:
                 allow_admin_bypass=True,
             )
             sent_count += sent_delta
+            if sent_delta > 0:
+                direction = "PUMP" if sig.get("type") == "pump" else "DUMP"
+                set_last_pumpdump_signal(
+                    {
+                        "symbol": symbol,
+                        "ts": int(time.time()),
+                        "direction": direction,
+                        "change_5m": sig.get("change_5m"),
+                    }
+                )
 
         cycle_sec = time.time() - cycle_start
         current_symbol = MODULES.get("pumpdump").current_symbol if "pumpdump" in MODULES else None
