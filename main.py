@@ -528,13 +528,10 @@ def _format_archive_list(
     events: list[dict],
     page: int,
     pages: int,
-    filter_on: bool,
     outcome_counts: dict,
 ) -> str:
     title = f"📊 История сигналов ({_period_label(period_key)})"
     lines = [title]
-    if filter_on:
-        lines.append("Фильтр: 80+")
     lines.append(
         f"✅ Прошло: {outcome_counts.get('passed', 0)} | "
         f"❌ Не прошло: {outcome_counts.get('failed', 0)}"
@@ -639,20 +636,16 @@ async def history_callback(callback: CallbackQuery):
         return
     period_key = callback.data.split(":", 1)[1]
     page = 1
-    filter_on = False
     days = _period_days(period_key)
     since_ts = int(time.time()) - days * 86400 if days is not None else None
-    min_score = 80 if filter_on else None
     total = count_signal_events(
         user_id=callback.from_user.id,
         since_ts=since_ts,
-        min_score=min_score,
     )
     pages = max(1, (total + 9) // 10)
     events_rows = list_signal_events(
         user_id=callback.from_user.id,
         since_ts=since_ts,
-        min_score=min_score,
         limit=10,
         offset=0,
     )
@@ -660,12 +653,11 @@ async def history_callback(callback: CallbackQuery):
     outcome_counts = get_signal_outcome_counts(
         user_id=callback.from_user.id,
         since_ts=since_ts,
-        min_score=min_score,
     )
     await callback.answer()
     await callback.message.edit_text(
-        _format_archive_list(period_key, events, page, pages, filter_on, outcome_counts),
-        reply_markup=_archive_inline_kb(period_key, page, pages, filter_on, events),
+        _format_archive_list(period_key, events, page, pages, outcome_counts),
+        reply_markup=_archive_inline_kb(period_key, page, pages, events),
     )
 
 
@@ -673,7 +665,6 @@ def _archive_inline_kb(
     period_key: str,
     page: int,
     pages: int,
-    filter_on: bool,
     events: list[dict],
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
@@ -686,7 +677,7 @@ def _archive_inline_kb(
                         f"{status_icon} Score {int(event.get('score', 0))} — "
                         f"{event.get('symbol')} {event.get('side')}"
                     ),
-                    callback_data=f"archive:detail:{period_key}:{page}:{int(filter_on)}:{event.get('id')}",
+                    callback_data=f"archive:detail:{period_key}:{page}:{event.get('id')}",
                 )
             ]
         )
@@ -696,28 +687,18 @@ def _archive_inline_kb(
         nav_row.append(
             InlineKeyboardButton(
                 text="⬅️ Prev",
-                callback_data=f"archive:list:{period_key}:{page - 1}:{int(filter_on)}",
+                callback_data=f"archive:list:{period_key}:{page - 1}",
             )
         )
     if page < pages:
         nav_row.append(
             InlineKeyboardButton(
                 text="Next ➡️",
-                callback_data=f"archive:list:{period_key}:{page + 1}:{int(filter_on)}",
+                callback_data=f"archive:list:{period_key}:{page + 1}",
             )
         )
     if nav_row:
         rows.append(nav_row)
-
-    filter_text = "Фильтр 80+" if not filter_on else "Снять фильтр"
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text=filter_text,
-                callback_data=f"archive:list:{period_key}:1:{0 if filter_on else 1}",
-            )
-        ]
-    )
     rows.append(
         [
             InlineKeyboardButton(
@@ -729,33 +710,30 @@ def _archive_inline_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _archive_detail_kb(period_key: str, page: int, filter_on: bool) -> InlineKeyboardMarkup:
+def _archive_detail_kb(period_key: str, page: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="⬅️ Назад",
-                    callback_data=f"archive:list:{period_key}:{page}:{int(filter_on)}",
+                    callback_data=f"archive:list:{period_key}:{page}",
                 )
             ]
         ]
     )
 
 
-@dp.callback_query(F.data.regexp(r"^archive:list:(1d|7d|30d|all):\d+:(0|1)$"))
+@dp.callback_query(F.data.regexp(r"^archive:list:(1d|7d|30d|all):\d+$"))
 async def archive_list(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
-    _, _, period_key, page_raw, filter_raw = callback.data.split(":")
+    _, _, period_key, page_raw = callback.data.split(":")
     page = max(1, int(page_raw))
-    filter_on = filter_raw == "1"
     days = _period_days(period_key)
     since_ts = int(time.time()) - days * 86400 if days is not None else None
-    min_score = 80 if filter_on else None
     total = count_signal_events(
         user_id=callback.from_user.id,
         since_ts=since_ts,
-        min_score=min_score,
     )
     pages = max(1, (total + 9) // 10)
     if page > pages:
@@ -763,7 +741,6 @@ async def archive_list(callback: CallbackQuery):
     events_rows = list_signal_events(
         user_id=callback.from_user.id,
         since_ts=since_ts,
-        min_score=min_score,
         limit=10,
         offset=(page - 1) * 10,
     )
@@ -771,22 +748,20 @@ async def archive_list(callback: CallbackQuery):
     outcome_counts = get_signal_outcome_counts(
         user_id=callback.from_user.id,
         since_ts=since_ts,
-        min_score=min_score,
     )
     await callback.answer()
     await callback.message.edit_text(
-        _format_archive_list(period_key, events, page, pages, filter_on, outcome_counts),
-        reply_markup=_archive_inline_kb(period_key, page, pages, filter_on, events),
+        _format_archive_list(period_key, events, page, pages, outcome_counts),
+        reply_markup=_archive_inline_kb(period_key, page, pages, events),
     )
 
 
-@dp.callback_query(F.data.regexp(r"^archive:detail:(1d|7d|30d|all):\d+:(0|1):\d+$"))
+@dp.callback_query(F.data.regexp(r"^archive:detail:(1d|7d|30d|all):\d+:\d+$"))
 async def archive_detail(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
-    _, _, period_key, page_raw, filter_raw, event_id_raw = callback.data.split(":")
+    _, _, period_key, page_raw, event_id_raw = callback.data.split(":")
     page = max(1, int(page_raw))
-    filter_on = filter_raw == "1"
     event = get_signal_event(
         user_id=callback.from_user.id,
         event_id=int(event_id_raw),
@@ -797,7 +772,7 @@ async def archive_detail(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_text(
         _format_archive_detail(dict(event)),
-        reply_markup=_archive_detail_kb(period_key, page, filter_on),
+        reply_markup=_archive_detail_kb(period_key, page),
     )
 
 
