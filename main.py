@@ -646,6 +646,7 @@ def _format_event_time(ts: int) -> str:
 
 
 def _format_archive_list(
+    lang: str,
     period_key: str,
     events: list[dict],
     page: int,
@@ -668,6 +669,7 @@ def _format_archive_list(
         percent = round((passed / total) * 100) if total > 0 else 0
         return f"{label}: ✅ {passed} / ❌ {failed}  ({percent}%)"
 
+    tp1_total = outcome_counts.get("tp1", 0) + outcome_counts.get("tp2", 0)
     lines.extend(
         [
             "",
@@ -676,23 +678,15 @@ def _format_archive_list(
             _score_bucket_line("80-89", "80–89"),
             _score_bucket_line("70-79", "70–79"),
             "",
-            "ℹ️ Чем выше Score — тем чаще сигнал “отрабатывает”.",
-        ]
-    )
-    tp1_total = outcome_counts.get("tp1", 0) + outcome_counts.get("tp2", 0)
-    lines.extend(
-        [
-            "",
-            f"TP1: {tp1_total}",
-            "👉 Сигнал дал прибыль и закрылся в плюс.",
-            f"BE: {outcome_counts.get('be', 0)}",
-            "👉 Сигнал ушёл в безубыток — риск снят.",
-            f"SL: {outcome_counts.get('sl', 0)}",
-            "👉 Сигнал закрылся по стоп-лоссу.",
-            f"EXP: {outcome_counts.get('exp', 0)}",
-            "👉 Прошло 12 часов после активации — сценарий устарел.",
-            f"NF: {outcome_counts.get('no_fill', 0)}",
-            "👉 Прошло 12 часов, цена не дошла до входа.",
+            i18n.t(
+                lang,
+                "SCORE_EXPLANATION",
+                tp1=tp1_total,
+                be=outcome_counts.get("be", 0),
+                sl=outcome_counts.get("sl", 0),
+                exp=outcome_counts.get("exp", 0),
+                nf=outcome_counts.get("no_fill", 0),
+            ),
         ]
     )
     lines.append("")
@@ -814,8 +808,11 @@ async def history_callback(callback: CallbackQuery):
         min_score=None,
     )
     await callback.answer()
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    lang = lang or "ru"
     await callback.message.edit_text(
         _format_archive_list(
+            lang,
             period_key,
             events,
             page,
@@ -924,8 +921,11 @@ async def archive_list(callback: CallbackQuery):
         min_score=None,
     )
     await callback.answer()
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    lang = lang or "ru"
     await callback.message.edit_text(
         _format_archive_list(
+            lang,
             period_key,
             events,
             page,
@@ -1020,7 +1020,7 @@ async def pumpdump_notify_on(callback: CallbackQuery):
     set_user_pref(chat_id, "pumpdump_enabled", 1)
     await callback.answer()
     if callback.message:
-        await callback.message.answer(i18n.t(lang, "PD_ON_OK"))
+        await callback.message.answer(i18n.t(lang, "PD_ENABLED_TEXT"))
 
 
 @dp.callback_query(F.data == "pumpdump_notify_off")
@@ -1696,6 +1696,7 @@ def _human_ago(seconds: int) -> str:
 def _format_user_bot_status(chat_id: int) -> str:
     """Понятный для пользователя статус (без тех. мусора)."""
     now = time.time()
+    lang = get_user_lang(chat_id) or "ru"
 
     ai = MODULES.get("ai_signals")
     pd = MODULES.get("pumpdump")
@@ -1720,7 +1721,11 @@ def _format_user_bot_status(chat_id: int) -> str:
     def _format_last_ai_signal() -> str:
         row = get_last_signal_audit("ai_signals")
         if not row:
-            return "• последний сигнал: нет"
+            return i18n.t(
+                lang,
+                "SYSTEM_STATUS_LAST_SIGNAL_LINE",
+                text=i18n.t(lang, "SYSTEM_STATUS_LAST_SIGNAL_NONE"),
+            )
         symbol = str(row.get("symbol", "-"))
         direction = str(row.get("direction", "")).upper()
         side = "LONG" if direction == "LONG" else "SHORT" if direction == "SHORT" else direction
@@ -1731,12 +1736,20 @@ def _format_user_bot_status(chat_id: int) -> str:
             score = 0
         sent_at = int(row.get("sent_at", 0) or 0)
         stamp = _format_event_time(sent_at) if sent_at else "-"
-        return f"• последний сигнал: {symbol} {side} (Score {score}) — {stamp}"
+        return i18n.t(
+            lang,
+            "SYSTEM_STATUS_LAST_SIGNAL_LINE",
+            text=f"{symbol} {side} (Score {score}) — {stamp}",
+        )
 
     def _format_last_pumpdump() -> str:
         payload = get_last_pumpdump_signal()
         if not payload:
-            return "• последний сигнал: —"
+            return i18n.t(
+                lang,
+                "SYSTEM_STATUS_LAST_SIGNAL_LINE",
+                text=i18n.t(lang, "SYSTEM_STATUS_LAST_SIGNAL_NONE_PD"),
+            )
         symbol = str(payload.get("symbol", "-"))
         direction = str(payload.get("direction", "")).upper()
         direction_text = "PUMP" if direction == "PUMP" else "DUMP" if direction == "DUMP" else direction
@@ -1751,23 +1764,40 @@ def _format_user_bot_status(chat_id: int) -> str:
         ts = int(payload.get("ts", 0) or 0)
         stamp = _format_event_time(ts) if ts else "-"
         if direction_text:
-            return f"• последний сигнал: {symbol} {direction_text}{change_text} — {stamp}"
-        return f"• последний сигнал: {symbol} — {stamp}"
+            line_text = f"{symbol} {direction_text}{change_text} — {stamp}"
+        else:
+            line_text = f"{symbol} — {stamp}"
+        return i18n.t(lang, "SYSTEM_STATUS_LAST_SIGNAL_LINE", text=line_text)
+
+    def _seconds_ago_label(seconds: int) -> str:
+        return i18n.t(lang, "SYSTEM_STATUS_SECONDS_AGO", seconds=seconds)
 
     binance_ts = max(
         (st.binance_last_success_ts for st in MODULES.values() if st.binance_last_success_ts),
         default=0,
     )
     if binance_ts:
-        binance_line = f"🔌 Связь с Binance: ✅ есть ({_sec_ago(binance_ts)} сек назад)"
+        binance_line = i18n.t(
+            lang,
+            "SYSTEM_STATUS_BINANCE_OK",
+            seconds_ago=_seconds_ago_label(_sec_ago(binance_ts)),
+        )
     else:
-        binance_line = "🔌 Связь с Binance: ⛔ нет свежих данных"
+        binance_line = i18n.t(lang, "SYSTEM_STATUS_BINANCE_NO_DATA")
 
-    ai_status = "✅ работают" if ai and ai.last_tick else "⛔ не запущены"
-    ai_last_cycle = (
-        f"• последний цикл: {_sec_ago(ai.last_tick)} сек назад"
+    ai_status_line = (
+        i18n.t(lang, "SYSTEM_STATUS_AI_RUNNING_LINE")
         if ai and ai.last_tick
-        else "• последний цикл: нет данных"
+        else i18n.t(lang, "SYSTEM_STATUS_AI_STOPPED_LINE")
+    )
+    ai_last_cycle = (
+        i18n.t(
+            lang,
+            "SYSTEM_STATUS_LAST_CYCLE_LINE",
+            seconds_ago=_seconds_ago_label(_sec_ago(ai.last_tick)),
+        )
+        if ai and ai.last_tick
+        else i18n.t(lang, "SYSTEM_STATUS_LAST_CYCLE_NO_DATA")
     )
     ai_cursor = ai.cursor if ai else 0
     ai_total = ai.total_symbols if ai else 0
@@ -1779,24 +1809,36 @@ def _format_user_bot_status(chat_id: int) -> str:
         if extra_total is not None:
             ai_total = extra_total
     ai_scan_line = (
-        f"• скан рынка: {ai_cursor} / {ai_total}"
+        i18n.t(lang, "SYSTEM_STATUS_SCAN_LINE", current=ai_cursor, total=ai_total)
         if ai_cursor or ai_total
-        else "• скан рынка: нет данных"
+        else i18n.t(lang, "SYSTEM_STATUS_SCAN_NO_DATA")
     )
     ai_current = ai.current_symbol if ai else None
     ai_current_line = (
-        f"• сейчас проверяю: {ai_current}"
+        i18n.t(lang, "SYSTEM_STATUS_CURRENT_LINE", symbol=ai_current)
         if ai_current
-        else "• сейчас проверяю: нет данных"
+        else i18n.t(lang, "SYSTEM_STATUS_CURRENT_NO_DATA")
     )
     ai_cycle = _extract_cycle(ai.extra) if ai and ai.extra else None
-    ai_cycle_line = f"• скорость: ~{ai_cycle} сек / цикл" if ai_cycle else None
+    ai_cycle_line = (
+        i18n.t(lang, "SYSTEM_STATUS_CYCLE_LINE", seconds=ai_cycle)
+        if ai_cycle
+        else None
+    )
 
-    pd_status = "✅ работает" if pd and pd.last_tick else "⛔ не запущен"
-    pd_last_cycle = (
-        f"• последний цикл: {_sec_ago(pd.last_tick)} сек назад"
+    pd_status_line = (
+        i18n.t(lang, "SYSTEM_STATUS_PD_RUNNING_LINE")
         if pd and pd.last_tick
-        else "• последний цикл: нет данных"
+        else i18n.t(lang, "SYSTEM_STATUS_PD_STOPPED_LINE")
+    )
+    pd_last_cycle = (
+        i18n.t(
+            lang,
+            "SYSTEM_STATUS_LAST_CYCLE_LINE",
+            seconds_ago=_seconds_ago_label(_sec_ago(pd.last_tick)),
+        )
+        if pd and pd.last_tick
+        else i18n.t(lang, "SYSTEM_STATUS_LAST_CYCLE_NO_DATA")
     )
     pd_checked = pd.checked_last_cycle if pd else 0
     pd_total = pd.total_symbols if pd else 0
@@ -1805,41 +1847,34 @@ def _format_user_bot_status(chat_id: int) -> str:
         if progress:
             pd_checked, pd_total = progress
     pd_progress_line = (
-        f"• прогресс: {pd_checked} / {pd_total}"
+        i18n.t(lang, "SYSTEM_STATUS_PROGRESS_LINE", current=pd_checked, total=pd_total)
         if pd_checked or pd_total
-        else "• прогресс: нет данных"
+        else i18n.t(lang, "SYSTEM_STATUS_PROGRESS_NO_DATA")
     )
     pd_current = pd.current_symbol if pd else None
     pd_current_line = (
-        f"• сейчас проверяю: {pd_current}"
+        i18n.t(lang, "SYSTEM_STATUS_CURRENT_LINE", symbol=pd_current)
         if pd_current
-        else "• сейчас проверяю: нет данных"
+        else i18n.t(lang, "SYSTEM_STATUS_CURRENT_NO_DATA")
     )
 
-    lines = [
-        "🛰 Статус системы",
-        "",
-        binance_line,
-        "",
-        f"🎯 AI-сигналы: {ai_status}",
-        ai_last_cycle,
-        ai_scan_line,
-        ai_current_line,
-    ]
-    if ai_cycle_line:
-        lines.append(ai_cycle_line)
-    lines.extend(
-        [
-            _format_last_ai_signal(),
-            "",
-            f"⚡ Pump / Dump: {pd_status}",
-            pd_last_cycle,
-            pd_progress_line,
-            pd_current_line,
-            _format_last_pumpdump(),
-        ]
+    ai_cycle_line = f"{ai_cycle_line}\n" if ai_cycle_line else ""
+    return i18n.t(
+        lang,
+        "SYSTEM_STATUS_TEXT",
+        binance_line=binance_line,
+        ai_status_line=ai_status_line,
+        ai_last_cycle=ai_last_cycle,
+        ai_scan_line=ai_scan_line,
+        ai_current_line=ai_current_line,
+        ai_cycle_line=ai_cycle_line,
+        ai_last_signal=_format_last_ai_signal(),
+        pd_status_line=pd_status_line,
+        pd_last_cycle=pd_last_cycle,
+        pd_progress_line=pd_progress_line,
+        pd_current_line=pd_current_line,
+        pd_last_signal=_format_last_pumpdump(),
     )
-    return "\n".join(lines)
 
 
 @dp.message(Command("status"))
