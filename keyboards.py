@@ -70,22 +70,16 @@ def pumpdump_inline_kb() -> InlineKeyboardMarkup:
     )
 
 
-def stats_inline_kb(period_key: str = "7d") -> InlineKeyboardMarkup:
+def stats_inline_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="1 день", callback_data="stats:1d"),
-                InlineKeyboardButton(text="3 дня", callback_data="stats:3d"),
+                InlineKeyboardButton(text="1 день", callback_data="history:1d"),
+                InlineKeyboardButton(text="7 дней", callback_data="history:7d"),
             ],
             [
-                InlineKeyboardButton(text="7 дней", callback_data="stats:7d"),
-                InlineKeyboardButton(text="Все время", callback_data="stats:all"),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📚 Архив сигналов",
-                    callback_data=f"archive:list:{period_key}:1:0",
-                )
+                InlineKeyboardButton(text="30 дней", callback_data="history:30d"),
+                InlineKeyboardButton(text="Все время", callback_data="history:all"),
             ],
         ]
     )

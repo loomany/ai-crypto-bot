@@ -64,7 +64,9 @@ def init_db() -> None:
                 tp1 REAL NOT NULL,
                 tp2 REAL NOT NULL,
                 status TEXT NOT NULL,
-                tg_message_id INTEGER
+                tg_message_id INTEGER,
+                reason_json TEXT,
+                breakdown_json TEXT
             )
             """
         )
@@ -74,6 +76,12 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_signal_events_symbol_ts ON signal_events(symbol, ts)"
         )
+        cur = conn.execute("PRAGMA table_info(signal_events)")
+        cols = {row["name"] for row in cur.fetchall()}
+        if "reason_json" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN reason_json TEXT")
+        if "breakdown_json" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN breakdown_json TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -376,6 +384,8 @@ def insert_signal_event(
     tp2: float,
     status: str,
     tg_message_id: int | None,
+    reason_json: str | None = None,
+    breakdown_json: str | None = None,
 ) -> int:
     conn = get_conn()
     try:
@@ -383,8 +393,9 @@ def insert_signal_event(
             """
             INSERT INTO signal_events (
                 ts, user_id, module, symbol, side, timeframe, score,
-                poi_low, poi_high, sl, tp1, tp2, status, tg_message_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                poi_low, poi_high, sl, tp1, tp2, status, tg_message_id,
+                reason_json, breakdown_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(ts),
@@ -401,6 +412,8 @@ def insert_signal_event(
                 float(tp2),
                 status,
                 tg_message_id,
+                reason_json,
+                breakdown_json,
             ),
         )
         conn.commit()
@@ -489,6 +502,60 @@ def count_signal_events(
             params,
         )
         return int(cur.fetchone()["cnt"])
+    finally:
+        conn.close()
+
+
+def get_signal_outcome_counts(
+    *,
+    user_id: int,
+    since_ts: int | None,
+    min_score: float | None,
+) -> dict:
+    conn = get_conn()
+    try:
+        clauses = ["user_id = ?"]
+        params: list[object] = [int(user_id)]
+        if since_ts is not None:
+            clauses.append("ts >= ?")
+            params.append(int(since_ts))
+        if min_score is not None:
+            clauses.append("score >= ?")
+            params.append(float(min_score))
+        where_clause = " AND ".join(clauses)
+        cur = conn.execute(
+            f"""
+            SELECT
+                SUM(CASE WHEN status = 'TP1' THEN 1 ELSE 0 END) AS tp1,
+                SUM(CASE WHEN status = 'TP2' THEN 1 ELSE 0 END) AS tp2,
+                SUM(CASE WHEN status = 'BE' THEN 1 ELSE 0 END) AS be,
+                SUM(CASE WHEN status = 'SL' THEN 1 ELSE 0 END) AS sl,
+                SUM(CASE WHEN status IN ('EXP', 'EXPIRED') THEN 1 ELSE 0 END) AS exp,
+                SUM(CASE WHEN status = 'NO_FILL' THEN 1 ELSE 0 END) AS no_fill
+            FROM signal_events
+            WHERE {where_clause}
+            """,
+            params,
+        )
+        row = cur.fetchone()
+        tp1 = int(row["tp1"] or 0)
+        tp2 = int(row["tp2"] or 0)
+        be = int(row["be"] or 0)
+        sl = int(row["sl"] or 0)
+        exp = int(row["exp"] or 0)
+        no_fill = int(row["no_fill"] or 0)
+        passed = tp1 + tp2 + be
+        failed = sl + exp + no_fill
+        return {
+            "tp1": tp1,
+            "tp2": tp2,
+            "be": be,
+            "sl": sl,
+            "exp": exp,
+            "no_fill": no_fill,
+            "passed": passed,
+            "failed": failed,
+        }
     finally:
         conn.close()
 
