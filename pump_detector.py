@@ -333,77 +333,6 @@ def _format_symbol_pair(symbol: str) -> str:
     return f"{symbol} / USDT"
 
 
-def _build_pump_plan(price: float) -> Dict[str, float]:
-    entry_high = price * 0.99
-    entry_low = price * 0.97
-    entry_mid = (entry_low + entry_high) / 2
-    sl = entry_mid * 0.95
-    tp1 = price * 1.03
-    tp2 = price * 1.05
-    return {
-        "entry_low": entry_low,
-        "entry_high": entry_high,
-        "entry_mid": entry_mid,
-        "sl": sl,
-        "tp1": tp1,
-        "tp2": tp2,
-    }
-
-
-def _build_dump_plan(price: float) -> Dict[str, float]:
-    entry_low = price * 1.01
-    entry_high = price * 1.03
-    entry_mid = (entry_low + entry_high) / 2
-    sl = entry_mid * 1.05
-    tp1 = price * 0.97
-    tp2 = price * 0.95
-    return {
-        "entry_low": entry_low,
-        "entry_high": entry_high,
-        "entry_mid": entry_mid,
-        "sl": sl,
-        "tp1": tp1,
-        "tp2": tp2,
-    }
-
-
-def _format_plan(signal: Dict[str, Any]) -> str:
-    price = signal["price"]
-
-    if signal["type"] == "pump":
-        plan = _build_pump_plan(price)
-        how_to = (
-            "Как использовать (наблюдение):\n"
-            "• резкие импульсы часто дают откат/перезалив\n"
-            "• вход рассматривается только после подтверждения на 1–5m\n\n"
-        )
-        cancel_text = "• если цена уходит ниже — сценарий отката/продолжения ломается"
-    else:
-        plan = _build_dump_plan(price)
-        how_to = (
-            "Как использовать (наблюдение):\n"
-            "• резкие импульсы часто дают отскок/перезалив\n"
-            "• вход рассматривается только после подтверждения на 1–5m\n\n"
-        )
-        cancel_text = "• если цена уходит выше — сценарий отката/продолжения ломается"
-
-    text = (
-        f"{how_to}"
-        "Зона интереса (POI):\n"
-        f"• {_format_price(plan['entry_low'])} – {_format_price(plan['entry_high'])}  (откат ~2–3%)\n\n"
-        "Уровень отмены сценария:\n"
-        f"• {_format_price(plan['sl'])}\n"
-        f"{cancel_text}\n\n"
-        "Потенциальные уровни движения:\n"
-        f"• 🎯 Уровень 1: {_format_price(plan['tp1'])}\n"
-        f"• 🎯 Уровень 2: {_format_price(plan['tp2'])}\n\n"
-        "⚠️ Резкие импульсы высокорисковые: возможен вход на “вершине”.\n"
-        "Бот не знает твой депозит и не управляет рисками.\n"
-        "Источник данных: Binance"
-    )
-    return text
-
-
 def format_pump_message(signal: Dict[str, Any]) -> str:
     symbol_pair = _format_symbol_pair(signal["symbol"])
     price = signal["price"]
@@ -425,7 +354,11 @@ def format_pump_message(signal: Dict[str, Any]) -> str:
         f"• за 1 мин: {_format_signed(ch1)}%\n"
         f"• за 5 мин: {_format_signed(ch5)}%\n"
         f"• объём: {volume_mul:.2f}× от среднего\n\n"
-        f"{_format_plan(signal)}"
+        "ℹ️ Это уведомление о резком импульсе цены и объёма.\n"
+        "Используется как сигнал внимания, а не готовая торговая идея.\n\n"
+        "⚠️ Резкие импульсы высокорисковые.\n"
+        "Бот не даёт точек входа и не управляет рисками.\n\n"
+        "Источник данных: Binance"
     )
     return text
 
