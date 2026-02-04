@@ -137,6 +137,11 @@ def is_user_locked(user_id: int) -> bool:
     return get_user_pref(user_id, "user_locked", 0) == 1
 
 
+def is_sub_active(user_id: int) -> bool:
+    sub_until = get_user_pref(user_id, "sub_until", 0)
+    return time.time() < sub_until
+
+
 def ensure_trial_defaults(user_id: int) -> None:
     conn = get_conn()
     try:

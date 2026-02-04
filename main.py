@@ -64,6 +64,7 @@ from db import (
     set_user_pref,
     list_user_ids_with_pref,
     is_user_locked,
+    is_sub_active,
     ensure_trial_defaults,
     try_consume_trial,
     delete_user,
@@ -1882,6 +1883,12 @@ def _build_user_card(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     status_icon = "🔴" if locked else "🟢"
     trial_ai_left = get_user_pref(user_id, "trial_ai_left", TRIAL_AI_LIMIT)
     trial_pump_left = get_user_pref(user_id, "trial_pump_left", TRIAL_PUMP_LIMIT)
+    sub_until = get_user_pref(user_id, "sub_until", 0)
+    subscription_text = (
+        f"активна до {_format_user_time(sub_until)}"
+        if is_sub_active(user_id)
+        else "нет"
+    )
 
     lines = [
         "👤 Карточка пользователя",
@@ -1889,6 +1896,7 @@ def _build_user_card(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         f"ID: {user_id}",
         f"Username: {username_text}",
         f"Статус: {status_icon}",
+        f"Подписка: {subscription_text}",
         f"AI осталось: {trial_ai_left}/{TRIAL_AI_LIMIT}",
         f"Pump/Dump осталось: {trial_pump_left}/{TRIAL_PUMP_LIMIT}",
         f"started_at: {started_text}",
@@ -2003,15 +2011,17 @@ async def user_unlock_callback(callback: CallbackQuery):
         return
     user_id = int(callback.data.split(":", 1)[1])
     set_user_pref(user_id, "user_locked", 0)
+    now = int(time.time())
+    old_sub_until = get_user_pref(user_id, "sub_until", 0)
+    new_sub_until = max(old_sub_until, now) + 30 * 24 * 3600
+    set_user_pref(user_id, "sub_until", new_sub_until)
     text, markup = _build_user_card(user_id)
     await callback.answer()
     await callback.message.edit_text(text, reply_markup=markup)
     try:
         await callback.message.bot.send_message(
             user_id,
-            "✅ Подписка активирована\n\n"
-            "Доступ к сигналам восстановлен на 30 дней.\n"
-            "Если не приходят уведомления — включите их в меню бота.",
+            "Подписка активирована на 30 дней",
         )
     except Exception:
         pass
@@ -2206,6 +2216,10 @@ async def unlock_user_cmd(message: Message):
         await message.answer("Использование: /unlock <id>")
         return
     set_user_pref(user_id, "user_locked", 0)
+    now = int(time.time())
+    old_sub_until = get_user_pref(user_id, "sub_until", 0)
+    new_sub_until = max(old_sub_until, now) + 30 * 24 * 3600
+    set_user_pref(user_id, "sub_until", new_sub_until)
     await message.answer(f"✅ user_locked=0 для {user_id}")
 
 
@@ -2401,6 +2415,10 @@ async def send_signal_to_all(
                 skipped_dedup += 1
                 continue
         if allow_admin_bypass and is_admin(chat_id):
+            tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
+            recipients.append((chat_id, True, "signal"))
+            continue
+        if is_sub_active(chat_id):
             tasks.append(asyncio.create_task(bot.send_message(chat_id, text)))
             recipients.append((chat_id, True, "signal"))
             continue
@@ -2609,6 +2627,12 @@ async def _deliver_pumpdump_signal_stats(
                 ):
                     continue
             if is_admin_user:
+                await bot.send_message(chat_id, text, parse_mode="Markdown")
+                increment_pumpdump_daily_count(chat_id, date_key)
+                sent_count += 1
+                recipient_count += 1
+                continue
+            if is_sub_active(chat_id):
                 await bot.send_message(chat_id, text, parse_mode="Markdown")
                 increment_pumpdump_daily_count(chat_id, date_key)
                 sent_count += 1
