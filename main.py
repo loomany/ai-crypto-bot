@@ -138,6 +138,10 @@ SUB_PRICE_USD = 39
 PAY_WALLET_TRX = "TGnSveNVrBHytZyA5AfqAj3hDK3FbFCtBY"
 ADMIN_CONTACT = "@loomany"
 PREF_AWAITING_RECEIPT = "awaiting_receipt"
+PAYWALL_COOLDOWN_SEC = int(os.getenv("PAYWALL_COOLDOWN_SEC", "60"))
+SUB_SOURCE_SYSTEM = 1
+SUB_SOURCE_AI = 2
+SUB_SOURCE_PUMP = 3
 
 
 def _env_bool(name: str, default: str = "0") -> bool:
@@ -946,11 +950,19 @@ async def pumpdump_notify_off(callback: CallbackQuery):
         await callback.message.answer("🚫 Pump/Dump уведомления отключены.")
 
 
-@dp.callback_query(F.data == "buy_subscription")
-async def buy_subscription(callback: CallbackQuery):
+@dp.callback_query(F.data.startswith("sub_paywall:"))
+async def subscription_paywall_callback(callback: CallbackQuery):
+    if callback.from_user is None:
+        return
     await callback.answer()
+    source = callback.data.split(":", 1)[1] if callback.data else "system"
     if callback.message:
-        await callback.message.answer("Скоро добавим оплату 🙌")
+        await show_subscribe_offer(
+            callback.message,
+            callback.from_user.id,
+            source=source,
+            edit=True,
+        )
 
 
 def _human_ago_ru(seconds: int) -> str:
@@ -1777,14 +1789,23 @@ async def subscription_contact_callback(callback: CallbackQuery):
 
 @dp.message(F.text == "💳 Оплатить подписку")
 async def subscription_offer_message(message: Message):
-    await message.answer(OFFER_TEXT_RU, reply_markup=build_offer_inline_kb())
+    if message.from_user is None:
+        return
+    await show_subscribe_offer(message, message.from_user.id, source="system")
 
 
 @dp.callback_query(F.data == "sub_pay")
 async def subscription_pay_callback(callback: CallbackQuery):
     await callback.answer()
+    if callback.from_user is None:
+        return
     if callback.message:
-        await callback.message.edit_text(OFFER_TEXT_RU, reply_markup=build_offer_inline_kb())
+        await show_subscribe_offer(
+            callback.message,
+            callback.from_user.id,
+            source="system",
+            edit=True,
+        )
 
 
 @dp.callback_query(F.data == "sub_accept")
@@ -1799,8 +1820,26 @@ async def subscription_accept_callback(callback: CallbackQuery):
 @dp.callback_query(F.data == "sub_pay_back")
 async def subscription_pay_back_callback(callback: CallbackQuery):
     await callback.answer()
+    if callback.from_user is None:
+        return
+    source = _subscribe_source_from_code(
+        get_user_pref(callback.from_user.id, "last_sub_source", SUB_SOURCE_SYSTEM)
+    )
     if callback.message:
-        await callback.message.edit_text(OFFER_TEXT_RU, reply_markup=build_offer_inline_kb())
+        await callback.message.edit_text(
+            OFFER_TEXT_RU,
+            reply_markup=build_offer_inline_kb(
+                back_callback=_subscribe_back_callback(source)
+            ),
+        )
+
+
+@dp.callback_query(F.data.startswith("sub_back:"))
+async def subscription_back_callback(callback: CallbackQuery):
+    await callback.answer()
+    if callback.message:
+        with suppress(Exception):
+            await callback.message.delete()
 
 
 @dp.callback_query(F.data == "sub_copy_address")
@@ -2352,17 +2391,64 @@ def _format_signal(signal: Dict[str, Any]) -> str:
     return text
 
 
-def _subscription_kb() -> InlineKeyboardMarkup:
+def _subscription_kb_for(source: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="💳 Купить подписку",
-                    callback_data="buy_subscription",
+                    callback_data=f"sub_paywall:{source}",
                 )
             ]
         ]
     )
+
+
+def _subscribe_source_code(source: str) -> int:
+    if source == "ai":
+        return SUB_SOURCE_AI
+    if source == "pump":
+        return SUB_SOURCE_PUMP
+    return SUB_SOURCE_SYSTEM
+
+
+def _subscribe_source_from_code(code: int) -> str:
+    if code == SUB_SOURCE_AI:
+        return "ai"
+    if code == SUB_SOURCE_PUMP:
+        return "pump"
+    return "system"
+
+
+def _subscribe_back_callback(source: str) -> str:
+    if source in {"ai", "pump"}:
+        return f"sub_back:{source}"
+    return "system_back"
+
+
+def _should_send_paywall(user_id: int, source: str, now_ts: int | None = None) -> bool:
+    now_ts = now_ts or int(time.time())
+    key = f"last_paywall_ts_{source}"
+    last_ts = get_user_pref(user_id, key, 0)
+    if last_ts and now_ts - last_ts < PAYWALL_COOLDOWN_SEC:
+        return False
+    set_user_pref(user_id, key, now_ts)
+    return True
+
+
+async def show_subscribe_offer(
+    message: Message,
+    user_id: int,
+    *,
+    source: str,
+    edit: bool = False,
+) -> None:
+    set_user_pref(user_id, "last_sub_source", _subscribe_source_code(source))
+    reply_markup = build_offer_inline_kb(back_callback=_subscribe_back_callback(source))
+    if edit:
+        await message.edit_text(OFFER_TEXT_RU, reply_markup=reply_markup)
+        return
+    await message.answer(OFFER_TEXT_RU, reply_markup=reply_markup)
 
 
 def _trial_suffix(left: int, limit: int, label: str) -> str:
@@ -2477,13 +2563,15 @@ async def send_signal_to_all(
             tasks.append(asyncio.create_task(bot.send_message(chat_id, message_text)))
             recipients.append((chat_id, True, "signal"))
         else:
+            if not _should_send_paywall(chat_id, "ai", sent_at):
+                continue
             tasks.append(
                 asyncio.create_task(
                     bot.send_message(
                         chat_id,
                         "🔒 Доступ к AI-сигналам по подписке.\n"
-                        "Нажми «Купить подписку».",
-                        reply_markup=_subscription_kb(),
+                        "Нажми «Купить подписку» — покажу инструкцию.",
+                        reply_markup=_subscription_kb_for("ai"),
                     )
                 )
             )
@@ -2699,11 +2787,13 @@ async def _deliver_pumpdump_signal_stats(
                 sent_count += 1
                 recipient_count += 1
             else:
+                if not _should_send_paywall(chat_id, "pump"):
+                    continue
                 await bot.send_message(
                     chat_id,
                     "🔒 Доступ к Pump/Dump сигналам по подписке.\n"
-                    "Нажми «Купить подписку».",
-                    reply_markup=_subscription_kb(),
+                    "Нажми «Купить подписку» — покажу инструкцию.",
+                    reply_markup=_subscription_kb_for("pump"),
                 )
                 paywall_count += 1
                 recipient_count += 1
