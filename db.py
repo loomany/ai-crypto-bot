@@ -67,6 +67,7 @@ def init_db() -> None:
                 tp1 REAL NOT NULL,
                 tp2 REAL NOT NULL,
                 status TEXT NOT NULL,
+                is_test INTEGER NOT NULL DEFAULT 0,
                 tg_message_id INTEGER,
                 reason_json TEXT,
                 breakdown_json TEXT
@@ -85,6 +86,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signal_events ADD COLUMN reason_json TEXT")
         if "breakdown_json" not in cols:
             conn.execute("ALTER TABLE signal_events ADD COLUMN breakdown_json TEXT")
+        if "is_test" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0")
         conn.commit()
     finally:
         conn.close()
@@ -494,9 +497,9 @@ def insert_signal_event(
             """
             INSERT INTO signal_events (
                 ts, user_id, module, symbol, side, timeframe, score,
-                poi_low, poi_high, sl, tp1, tp2, status, tg_message_id,
+                poi_low, poi_high, sl, tp1, tp2, status, is_test, tg_message_id,
                 reason_json, breakdown_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(ts),
@@ -512,6 +515,7 @@ def insert_signal_event(
                 float(tp1),
                 float(tp2),
                 status,
+                1 if is_test else 0,
                 tg_message_id,
                 reason_json,
                 breakdown_json,
@@ -548,7 +552,7 @@ def update_signal_events_status(
 
 def list_signal_events(
     *,
-    user_id: int,
+    user_id: int | None,
     since_ts: int | None,
     min_score: float | None,
     limit: int,
@@ -556,14 +560,25 @@ def list_signal_events(
 ) -> List[sqlite3.Row]:
     conn = get_conn()
     try:
-        clauses = ["user_id = ?"]
-        params: list[object] = [int(user_id)]
+        clauses = ["(is_test IS NULL OR is_test = 0)"]
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
         if since_ts is not None:
             clauses.append("ts >= ?")
             params.append(int(since_ts))
         if min_score is not None:
             clauses.append("score >= ?")
             params.append(float(min_score))
+        clauses.append(
+            "NOT ("
+            "symbol LIKE 'TEST%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
+        )
         where_clause = " AND ".join(clauses)
         params.extend([int(limit), int(offset)])
         cur = conn.execute(
@@ -583,20 +598,31 @@ def list_signal_events(
 
 def count_signal_events(
     *,
-    user_id: int,
+    user_id: int | None,
     since_ts: int | None,
     min_score: float | None,
 ) -> int:
     conn = get_conn()
     try:
-        clauses = ["user_id = ?"]
-        params: list[object] = [int(user_id)]
+        clauses = ["(is_test IS NULL OR is_test = 0)"]
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
         if since_ts is not None:
             clauses.append("ts >= ?")
             params.append(int(since_ts))
         if min_score is not None:
             clauses.append("score >= ?")
             params.append(float(min_score))
+        clauses.append(
+            "NOT ("
+            "symbol LIKE 'TEST%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
+        )
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
             f"SELECT COUNT(*) AS cnt FROM signal_events WHERE {where_clause}",
@@ -615,6 +641,14 @@ def get_last_signal_event_by_module(module: str) -> Optional[sqlite3.Row]:
             SELECT symbol, side, score, ts, reason_json, breakdown_json
             FROM signal_events
             WHERE module = ?
+              AND (is_test IS NULL OR is_test = 0)
+              AND NOT (
+                symbol LIKE 'TEST%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%'
+              )
             ORDER BY ts DESC
             LIMIT 1
             """,
@@ -627,20 +661,31 @@ def get_last_signal_event_by_module(module: str) -> Optional[sqlite3.Row]:
 
 def get_signal_outcome_counts(
     *,
-    user_id: int,
+    user_id: int | None,
     since_ts: int | None,
     min_score: float | None,
 ) -> dict:
     conn = get_conn()
     try:
-        clauses = ["user_id = ?"]
-        params: list[object] = [int(user_id)]
+        clauses = ["(is_test IS NULL OR is_test = 0)"]
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
         if since_ts is not None:
             clauses.append("ts >= ?")
             params.append(int(since_ts))
         if min_score is not None:
             clauses.append("score >= ?")
             params.append(float(min_score))
+        clauses.append(
+            "NOT ("
+            "symbol LIKE 'TEST%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
+        )
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
             f"""
@@ -681,15 +726,67 @@ def get_signal_outcome_counts(
 
 def get_signal_event(
     *,
-    user_id: int,
+    user_id: int | None,
     event_id: int,
 ) -> Optional[sqlite3.Row]:
     conn = get_conn()
     try:
+        params: list[object] = [int(event_id)]
+        clauses = ["id = ?", "(is_test IS NULL OR is_test = 0)"]
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
+        clauses.append(
+            "NOT ("
+            "symbol LIKE 'TEST%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
+        )
+        where_clause = " AND ".join(clauses)
         cur = conn.execute(
-            "SELECT * FROM signal_events WHERE id = ? AND user_id = ?",
-            (int(event_id), int(user_id)),
+            f"SELECT * FROM signal_events WHERE {where_clause}",
+            params,
         )
         return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def purge_test_signals() -> int:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            DELETE FROM signal_events
+            WHERE is_test = 1
+               OR symbol LIKE 'TEST%'
+               OR LOWER(COALESCE(reason_json, '')) LIKE '%test%'
+               OR LOWER(COALESCE(reason_json, '')) LIKE '%тест%'
+               OR LOWER(COALESCE(breakdown_json, '')) LIKE '%test%'
+               OR LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%'
+            """
+        )
+        total = cur.rowcount or 0
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='signal_audit'"
+        )
+        if cur.fetchone() is not None:
+            cur = conn.execute(
+                """
+                DELETE FROM signal_audit
+                WHERE symbol LIKE 'TEST%'
+                   OR LOWER(COALESCE(reason_json, '')) LIKE '%test%'
+                   OR LOWER(COALESCE(reason_json, '')) LIKE '%тест%'
+                   OR LOWER(COALESCE(breakdown_json, '')) LIKE '%test%'
+                   OR LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%'
+                   OR LOWER(COALESCE(notes, '')) LIKE '%test%'
+                   OR LOWER(COALESCE(notes, '')) LIKE '%тест%'
+                """
+            )
+            total += cur.rowcount or 0
+        conn.commit()
+        return total
     finally:
         conn.close()

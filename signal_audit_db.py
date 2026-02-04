@@ -171,6 +171,15 @@ def fetch_open_signals(max_age_sec: int = 86400) -> list[dict]:
             SELECT *
             FROM signal_audit
             WHERE status = 'open' AND sent_at >= ?
+              AND NOT (
+                symbol LIKE 'TEST%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%test%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%тест%'
+              )
             ORDER BY sent_at ASC
             """,
             (now - max_age_sec,),
@@ -187,7 +196,23 @@ def get_public_stats(days: int = 30) -> dict:
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) AS total FROM signal_audit WHERE sent_at >= ?", (since_ts,))
+        cur.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM signal_audit
+            WHERE sent_at >= ?
+              AND NOT (
+                symbol LIKE 'TEST%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%test%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%тест%'
+              )
+            """,
+            (since_ts,),
+        )
         total = int(cur.fetchone()["total"])
 
         cur.execute(
@@ -195,6 +220,15 @@ def get_public_stats(days: int = 30) -> dict:
             SELECT outcome, pnl_r
             FROM signal_audit
             WHERE status = 'closed' AND sent_at >= ?
+              AND NOT (
+                symbol LIKE 'TEST%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%test%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%тест%'
+              )
             """,
             (since_ts,),
         )
@@ -223,6 +257,15 @@ def get_public_stats(days: int = 30) -> dict:
             SELECT symbol, direction, outcome, pnl_r
             FROM signal_audit
             WHERE sent_at >= ?
+              AND NOT (
+                symbol LIKE 'TEST%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%test%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%тест%'
+              )
             ORDER BY sent_at DESC
             LIMIT 10
             """,
@@ -235,6 +278,15 @@ def get_public_stats(days: int = 30) -> dict:
             SELECT outcome
             FROM signal_audit
             WHERE status = 'closed' AND sent_at >= ?
+              AND NOT (
+                symbol LIKE 'TEST%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%test%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%тест%'
+              )
             ORDER BY closed_at DESC
             """,
             (since_ts,),
@@ -281,6 +333,15 @@ def get_last_signal_audit(module: str) -> dict | None:
             SELECT symbol, direction, score, sent_at
             FROM signal_audit
             WHERE module = ?
+              AND NOT (
+                symbol LIKE 'TEST%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%test%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%тест%'
+              )
             ORDER BY sent_at DESC
             LIMIT 1
             """,
@@ -310,6 +371,15 @@ def get_ai_signal_stats(days: int | None) -> dict:
             FROM signal_audit
             WHERE status = 'closed'
               AND outcome IN (?, ?, ?, ?)
+              AND NOT (
+                symbol LIKE 'TEST%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%test%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%тест%'
+              )
               {since_clause}
             """,
             params,
