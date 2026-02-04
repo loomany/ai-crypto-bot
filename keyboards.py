@@ -11,10 +11,14 @@ from texts import admin_url
 def build_main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Главное меню."""
     keyboard = [
-        [KeyboardButton(text="🎯 AI-сигналы")],
-        [KeyboardButton(text="⚡ Pump / Dump")],
-        [KeyboardButton(text="📊 Статистика")],
-        [KeyboardButton(text="ℹ️ О системе")],
+        [
+            KeyboardButton(text="🎯 AI-сигналы"),
+            KeyboardButton(text="⚡ Pump / Dump"),
+        ],
+        [
+            KeyboardButton(text="📊 Статистика"),
+            KeyboardButton(text="ℹ️ О системе"),
+        ],
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
