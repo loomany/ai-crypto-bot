@@ -260,9 +260,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "TEST_NOTIFY_TEXT": "🧪 Тестовое уведомление: доставка работает.",
         "TEST_NOTIFY_ERROR": "❌ Ошибка: {error}",
         "PURGE_TESTS_DONE": "✅ Удалено тестовых сигналов: {removed}",
+        "PURGE_SYMBOL_DONE": (
+            "✅ {symbol}: удалено signal_events={events}, watchlist={watchlist}, signal_audit={audit}"
+        ),
         "CMD_USAGE_LOCK": "Использование: /lock <id>",
         "CMD_USAGE_UNLOCK": "Использование: /unlock <id>",
         "CMD_USAGE_DELETE": "Использование: /delete <id>",
+        "CMD_USAGE_PURGE": "Использование: /purge <symbol>",
         "CMD_LOCK_OK": "✅ user_locked=1 для {user_id}",
         "CMD_UNLOCK_OK": "✅ user_locked=0 для {user_id}",
         "CMD_DELETE_OK": "✅ пользователь {user_id} удалён",
@@ -684,9 +688,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "TEST_NOTIFY_TEXT": "🧪 Test notification: delivery works.",
         "TEST_NOTIFY_ERROR": "❌ Error: {error}",
         "PURGE_TESTS_DONE": "✅ Test signals removed: {removed}",
+        "PURGE_SYMBOL_DONE": (
+            "✅ {symbol}: deleted signal_events={events}, watchlist={watchlist}, signal_audit={audit}"
+        ),
         "CMD_USAGE_LOCK": "Usage: /lock <id>",
         "CMD_USAGE_UNLOCK": "Usage: /unlock <id>",
         "CMD_USAGE_DELETE": "Usage: /delete <id>",
+        "CMD_USAGE_PURGE": "Usage: /purge <symbol>",
         "CMD_LOCK_OK": "✅ user_locked=1 for {user_id}",
         "CMD_UNLOCK_OK": "✅ user_locked=0 for {user_id}",
         "CMD_DELETE_OK": "✅ user {user_id} deleted",

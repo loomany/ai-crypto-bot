@@ -6,6 +6,7 @@ from statistics import median
 from typing import Any, Dict
 
 from db_path import get_db_path
+from symbol_cache import get_blocked_symbols
 
 
 def init_signal_audit_tables() -> None:
@@ -80,6 +81,10 @@ def insert_signal_audit(
     meta = signal_dict.get("meta") if isinstance(signal_dict, dict) else {}
     if signal_dict.get("is_test") or (isinstance(meta, dict) and meta.get("test")):
         return ""
+    blocked = get_blocked_symbols()
+    symbol_value = str(signal_dict.get("symbol", ""))
+    if symbol_value and symbol_value.upper() in blocked:
+        return ""
     signal_id = str(uuid.uuid4())
     entry_from, entry_to = signal_dict.get("entry_zone") or (0.0, 0.0)
     reason = signal_dict.get("reason") if isinstance(signal_dict.get("reason"), dict) else {}
@@ -91,7 +96,7 @@ def insert_signal_audit(
         signal_id,
         module,
         tier,
-        str(signal_dict.get("symbol", "")),
+        symbol_value,
         str(signal_dict.get("direction", "")),
         "1H",
         float(entry_from),
@@ -124,6 +129,14 @@ def insert_signal_audit(
         conn.close()
 
     return signal_id
+
+
+def _blocked_symbols_clause() -> tuple[str, list[str]]:
+    blocked = sorted(get_blocked_symbols())
+    if not blocked:
+        return "", []
+    placeholders = ", ".join("?" for _ in blocked)
+    return f" AND symbol NOT IN ({placeholders})", blocked
 
 
 def mark_signal_closed(
@@ -165,9 +178,10 @@ def fetch_open_signals(max_age_sec: int = 86400) -> list[dict]:
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
     try:
+        blocked_clause, blocked_params = _blocked_symbols_clause()
         cur = conn.cursor()
         cur.execute(
-            """
+            f"""
             SELECT *
             FROM signal_audit
             WHERE status = 'open' AND sent_at >= ?
@@ -180,9 +194,10 @@ def fetch_open_signals(max_age_sec: int = 86400) -> list[dict]:
                 LOWER(COALESCE(notes, '')) LIKE '%test%' OR
                 LOWER(COALESCE(notes, '')) LIKE '%тест%'
               )
+              {blocked_clause}
             ORDER BY sent_at ASC
             """,
-            (now - max_age_sec,),
+            [now - max_age_sec, *blocked_params],
         )
         rows = cur.fetchall()
         return [dict(row) for row in rows]
@@ -195,9 +210,10 @@ def get_public_stats(days: int = 30) -> dict:
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
     try:
+        blocked_clause, blocked_params = _blocked_symbols_clause()
         cur = conn.cursor()
         cur.execute(
-            """
+            f"""
             SELECT COUNT(*) AS total
             FROM signal_audit
             WHERE sent_at >= ?
@@ -210,13 +226,14 @@ def get_public_stats(days: int = 30) -> dict:
                 LOWER(COALESCE(notes, '')) LIKE '%test%' OR
                 LOWER(COALESCE(notes, '')) LIKE '%тест%'
               )
+              {blocked_clause}
             """,
-            (since_ts,),
+            [since_ts, *blocked_params],
         )
         total = int(cur.fetchone()["total"])
 
         cur.execute(
-            """
+            f"""
             SELECT outcome, pnl_r
             FROM signal_audit
             WHERE status = 'closed' AND sent_at >= ?
@@ -229,8 +246,9 @@ def get_public_stats(days: int = 30) -> dict:
                 LOWER(COALESCE(notes, '')) LIKE '%test%' OR
                 LOWER(COALESCE(notes, '')) LIKE '%тест%'
               )
+              {blocked_clause}
             """,
-            (since_ts,),
+            [since_ts, *blocked_params],
         )
         closed_rows = cur.fetchall()
         closed = len(closed_rows)
@@ -253,7 +271,7 @@ def get_public_stats(days: int = 30) -> dict:
         )
 
         cur.execute(
-            """
+            f"""
             SELECT symbol, direction, outcome, pnl_r
             FROM signal_audit
             WHERE sent_at >= ?
@@ -266,15 +284,16 @@ def get_public_stats(days: int = 30) -> dict:
                 LOWER(COALESCE(notes, '')) LIKE '%test%' OR
                 LOWER(COALESCE(notes, '')) LIKE '%тест%'
               )
+              {blocked_clause}
             ORDER BY sent_at DESC
             LIMIT 10
             """,
-            (since_ts,),
+            [since_ts, *blocked_params],
         )
         last10 = [dict(row) for row in cur.fetchall()]
 
         cur.execute(
-            """
+            f"""
             SELECT outcome
             FROM signal_audit
             WHERE status = 'closed' AND sent_at >= ?
@@ -287,9 +306,10 @@ def get_public_stats(days: int = 30) -> dict:
                 LOWER(COALESCE(notes, '')) LIKE '%test%' OR
                 LOWER(COALESCE(notes, '')) LIKE '%тест%'
               )
+              {blocked_clause}
             ORDER BY closed_at DESC
             """,
-            (since_ts,),
+            [since_ts, *blocked_params],
         )
         streak_rows = [row["outcome"] for row in cur.fetchall() if row["outcome"] not in excluded_outcomes]
         streak = "-"
@@ -327,9 +347,10 @@ def get_last_signal_audit(module: str) -> dict | None:
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
     try:
+        blocked_clause, blocked_params = _blocked_symbols_clause()
         cur = conn.cursor()
         cur.execute(
-            """
+            f"""
             SELECT symbol, direction, score, sent_at
             FROM signal_audit
             WHERE module = ?
@@ -342,10 +363,11 @@ def get_last_signal_audit(module: str) -> dict | None:
                 LOWER(COALESCE(notes, '')) LIKE '%test%' OR
                 LOWER(COALESCE(notes, '')) LIKE '%тест%'
               )
+              {blocked_clause}
             ORDER BY sent_at DESC
             LIMIT 1
             """,
-            (module,),
+            [module, *blocked_params],
         )
         row = cur.fetchone()
         return dict(row) if row else None
@@ -361,6 +383,8 @@ def get_ai_signal_stats(days: int | None) -> dict:
         since_clause = " AND sent_at >= ?"
         params.append(now - days * 86400)
 
+    blocked_clause, blocked_params = _blocked_symbols_clause()
+    params.extend(blocked_params)
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
     try:
@@ -381,6 +405,7 @@ def get_ai_signal_stats(days: int | None) -> dict:
                 LOWER(COALESCE(notes, '')) LIKE '%тест%'
               )
               {since_clause}
+              {blocked_clause}
             """,
             params,
         )
