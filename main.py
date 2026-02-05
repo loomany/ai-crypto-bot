@@ -89,7 +89,7 @@ from db import (
     prune_watchlist,
     get_watchlist_counts,
     delete_watchlist_symbols,
-    delete_symbols_everywhere,
+    purge_symbol,
     insert_signal_event,
     list_signal_events,
     count_signal_events,
@@ -233,17 +233,24 @@ def init_app_db():
         conn.close()
 
     init_storage_db()
-    blocked_symbols = get_blocked_symbols()
+    init_signal_audit_tables()
+    blocked_symbols = sorted(get_blocked_symbols())
     if blocked_symbols:
-        purge_stats = delete_symbols_everywhere(blocked_symbols)
+        totals = {"watchlist_deleted": 0, "events_deleted": 0, "signal_audit_deleted": 0}
+        for symbol in blocked_symbols:
+            stats = purge_symbol(symbol)
+            print(f"[purge] {symbol} deleted from stats: {stats}")
+            totals["watchlist_deleted"] += stats["watchlist_deleted"]
+            totals["events_deleted"] += stats["events_deleted"]
+            totals["signal_audit_deleted"] += stats["signal_audit_deleted"]
         print(
             "[blocklist] purge startup: "
-            f"symbols={purge_stats['symbols']} "
-            f"watchlist={purge_stats['watchlist_deleted']} "
-            f"events={purge_stats['events_deleted']}"
+            f"symbols={len(blocked_symbols)} "
+            f"watchlist={totals['watchlist_deleted']} "
+            f"events={totals['events_deleted']} "
+            f"audit={totals['signal_audit_deleted']}"
         )
     init_alert_dedup()
-    init_signal_audit_tables()
     migrate_legacy_notify_settings()
 
 
@@ -1122,6 +1129,16 @@ def _parse_user_id_arg(text: str | None) -> int | None:
         return None
 
 
+def _parse_symbol_arg(text: str | None) -> str | None:
+    if not text:
+        return None
+    parts = text.strip().split()
+    if len(parts) < 2:
+        return None
+    symbol = parts[1].strip().upper()
+    return symbol or None
+
+
 def _parse_extra_kv(extra: str) -> dict:
     """
     Превращает строку extra в словарь.
@@ -1783,6 +1800,29 @@ async def purge_tests_cmd(message: Message):
         return
     removed = purge_test_signals()
     await message.answer(i18n.t(lang, "PURGE_TESTS_DONE", removed=removed))
+
+
+@dp.message(Command("purge"))
+async def purge_symbol_cmd(message: Message):
+    lang = get_user_lang(message.chat.id) or "ru"
+    if message.from_user is None or not is_admin(message.from_user.id):
+        await message.answer(i18n.t(lang, "NO_ACCESS"))
+        return
+    symbol = _parse_symbol_arg(message.text)
+    if not symbol:
+        await message.answer(i18n.t(lang, "CMD_USAGE_PURGE"))
+        return
+    stats = purge_symbol(symbol)
+    await message.answer(
+        i18n.t(
+            lang,
+            "PURGE_SYMBOL_DONE",
+            symbol=symbol,
+            events=stats["events_deleted"],
+            watchlist=stats["watchlist_deleted"],
+            audit=stats["signal_audit_deleted"],
+        )
+    )
 
 
 @dp.message(Command("my_id"))

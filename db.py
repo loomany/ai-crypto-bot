@@ -4,6 +4,7 @@ import time
 from typing import Iterable, List, Optional, Tuple
 
 from db_path import get_db_path
+from symbol_cache import get_blocked_symbols
 
 TRIAL_AI_LIMIT = 7
 TRIAL_PUMP_LIMIT = 7
@@ -484,47 +485,67 @@ def delete_watchlist_symbols(symbols: Iterable[str]) -> None:
     finally:
         conn.close()
 
+def _append_blocked_symbols_filter(clauses: list[str], params: list[object]) -> None:
+    blocked = sorted(get_blocked_symbols())
+    if not blocked:
+        return
+    placeholders = ", ".join("?" for _ in blocked)
+    clauses.append(f"symbol NOT IN ({placeholders})")
+    params.extend(blocked)
 
-def delete_symbol_everywhere(symbol: str) -> dict[str, int]:
+
+def purge_symbol(symbol: str) -> dict[str, int]:
     normalized = symbol.strip().upper()
     if not normalized:
-        return {"watchlist_deleted": 0, "events_deleted": 0}
+        return {"watchlist_deleted": 0, "events_deleted": 0, "signal_audit_deleted": 0}
     conn = get_conn()
     try:
         cur = conn.execute("DELETE FROM watchlist WHERE symbol = ?", (normalized,))
         watchlist_deleted = cur.rowcount or 0
         cur = conn.execute("DELETE FROM signal_events WHERE symbol = ?", (normalized,))
         events_deleted = cur.rowcount or 0
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='signal_audit'"
+        )
+        signal_audit_deleted = 0
+        if cur.fetchone() is not None:
+            cur = conn.execute("DELETE FROM signal_audit WHERE symbol = ?", (normalized,))
+            signal_audit_deleted = cur.rowcount or 0
         conn.commit()
-        return {"watchlist_deleted": watchlist_deleted, "events_deleted": events_deleted}
+        return {
+            "watchlist_deleted": watchlist_deleted,
+            "events_deleted": events_deleted,
+            "signal_audit_deleted": signal_audit_deleted,
+        }
     finally:
         conn.close()
+
+
+def delete_symbol_everywhere(symbol: str) -> dict[str, int]:
+    stats = purge_symbol(symbol)
+    return {
+        "watchlist_deleted": stats["watchlist_deleted"],
+        "events_deleted": stats["events_deleted"],
+    }
 
 
 def delete_symbols_everywhere(symbols: Iterable[str]) -> dict[str, int]:
     normalized = {symbol.strip().upper() for symbol in symbols if symbol and symbol.strip()}
     if not normalized:
-        return {"watchlist_deleted": 0, "events_deleted": 0, "symbols": 0}
-    conn = get_conn()
-    try:
-        cur = conn.executemany(
-            "DELETE FROM watchlist WHERE symbol = ?",
-            [(symbol,) for symbol in normalized],
-        )
-        watchlist_deleted = cur.rowcount or 0
-        cur = conn.executemany(
-            "DELETE FROM signal_events WHERE symbol = ?",
-            [(symbol,) for symbol in normalized],
-        )
-        events_deleted = cur.rowcount or 0
-        conn.commit()
         return {
-            "watchlist_deleted": watchlist_deleted,
-            "events_deleted": events_deleted,
-            "symbols": len(normalized),
+            "watchlist_deleted": 0,
+            "events_deleted": 0,
+            "signal_audit_deleted": 0,
+            "symbols": 0,
         }
-    finally:
-        conn.close()
+    totals = {"watchlist_deleted": 0, "events_deleted": 0, "signal_audit_deleted": 0}
+    for symbol in normalized:
+        stats = purge_symbol(symbol)
+        totals["watchlist_deleted"] += stats["watchlist_deleted"]
+        totals["events_deleted"] += stats["events_deleted"]
+        totals["signal_audit_deleted"] += stats["signal_audit_deleted"]
+    totals["symbols"] = len(normalized)
+    return totals
 
 
 def insert_signal_event(
@@ -548,6 +569,9 @@ def insert_signal_event(
     breakdown_json: str | None = None,
 ) -> int:
     if is_test:
+        return 0
+    blocked = get_blocked_symbols()
+    if symbol and symbol.upper() in blocked:
         return 0
     conn = get_conn()
     try:
@@ -637,6 +661,7 @@ def list_signal_events(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         params.extend([int(limit), int(offset)])
         cur = conn.execute(
@@ -681,6 +706,7 @@ def count_signal_events(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
             f"SELECT COUNT(*) AS cnt FROM signal_events WHERE {where_clause}",
@@ -694,6 +720,13 @@ def count_signal_events(
 def get_last_signal_event_by_module(module: str) -> Optional[sqlite3.Row]:
     conn = get_conn()
     try:
+        blocked = sorted(get_blocked_symbols())
+        blocked_clause = ""
+        params: list[object] = [module]
+        if blocked:
+            placeholders = ", ".join("?" for _ in blocked)
+            blocked_clause = f" AND symbol NOT IN ({placeholders})"
+            params.extend(blocked)
         cur = conn.execute(
             """
             SELECT symbol, side, score, ts, reason_json, breakdown_json
@@ -707,10 +740,13 @@ def get_last_signal_event_by_module(module: str) -> Optional[sqlite3.Row]:
                 LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR
                 LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%'
               )
+            """
+            + blocked_clause
+            + """
             ORDER BY ts DESC
             LIMIT 1
             """,
-            (module,),
+            params,
         )
         return cur.fetchone()
     finally:
@@ -744,6 +780,7 @@ def get_signal_outcome_counts(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
             f"""
@@ -809,6 +846,7 @@ def get_signal_score_bucket_counts(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
             f"""
@@ -881,6 +919,7 @@ def get_signal_event(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
             f"SELECT * FROM signal_events WHERE {where_clause}",
