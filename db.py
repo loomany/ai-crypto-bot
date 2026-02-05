@@ -485,6 +485,48 @@ def delete_watchlist_symbols(symbols: Iterable[str]) -> None:
         conn.close()
 
 
+def delete_symbol_everywhere(symbol: str) -> dict[str, int]:
+    normalized = symbol.strip().upper()
+    if not normalized:
+        return {"watchlist_deleted": 0, "events_deleted": 0}
+    conn = get_conn()
+    try:
+        cur = conn.execute("DELETE FROM watchlist WHERE symbol = ?", (normalized,))
+        watchlist_deleted = cur.rowcount or 0
+        cur = conn.execute("DELETE FROM signal_events WHERE symbol = ?", (normalized,))
+        events_deleted = cur.rowcount or 0
+        conn.commit()
+        return {"watchlist_deleted": watchlist_deleted, "events_deleted": events_deleted}
+    finally:
+        conn.close()
+
+
+def delete_symbols_everywhere(symbols: Iterable[str]) -> dict[str, int]:
+    normalized = {symbol.strip().upper() for symbol in symbols if symbol and symbol.strip()}
+    if not normalized:
+        return {"watchlist_deleted": 0, "events_deleted": 0, "symbols": 0}
+    conn = get_conn()
+    try:
+        cur = conn.executemany(
+            "DELETE FROM watchlist WHERE symbol = ?",
+            [(symbol,) for symbol in normalized],
+        )
+        watchlist_deleted = cur.rowcount or 0
+        cur = conn.executemany(
+            "DELETE FROM signal_events WHERE symbol = ?",
+            [(symbol,) for symbol in normalized],
+        )
+        events_deleted = cur.rowcount or 0
+        conn.commit()
+        return {
+            "watchlist_deleted": watchlist_deleted,
+            "events_deleted": events_deleted,
+            "symbols": len(normalized),
+        }
+    finally:
+        conn.close()
+
+
 def insert_signal_event(
     *,
     ts: int,
