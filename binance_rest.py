@@ -37,6 +37,8 @@ _STATE_LOCK = asyncio.Lock()
 _CONSECUTIVE_TIMEOUTS = 0
 _LAST_SUCCESS_TS = 0.0
 _HAS_SUCCESS = False
+_LAST_RESPONSE_TS = 0.0
+_HAS_RESPONSE = False
 _WATCHDOG_START_TS = time.time()
 _SESSION_RESTARTS = 0
 
@@ -63,6 +65,7 @@ _KLINES_CACHE_LOCK = asyncio.Lock()
 _KLINES_INFLIGHT_LOCK = asyncio.Lock()
 _AGGTRADES_CACHE_LOCK = asyncio.Lock()
 _AGGTRADES_CACHE_TTL_SEC = _env_int("AGGTRADES_TTL_SEC", 10)
+_BINANCE_WATCHDOG_MAX_AGE_SEC = _env_int("BINANCE_WATCHDOG_MAX_AGE_SEC", 300)
 _BINANCE_REQUEST_MODULE = ContextVar("binance_request_module", default=None)
 
 
@@ -129,6 +132,14 @@ async def _record_success(module: Optional[str]) -> None:
         )
 
 
+async def _record_response() -> None:
+    global _LAST_RESPONSE_TS, _HAS_RESPONSE
+    now = time.time()
+    async with _STATE_LOCK:
+        _LAST_RESPONSE_TS = now
+        _HAS_RESPONSE = True
+
+
 async def _record_timeout_or_network_error(module: Optional[str]) -> None:
     global _CONSECUTIVE_TIMEOUTS
     async with _STATE_LOCK:
@@ -142,6 +153,7 @@ async def _record_timeout_or_network_error(module: Optional[str]) -> None:
 def get_binance_state() -> dict[str, float | int]:
     return {
         "last_success_ts": _LAST_SUCCESS_TS,
+        "last_response_ts": _LAST_RESPONSE_TS,
         "consecutive_timeouts": _CONSECUTIVE_TIMEOUTS,
         "session_restarts": _SESSION_RESTARTS,
     }
@@ -243,6 +255,7 @@ async def fetch_json(
             status, headers, payload = await asyncio.wait_for(
                 _perform_request(), timeout=_BINANCE_TIMEOUT.total
             )
+            await _record_response()
 
             # Rate limit / ban protection
             if status in (418, 429) or 500 <= status <= 599:
@@ -419,8 +432,24 @@ async def fetch_agg_trades(
 async def binance_watchdog() -> None:
     while True:
         now = time.time()
-        age = now - _LAST_SUCCESS_TS if _HAS_SUCCESS else now - _WATCHDOG_START_TS
-        if age > 300:
-            print("[binance_watchdog] CRITICAL: no successful Binance requests >5min")
+        if _BINANCE_WATCHDOG_MAX_AGE_SEC <= 0:
+            await asyncio.sleep(45)
+            continue
+        response_age = (
+            now - _LAST_RESPONSE_TS if _HAS_RESPONSE else now - _WATCHDOG_START_TS
+        )
+        success_age = (
+            now - _LAST_SUCCESS_TS if _HAS_SUCCESS else now - _WATCHDOG_START_TS
+        )
+        if response_age > _BINANCE_WATCHDOG_MAX_AGE_SEC:
+            print(
+                "[binance_watchdog] CRITICAL: no Binance responses "
+                f">{int(_BINANCE_WATCHDOG_MAX_AGE_SEC)}s"
+            )
             os._exit(1)
+        if success_age > _BINANCE_WATCHDOG_MAX_AGE_SEC:
+            print(
+                "[binance_watchdog] WARNING: no successful Binance responses "
+                f">{int(_BINANCE_WATCHDOG_MAX_AGE_SEC)}s"
+            )
         await asyncio.sleep(45)
