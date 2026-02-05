@@ -48,6 +48,8 @@ from trading_core import compute_atr, compute_ema
 from symbol_cache import (
     filter_tradeable_symbols,
     get_all_usdt_symbols,
+    get_blocked_symbols,
+    get_spot_usdt_symbols,
     get_top_usdt_symbols_by_volume,
 )
 from market_hub import MARKET_HUB
@@ -86,6 +88,8 @@ from db import (
     update_watchlist_after_signal,
     prune_watchlist,
     get_watchlist_counts,
+    delete_watchlist_symbols,
+    delete_symbols_everywhere,
     insert_signal_event,
     list_signal_events,
     count_signal_events,
@@ -229,6 +233,15 @@ def init_app_db():
         conn.close()
 
     init_storage_db()
+    blocked_symbols = get_blocked_symbols()
+    if blocked_symbols:
+        purge_stats = delete_symbols_everywhere(blocked_symbols)
+        print(
+            "[blocklist] purge startup: "
+            f"symbols={purge_stats['symbols']} "
+            f"watchlist={purge_stats['watchlist_deleted']} "
+            f"events={purge_stats['events_deleted']}"
+        )
     init_alert_dedup()
     init_signal_audit_tables()
     migrate_legacy_notify_settings()
@@ -2766,6 +2779,20 @@ async def send_signal_to_all(
         print("[ai_signals] Bot is not initialized; skipping send.")
         return 0
 
+    symbol = signal_dict.get("symbol", "")
+    blocked_symbols = get_blocked_symbols()
+    if symbol and symbol.upper() in blocked_symbols:
+        print(f"[blocklist] skip AI signal send {symbol}")
+        if return_stats:
+            return {
+                "sent": 0,
+                "locked": 0,
+                "paywall": 0,
+                "errors": 0,
+                "subscribers": 0,
+            }
+        return 0
+
     skipped_dedup = 0
     skipped_no_subs = 0
     subscribers = list(list_ai_subscribers())
@@ -2811,7 +2838,6 @@ async def send_signal_to_all(
                 return 0
 
     entry_low, entry_high = signal_dict["entry_zone"]
-    symbol = signal_dict.get("symbol", "")
     direction = signal_dict.get("direction", "long")
     time_bucket = int(time.time() // 3600)
     if symbol == "BTCUSDT":
@@ -3039,6 +3065,17 @@ async def _deliver_pumpdump_signal_stats(
     prefix_key: str | None = None,
     suffix_key: str | None = None,
 ) -> dict[str, int]:
+    blocked_symbols = get_blocked_symbols()
+    if symbol and symbol.upper() in blocked_symbols:
+        print(f"[blocklist] skip pump/dump send {symbol}")
+        return {
+            "sent": 0,
+            "locked": 0,
+            "paywall": 0,
+            "errors": 0,
+            "subscribers": len(subscribers),
+            "recipient_count": 0,
+        }
     sent_count = 0
     recipient_count = 0
     locked_count = 0
@@ -3503,6 +3540,26 @@ async def watchlist_scan_once() -> None:
     rows = list_watchlist_for_scan(now, WATCHLIST_MAX)
     symbols = [row["symbol"] for row in rows]
     priority_scores = {row["symbol"]: float(row["score"]) for row in rows}
+    blocked_symbols = get_blocked_symbols()
+    spot_symbols = await get_spot_usdt_symbols()
+    allowed_symbols = set(spot_symbols) if spot_symbols else set(symbols)
+    blocked_in_watchlist = [symbol for symbol in symbols if symbol in blocked_symbols]
+    missing_in_binance = (
+        [symbol for symbol in symbols if symbol not in allowed_symbols] if spot_symbols else []
+    )
+    to_purge = set(blocked_in_watchlist + missing_in_binance)
+    if to_purge:
+        delete_watchlist_symbols(to_purge)
+    symbols = [
+        symbol
+        for symbol in symbols
+        if symbol in allowed_symbols and symbol not in blocked_symbols
+    ]
+    priority_scores = {
+        symbol: score
+        for symbol, score in priority_scores.items()
+        if symbol in allowed_symbols and symbol not in blocked_symbols
+    }
     exclude_btc = os.getenv("EXCLUDE_BTC_FROM_AI_UNIVERSE", "0").lower() in (
         "1",
         "true",

@@ -1,3 +1,4 @@
+import os
 import time
 from typing import Any, List
 
@@ -36,6 +37,11 @@ _spot_cache: dict[str, Any] = {"updated_at": 0.0, "symbols": []}
 _futures_cache: dict[str, Any] = {"updated_at": 0.0, "symbols": []}
 
 
+def get_blocked_symbols() -> set[str]:
+    raw = os.getenv("SYMBOL_BLOCKLIST", "")
+    return {item.strip().upper() for item in raw.split(",") if item.strip()}
+
+
 def _get_base_asset(symbol: str) -> str | None:
     if symbol.endswith("USDT"):
         return symbol[:-4]
@@ -43,6 +49,9 @@ def _get_base_asset(symbol: str) -> str | None:
 
 
 def is_tradeable_symbol(symbol: str, ticker_24h: dict | None = None) -> bool:
+    blocked_symbols = get_blocked_symbols()
+    if symbol and symbol.upper() in blocked_symbols:
+        return False
     if not symbol or not symbol.endswith("USDT"):
         return False
     base = _get_base_asset(symbol)
@@ -80,7 +89,10 @@ async def get_spot_usdt_symbols(session: aiohttp.ClientSession | None = None) ->
     now = time.time()
     cached = _spot_cache.get("symbols", [])
     if cached and now - float(_spot_cache.get("updated_at", 0.0)) < SPOT_SYMBOLS_REFRESH_SEC:
-        return cached
+        blocked = get_blocked_symbols()
+        if not blocked:
+            return cached
+        return [symbol for symbol in cached if symbol not in blocked]
 
     data = await fetch_json(
         f"{BINANCE_SPOT_BASE}/exchangeInfo",
@@ -104,7 +116,10 @@ async def get_spot_usdt_symbols(session: aiohttp.ClientSession | None = None) ->
 
     _spot_cache["symbols"] = symbols
     _spot_cache["updated_at"] = now
-    return symbols
+    blocked = get_blocked_symbols()
+    if not blocked:
+        return symbols
+    return [symbol for symbol in symbols if symbol not in blocked]
 
 
 async def get_all_usdt_symbols(session: aiohttp.ClientSession | None = None) -> List[str]:
@@ -115,7 +130,10 @@ async def get_futures_usdt_symbols(session: aiohttp.ClientSession | None = None)
     now = time.time()
     cached = _futures_cache.get("symbols", [])
     if cached and now - float(_futures_cache.get("updated_at", 0.0)) < FUTURES_SYMBOLS_REFRESH_SEC:
-        return cached
+        blocked = get_blocked_symbols()
+        if not blocked:
+            return cached
+        return [symbol for symbol in cached if symbol not in blocked]
 
     data = await fetch_json(
         f"{BINANCE_FAPI_BASE}/fapi/v1/exchangeInfo",
@@ -138,7 +156,10 @@ async def get_futures_usdt_symbols(session: aiohttp.ClientSession | None = None)
 
     _futures_cache["symbols"] = symbols
     _futures_cache["updated_at"] = now
-    return symbols
+    blocked = get_blocked_symbols()
+    if not blocked:
+        return symbols
+    return [symbol for symbol in symbols if symbol not in blocked]
 
 
 async def get_top_usdt_symbols_by_volume(
