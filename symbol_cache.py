@@ -32,6 +32,9 @@ EXCLUDED_BASE_ASSETS = {
     "IDR",
 }
 LEVERAGE_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR", "3L", "3S", "5L", "5S")
+DEFAULT_BLOCKED_SYMBOLS = {
+    "TVKUSDT",
+}
 
 _spot_cache: dict[str, Any] = {"updated_at": 0.0, "symbols": []}
 _futures_cache: dict[str, Any] = {"updated_at": 0.0, "symbols": []}
@@ -39,7 +42,8 @@ _futures_cache: dict[str, Any] = {"updated_at": 0.0, "symbols": []}
 
 def get_blocked_symbols() -> set[str]:
     raw = os.getenv("SYMBOL_BLOCKLIST", "")
-    return {item.strip().upper() for item in raw.split(",") if item.strip()}
+    env_symbols = {item.strip().upper() for item in raw.split(",") if item.strip()}
+    return {symbol for symbol in DEFAULT_BLOCKED_SYMBOLS.union(env_symbols) if symbol}
 
 
 def _get_base_asset(symbol: str) -> str | None:
