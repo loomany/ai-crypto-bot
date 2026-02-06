@@ -24,6 +24,9 @@ from symbol_cache import get_top_usdt_symbols_by_volume
 
 DEFAULT_TFS: Tuple[str, ...] = ("1d", "4h", "1h", "15m", "5m")
 HUB_BATCH_SIZE = int(os.getenv("HUB_BATCH_SIZE", "6"))
+MAX_PER_CYCLE = int(os.getenv("MARKET_HUB_MAX_SYMBOLS_PER_CYCLE", "60"))
+WARMUP_MAX_PER_CYCLE = int(os.getenv("MARKET_HUB_WARMUP_MAX_SYMBOLS_PER_CYCLE", "40"))
+BATCH_TIMEOUT = float(os.getenv("MARKET_HUB_BATCH_TIMEOUT_SEC", "14"))
 
 TF_LIMITS = {
     "1d": KLINES_1D_LIMIT,
@@ -88,6 +91,7 @@ class MarketDataHub:
         self._warmup_offset = 0
         self._warmup_symbols: List[str] = []
         self._warmup_symbols_updated_at = 0.0
+        self._cycle_offset = 0
         self._watchdog_task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
@@ -184,6 +188,17 @@ class MarketDataHub:
             return symbols[start:end]
         return symbols[start:] + symbols[: end - len(symbols)]
 
+    def _select_cycle_symbols(self, symbols: List[str], limit: int) -> List[str]:
+        if not symbols:
+            return []
+        limit = max(1, min(len(symbols), limit))
+        start = self._cycle_offset % len(symbols)
+        end = start + limit
+        self._cycle_offset = (self._cycle_offset + limit) % len(symbols)
+        if end <= len(symbols):
+            return symbols[start:end]
+        return symbols[start:] + symbols[: end - len(symbols)]
+
     async def _get_warmup_symbols(self, symbols: List[str]) -> List[str]:
         now = time.time()
         cached = self._warmup_symbols
@@ -264,22 +279,30 @@ class MarketDataHub:
                     self._warmup_active = warmup_active
                     force_symbols: set[str] = set()
                     tfs = self._tfs
+                    cycle_symbols = symbols
+                    cycle_limit = MAX_PER_CYCLE
                     if warmup_active:
                         cycle_reason = "warmup"
                         warmup_symbols = await self._get_warmup_symbols(symbols)
+                        cycle_symbols = warmup_symbols
+                        cycle_limit = WARMUP_MAX_PER_CYCLE
                         force_symbols = set(self._select_warmup_symbols(warmup_symbols))
                         tfs = self._warmup_tfs
                     elif self._should_force_warmup(time.time()):
                         cycle_reason = "forced_warmup"
                         warmup_symbols = await self._get_warmup_symbols(symbols)
+                        cycle_symbols = warmup_symbols
+                        cycle_limit = WARMUP_MAX_PER_CYCLE
                         force_symbols = set(self._select_warmup_symbols(warmup_symbols))
                         tfs = self._warmup_tfs
                         self._warmup_forced = True
+                    cycle_symbols = self._select_cycle_symbols(cycle_symbols, cycle_limit)
                     for tf in tfs:
-                        for batch in _chunked(symbols, self._batch_size):
+                        for batch in _chunked(cycle_symbols, self._batch_size):
                             attempted, refreshed, unchanged, skipped, errors = await self._refresh_batch(
                                 tf, batch, force_symbols=force_symbols
                             )
+                            self.last_cycle_ts = time.time()
                             cycle_attempted += attempted
                             cycle_unchanged += unchanged
                             cycle_refreshed.update(refreshed)
@@ -359,10 +382,27 @@ class MarketDataHub:
                 return symbol, None, exc
 
         tasks = [asyncio.create_task(_safe_fetch(symbol)) for symbol in symbols_to_fetch]
-        results = await asyncio.gather(*tasks)
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=BATCH_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            for task in tasks:
+                task.cancel()
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            logger.warning(
+                "[market_hub] batch refresh timeout tf=%s symbols=%s",
+                tf,
+                len(symbols_to_fetch),
+            )
         any_ok = False
         now = time.time()
-        for symbol, data, error in results:
+        for result in results:
+            if isinstance(result, Exception):
+                errors_count += 1
+                continue
+            symbol, data, error = result
             if error:
                 errors_count += 1
                 self.last_error = f"{symbol} {tf}: {type(error).__name__} {error}"
