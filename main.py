@@ -1281,8 +1281,9 @@ async def archive_list(callback: CallbackQuery):
     )
 
 
-@dp.callback_query(F.data.startswith("sig_open:"))
+@dp.callback_query(F.data.regexp(r"^sig_open:\d+$"))
 async def sig_open(callback: CallbackQuery):
+    logger.warning("SIG_OPEN HANDLER FIRED: %s", callback.data)
     if callback.message is None or callback.from_user is None:
         return
     await callback.answer()
@@ -1301,21 +1302,26 @@ async def sig_open(callback: CallbackQuery):
         if context:
             period_key, page = context
             back_callback = f"archive:list:{period_key}:{page}"
-        await callback.message.edit_text(
-            _format_archive_detail(dict(event), lang),
-            reply_markup=_archive_detail_kb(
-                lang=lang,
-                back_callback=back_callback,
-                event_id=event_id,
-                event_status=str(event.get("status", "")),
-                is_admin_user=is_admin(callback.from_user.id),
-            ),
+        detail_text = _format_archive_detail(dict(event), lang)
+        detail_markup = _archive_detail_kb(
+            lang=lang,
+            back_callback=back_callback,
+            event_id=event_id,
+            event_status=str(event.get("status", "")),
+            is_admin_user=is_admin(callback.from_user.id),
         )
+        try:
+            await callback.message.edit_text(detail_text, reply_markup=detail_markup)
+        except Exception:
+            await callback.message.answer(detail_text, reply_markup=detail_markup)
     except Exception as exc:
         mark_error("sig_open", str(exc))
         logger.exception("sig_open failed: %s", exc)
         with suppress(Exception):
-            await callback.answer("⚠️ Ошибка открытия сигнала", show_alert=True)
+            await callback.answer(
+                f"Ошибка открытия: {type(exc).__name__}",
+                show_alert=True,
+            )
 
 
 @dp.callback_query(F.data.regexp(r"^archive:back:(1d|7d|30d|all)$"))
