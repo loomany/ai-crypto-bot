@@ -53,6 +53,8 @@ class MarketDataHub:
         self._candles: Dict[str, Dict[str, List[Candle]]] = {}
         self._updated_at: Dict[str, Dict[str, float]] = {}
         self._symbols: set[str] = set()
+        self._symbols_ordered: List[str] = []
+        self._universe_size = 0
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self.last_ok_at = 0.0
@@ -93,17 +95,31 @@ class MarketDataHub:
 
     def register_symbols(self, symbols: Iterable[str]) -> None:
         for symbol in symbols:
-            if symbol:
+            if symbol and symbol not in self._symbols:
                 self._symbols.add(symbol)
+                self._symbols_ordered.append(symbol)
+
+    def set_symbols(self, symbols: Iterable[str]) -> None:
+        clean = [symbol for symbol in symbols if symbol]
+        seen = set()
+        ordered: List[str] = []
+        for symbol in clean:
+            if symbol in seen:
+                continue
+            seen.add(symbol)
+            ordered.append(symbol)
+        self._symbols = set(ordered)
+        self._symbols_ordered = ordered
+        self._universe_size = len(ordered)
 
     def get_candles(self, symbol: str, tf: str) -> Optional[List[Candle]]:
         if symbol:
-            self._symbols.add(symbol)
+            self.register_symbols([symbol])
         return self._candles.get(symbol, {}).get(tf)
 
     def get_bundle(self, symbol: str, tfs: Tuple[str, ...]) -> Optional[Dict[str, List[Candle]]]:
         if symbol:
-            self._symbols.add(symbol)
+            self.register_symbols([symbol])
         if symbol not in self._candles:
             return None
         return {tf: self._candles.get(symbol, {}).get(tf, []) for tf in tfs}
@@ -167,11 +183,11 @@ class MarketDataHub:
             cycle_reason: Optional[str] = None
             sleep_delay = 0.2
             try:
-                symbols = list(self._symbols)
+                symbols = list(self._symbols_ordered or self._symbols)
                 if not symbols:
                     cycle_reason = "no_symbols"
                     self._warmup_active = False
-                    sleep_delay = 0.5
+                    sleep_delay = 1.0
                 else:
                     cache_size = sum(
                         1
@@ -217,7 +233,7 @@ class MarketDataHub:
                 self.last_cycle_errors = cycle_errors
                 self.last_cycle_reason = cycle_reason
                 elapsed_ms = int((time.monotonic() - cycle_start) * 1000)
-                if cycle_attempted > 0:
+                if cycle_attempted > 0 or cycle_reason == "no_symbols":
                     self.last_cycle_ms = max(1, elapsed_ms)
                 else:
                     self.last_cycle_ms = elapsed_ms

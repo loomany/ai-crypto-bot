@@ -1976,6 +1976,7 @@ def _format_market_hub(now: float, lang: str) -> str:
         last_tick = i18n.t(lang, "SYSTEM_STATUS_LAST_CYCLE_NO_DATA")
 
     err = MARKET_HUB.last_error
+    universe_size = getattr(MARKET_HUB, "_universe_size", 0)
     symbols_count = len(getattr(MARKET_HUB, "_symbols", []) or [])
     attempted = getattr(MARKET_HUB, "last_cycle_attempted", 0)
     refreshed = getattr(MARKET_HUB, "last_cycle_refreshed", 0)
@@ -2014,6 +2015,8 @@ def _format_market_hub(now: float, lang: str) -> str:
         f"• market_hub_task_alive={str(hub_task_alive).lower()}",
         i18n.t(lang, "DIAG_ACTIVE_SYMBOLS", count=symbols_count),
     ]
+    details.append(f"• universe_size={universe_size}")
+    details.append(f"• market_hub_symbols_size={symbols_count}")
     if cycle_reason:
         details.append(f"• cycle_reason={cycle_reason}")
     if err:
@@ -4292,6 +4295,10 @@ async def ai_scan_once() -> None:
 
         with binance_request_context("ai_signals"):
             symbols = await _get_ai_universe()
+        if symbols:
+            MARKET_HUB.set_symbols(symbols)
+            if module_state:
+                module_state.state["universe_symbols"] = symbols
         if not symbols:
             mark_error("ai_signals", "no symbols to scan")
             return
