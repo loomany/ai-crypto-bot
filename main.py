@@ -1829,18 +1829,18 @@ def _format_fails_top(fails: dict, lang: str, top_n: int = 5) -> str:
     if not fails:
         return ""
     ordered = sorted(fails.items(), key=lambda item: item[1], reverse=True)[:top_n]
-    lines = [i18n.t(lang, "DIAG_FAILS_TOP")]
+    lines = [f"• {i18n.t(lang, 'DIAG_FAILS_TOP')}"]
     for reason, count in ordered:
-        lines.append(f"• {reason} — {count}")
+        lines.append(f"  • {reason} — {count}")
     return "\n".join(lines)
 
 
-def _format_near_miss(near_miss: dict) -> str:
+def _format_near_miss(near_miss: dict, lang: str) -> str:
     if not near_miss:
         return ""
-    lines = ["Near-miss:"]
+    lines = [f"• {i18n.t(lang, 'DIAG_NEAR_MISS')}"]
     for reason, count in sorted(near_miss.items(), key=lambda item: item[1], reverse=True):
-        lines.append(f"• {reason} — {count}")
+        lines.append(f"  • {reason} — {count}")
     return "\n".join(lines)
 
 
@@ -1874,8 +1874,46 @@ def _take_rotation_slice(
     return rotation_slice, cursor, len(ordered)
 
 
+def _build_status_label(
+    *,
+    ok: bool,
+    warn: bool,
+    error: bool,
+    ok_text: str,
+    warn_text: str,
+    error_text: str,
+) -> str:
+    if error:
+        return f"ERROR ❌ {error_text}"
+    if warn:
+        return f"WARN ⚠️ {warn_text}"
+    return f"OK ✅ {ok_text}"
+
+
+def _format_section(title: str, status_label: str, details: list[str], lang: str) -> str:
+    lines = [
+        title,
+        i18n.t(lang, "DIAG_MODULE_STATUS", status=status_label),
+    ]
+    lines.extend(details)
+    return "\n".join(lines)
+
+
+def _short_symbol(symbol: str) -> str:
+    if symbol.endswith("USDT"):
+        return symbol[:-4]
+    return symbol
+
+
+def _format_samples(samples: list[tuple[str, float]]) -> str:
+    formatted = []
+    for symbol, score in samples:
+        score_str = f"{score:.2f}".rstrip("0").rstrip(".")
+        formatted.append(f"{_short_symbol(symbol)}({score_str})")
+    return ", ".join(formatted)
+
+
 def _format_market_hub(now: float, lang: str) -> str:
-    # MARKET_HUB уже есть в проекте
     if MARKET_HUB.last_ok_at:
         ok_ago = int(now - MARKET_HUB.last_ok_at)
         last_tick = _human_ago(ok_ago, lang)
@@ -1884,349 +1922,263 @@ def _format_market_hub(now: float, lang: str) -> str:
 
     err = MARKET_HUB.last_error or i18n.t(lang, "SYSTEM_STATUS_LAST_CYCLE_NO_DATA")
     symbols_count = len(getattr(MARKET_HUB, "_symbols", []) or [])
-    return (
-        f"{i18n.t(lang, 'DIAG_MARKET_HUB_TITLE')}\n"
-        f"{i18n.t(lang, 'DIAG_MODULE_STATUS', status=i18n.t(lang, 'DIAG_STATUS_WORKING'))}\n"
-        f"{i18n.t(lang, 'DIAG_LAST_TICK', tick=last_tick)}\n"
-        f"{i18n.t(lang, 'DIAG_ERRORS', error=err)}\n"
-        f"{i18n.t(lang, 'DIAG_ACTIVE_SYMBOLS', count=symbols_count)}"
+    status_label = _build_status_label(
+        ok=bool(MARKET_HUB.last_ok_at) and not MARKET_HUB.last_error,
+        warn=bool(MARKET_HUB.last_error) or not MARKET_HUB.last_ok_at,
+        error=False,
+        ok_text=i18n.t(lang, "DIAG_STATUS_WORKING"),
+        warn_text=i18n.t(lang, "DIAG_STATUS_ISSUES"),
+        error_text=i18n.t(lang, "DIAG_STATUS_ERROR"),
     )
+    details = [
+        i18n.t(lang, "DIAG_LAST_TICK", tick=last_tick),
+        i18n.t(lang, "DIAG_ERRORS", error=f"⚠️ {err}" if MARKET_HUB.last_error else err),
+        i18n.t(lang, "DIAG_ACTIVE_SYMBOLS", count=symbols_count),
+    ]
+    return _format_section(i18n.t(lang, "DIAG_MARKET_HUB_TITLE"), status_label, details, lang)
 
 
 def _format_db_status(lang: str) -> str:
     path = get_db_path()
-    if not os.path.exists(path):
-        return (
-            f"{i18n.t(lang, 'DIAG_DB_TITLE')}\n"
-            f"{i18n.t(lang, 'DIAG_DB_PATH', path=path)}\n"
-            f"{i18n.t(lang, 'DIAG_DB_MISSING')}"
-        )
+    exists = os.path.exists(path)
+    status_label = _build_status_label(
+        ok=exists,
+        warn=False,
+        error=not exists,
+        ok_text=i18n.t(lang, "DIAG_STATUS_OK"),
+        warn_text=i18n.t(lang, "DIAG_STATUS_ISSUES"),
+        error_text=i18n.t(lang, "DIAG_STATUS_MISSING"),
+    )
+    details = [i18n.t(lang, "DIAG_DB_PATH", path=path)]
+    if not exists:
+        details.append(i18n.t(lang, "DIAG_DB_MISSING"))
+        return _format_section(i18n.t(lang, "DIAG_DB_TITLE"), status_label, details, lang)
     size_bytes = os.path.getsize(path)
     mtime = datetime.fromtimestamp(os.path.getmtime(path))
-    return (
-        f"{i18n.t(lang, 'DIAG_DB_TITLE')}\n"
-        f"{i18n.t(lang, 'DIAG_DB_PATH', path=path)}\n"
-        f"{i18n.t(lang, 'DIAG_DB_SIZE', size=size_bytes)}\n"
-        f"{i18n.t(lang, 'DIAG_DB_MODIFIED', mtime=f'{mtime:%Y-%m-%d %H:%M:%S}')}"
+    details.extend(
+        [
+            i18n.t(lang, "DIAG_DB_SIZE", size=size_bytes),
+            i18n.t(lang, "DIAG_DB_MODIFIED", mtime=f"{mtime:%Y-%m-%d %H:%M:%S}"),
+        ]
     )
+    return _format_section(i18n.t(lang, "DIAG_DB_TITLE"), status_label, details, lang)
 
 
-def _format_module(key: str, st, now: float, lang: str) -> str:
-    # st — это ModuleStatus из health.py
-    def _short_symbol(symbol: str) -> str:
-        if symbol.endswith("USDT"):
-            return symbol[:-4]
-        return symbol
-
-    def _format_samples(samples: list[tuple[str, float]]) -> str:
-        formatted = []
-        for symbol, score in samples:
-            score_str = f"{score:.2f}".rstrip("0").rstrip(".")
-            formatted.append(f"{_short_symbol(symbol)}({score_str})")
-        return ", ".join(formatted)
-
-    if st.last_tick:
-        tick = _human_ago(int(now - st.last_tick), lang)
-        status_line = i18n.t(lang, "DIAG_STATUS_WORKING")
+def _format_overall_status(now: float, lang: str) -> str:
+    modules = [MODULES.get("ai_signals"), MODULES.get("pumpdump")]
+    has_tick = any(st and st.last_tick for st in modules)
+    has_error = any(st and st.last_error for st in modules)
+    has_warn = any(st and st.last_warn for st in modules)
+    status_label = _build_status_label(
+        ok=has_tick and not has_error and not has_warn,
+        warn=(not has_tick) or has_warn,
+        error=has_error,
+        ok_text=i18n.t(lang, "DIAG_STATUS_WORKING"),
+        warn_text=i18n.t(lang, "DIAG_STATUS_ISSUES"),
+        error_text=i18n.t(lang, "DIAG_STATUS_ERROR"),
+    )
+    details = []
+    error_lines = [st for st in modules if st and st.last_error]
+    warn_lines = [st for st in modules if st and st.last_warn]
+    if error_lines:
+        details.append(i18n.t(lang, "DIAG_ERRORS_HEADER"))
+        for st in error_lines:
+            details.append(f"  • ⚠️ {st.name}: {st.last_error}")
     else:
-        tick = i18n.t(lang, "DIAG_STATUS_NOT_STARTED")
-        status_line = i18n.t(lang, "DIAG_STATUS_NOT_STARTED")
+        details.append(i18n.t(lang, "DIAG_ERRORS_NONE"))
+    if warn_lines:
+        details.append(i18n.t(lang, "DIAG_WARNINGS_HEADER"))
+        for st in warn_lines:
+            details.append(f"  • ⚠️ {st.name}: {st.last_warn}")
+    else:
+        details.append(i18n.t(lang, "DIAG_WARNINGS_NONE"))
+    restarts = 0
+    if modules and modules[0]:
+        restarts = modules[0].binance_session_restarts
+    details.append(i18n.t(lang, "DIAG_SESSION_RESTARTS", count=restarts))
+    return _format_section(i18n.t(lang, "DIAG_SECTION_OVERALL"), status_label, details, lang)
 
-    ok_line = ""
-    if st.last_ok:
-        ok_line = i18n.t(
-            lang,
-            "DIAG_MODULE_LAST_OK",
-            tick=_human_ago(int(now - st.last_ok), lang),
+
+def _format_btc_gate_section(lang: str) -> str:
+    use_btc_gate = get_use_btc_gate()
+    status_label = _build_status_label(
+        ok=use_btc_gate,
+        warn=not use_btc_gate,
+        error=False,
+        ok_text=i18n.t(lang, "DIAG_STATUS_ENABLED"),
+        warn_text=i18n.t(lang, "DIAG_STATUS_DISABLED"),
+        error_text=i18n.t(lang, "DIAG_STATUS_DISABLED"),
+    )
+    details = []
+    btc_cache = get_cached_btc_context()
+    btc_error = get_btc_context_last_error()
+    btc_symbol = "BTCUSDT"
+    if not use_btc_gate:
+        details.append(i18n.t(lang, "DIAG_BTC_CONTEXT_DISABLED"))
+    elif btc_cache is None:
+        reason = f"⚠️ {btc_error}" if btc_error else i18n.t(lang, "DIAG_STATUS_PENDING")
+        details.append(i18n.t(lang, "DIAG_BTC_CONTEXT_PENDING", reason=reason))
+    else:
+        btc_ctx, age_sec, ttl_sec = btc_cache
+        allow_longs = "✅" if btc_ctx.get("allow_longs", False) else "❌"
+        allow_shorts = "✅" if btc_ctx.get("allow_shorts", False) else "❌"
+        ctx_reason = btc_ctx.get("ctx_reason") or "-"
+        btc_mode = btc_ctx.get("mode") or "-"
+        details.extend(
+            [
+                i18n.t(lang, "DIAG_BTC_SYMBOL", symbol=btc_symbol),
+                i18n.t(lang, "DIAG_BTC_MODE", mode=btc_mode),
+                i18n.t(lang, "DIAG_BTC_AGE", age=age_sec, ttl=ttl_sec),
+                i18n.t(lang, "DIAG_BTC_ALLOW_LONGS", flag=allow_longs),
+                i18n.t(lang, "DIAG_BTC_ALLOW_SHORTS", flag=allow_shorts),
+                i18n.t(lang, "DIAG_BTC_REASON", reason=ctx_reason),
+            ]
         )
+    return _format_section(i18n.t(lang, "DIAG_SECTION_BTC_GATE"), status_label, details, lang)
 
+
+def _format_ai_section(st, now: float, lang: str) -> str:
     extra = _parse_extra_kv(st.extra or "")
-
-    # Общие поля
-    lines = [
-        f"{st.name}",
-        i18n.t(lang, "DIAG_MODULE_STATUS", status=status_line),
-        i18n.t(lang, "DIAG_MODULE_LAST_CYCLE", tick=tick),
-    ]
-    if ok_line:
-        lines.append(ok_line)
-
+    status_label = _build_status_label(
+        ok=bool(st.last_tick) and not st.last_error and not st.last_warn,
+        warn=bool(st.last_warn) or not st.last_tick,
+        error=bool(st.last_error),
+        ok_text=i18n.t(lang, "DIAG_STATUS_WORKING"),
+        warn_text=i18n.t(lang, "DIAG_STATUS_ISSUES"),
+        error_text=i18n.t(lang, "DIAG_STATUS_ERROR"),
+    )
+    tick = (
+        _human_ago(int(now - st.last_tick), lang)
+        if st.last_tick
+        else i18n.t(lang, "DIAG_STATUS_NOT_STARTED")
+    )
+    details = [i18n.t(lang, "DIAG_MODULE_LAST_CYCLE", tick=tick)]
+    if st.last_ok:
+        details.append(
+            i18n.t(
+                lang,
+                "DIAG_MODULE_LAST_OK",
+                tick=_human_ago(int(now - st.last_ok), lang),
+            )
+        )
     if st.last_error:
-        lines.append(i18n.t(lang, "DIAG_MODULE_ERROR", error=st.last_error))
+        details.append(i18n.t(lang, "DIAG_MODULE_ERROR", error=f"⚠️ {st.last_error}"))
     if st.last_warn:
-        lines.append(i18n.t(lang, "DIAG_MODULE_WARNING", warning=st.last_warn))
+        details.append(i18n.t(lang, "DIAG_MODULE_WARNING", warning=f"⚠️ {st.last_warn}"))
+    universe = extra.get("universe") or (str(st.total_symbols) if st.total_symbols else None)
+    chunk = extra.get("chunk")
+    cur = extra.get("cursor") or (str(st.cursor) if st.cursor else None)
+    current_symbol = extra.get("current") or st.current_symbol or "-"
+    details.append(i18n.t(lang, "DIAG_MARKET_SCAN_HEADER"))
+    if universe:
+        details.append(i18n.t(lang, "DIAG_MARKET_UNIVERSE", count=universe))
+    if chunk:
+        details.append(i18n.t(lang, "DIAG_MARKET_CHUNK", count=chunk))
+    if cur and universe:
+        details.append(i18n.t(lang, "DIAG_MARKET_POSITION_TOTAL", current=cur, total=universe))
+    elif cur:
+        details.append(i18n.t(lang, "DIAG_MARKET_POSITION", current=cur))
+    details.append(i18n.t(lang, "DIAG_MARKET_CURRENT", symbol=current_symbol))
+    cyc = extra.get("cycle")
+    if cyc:
+        details.append(i18n.t(lang, "DIAG_CYCLE_TIME", cycle=cyc))
 
-    # Подписчики
-    subs = extra.get("подписчиков")
-    if subs is not None:
-        lines.append("")
-        lines.append(i18n.t(lang, "DIAG_USERS_HEADER"))
-        lines.append(i18n.t(lang, "DIAG_SUBSCRIBERS_LINE", count=subs))
+    details.append(i18n.t(lang, "DIAG_AI_CONFIG_TITLE"))
+    details.extend(
+        [
+            i18n.t(lang, "DIAG_AI_CONFIG_MAX_DEEP", value=AI_MAX_DEEP_PER_CYCLE),
+            i18n.t(lang, "DIAG_AI_CONFIG_STAGE_A", value=AI_STAGE_A_TOP_K),
+            i18n.t(lang, "DIAG_AI_CONFIG_PRESCORE_THRESHOLD", value=PRE_SCORE_THRESHOLD),
+            i18n.t(lang, "DIAG_AI_CONFIG_PRESCORE_MIN", value=MIN_PRE_SCORE),
+            i18n.t(lang, "DIAG_AI_CONFIG_FINAL_THRESHOLD", value=FINAL_SCORE_THRESHOLD),
+            i18n.t(lang, "DIAG_AI_CONFIG_MIN_VOLUME", value=MIN_VOLUME_5M_USDT),
+            i18n.t(lang, "DIAG_AI_CONFIG_PUMP_VOLUME", value=PUMP_VOLUME_MUL),
+        ]
+    )
+    return _format_section(i18n.t(lang, "DIAG_SECTION_AI"), status_label, details, lang)
 
-    # Сканирование / прогресс (берём из st + extra)
-    # AI-сигналы
-    if key == "ai_signals":
-        lines.append("")
-        lines.append(i18n.t(lang, "DIAG_MARKET_SCAN_HEADER"))
-        universe = extra.get("universe") or (
-            str(st.total_symbols) if st.total_symbols else None
+
+def _format_filters_section(st, lang: str) -> str:
+    pre_score = (st.last_stats or {}).get("pre_score") if st else None
+    status_label = _build_status_label(
+        ok=bool(pre_score),
+        warn=not pre_score,
+        error=False,
+        ok_text=i18n.t(lang, "DIAG_STATUS_WORKING"),
+        warn_text=i18n.t(lang, "DIAG_STATUS_NO_DATA"),
+        error_text=i18n.t(lang, "DIAG_STATUS_ERROR"),
+    )
+    details: list[str] = []
+    if pre_score:
+        threshold = pre_score.get("threshold")
+        threshold_str = f"{threshold:.1f}" if isinstance(threshold, (int, float)) else "-"
+        checked = pre_score.get("checked", 0)
+        passed = pre_score.get("passed", 0)
+        failed = pre_score.get("failed", 0)
+        pass_rate = pre_score.get("pass_rate")
+        pass_rate_str = None
+        if isinstance(pass_rate, (int, float)):
+            pass_rate_str = f"{int(round(pass_rate * 100))}%"
+        failed_samples = pre_score.get("failed_samples") or []
+        passed_samples = pre_score.get("passed_samples") or []
+        details.append(i18n.t(lang, "DIAG_PRESCORE_THRESHOLD", threshold=threshold_str))
+        summary = i18n.t(
+            lang,
+            "DIAG_PRESCORE_SUMMARY",
+            checked=checked,
+            passed=passed,
+            failed=failed,
+            rate=pass_rate_str or "-",
         )
-        if universe:
-            lines.append(i18n.t(lang, "DIAG_MARKET_UNIVERSE", count=universe))
-        chunk = extra.get("chunk")
-        if chunk:
-            lines.append(i18n.t(lang, "DIAG_MARKET_CHUNK", count=chunk))
-        exclude_btc = os.getenv("EXCLUDE_BTC_FROM_AI_UNIVERSE", "0").lower() in (
-            "1",
-            "true",
-            "yes",
-            "y",
-        )
-        lines.append(
-            f"• BTC candidate scanning: {'disabled' if exclude_btc else 'enabled'}"
-        )
-        # cursor
-        cur = extra.get("cursor") or (str(st.cursor) if st.cursor else None)
-        if cur and universe:
-            lines.append(
-                i18n.t(lang, "DIAG_MARKET_POSITION_TOTAL", current=cur, total=universe)
+        details.append(summary)
+        if failed_samples:
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_PRESCORE_FAILED",
+                    samples=_format_samples(failed_samples),
+                )
             )
-        elif cur:
-            lines.append(i18n.t(lang, "DIAG_MARKET_POSITION", current=cur))
-        use_btc_gate = bool(st.state.get("use_btc_gate", False))
-        lines.append(f"• BTC gate: {'enabled' if use_btc_gate else 'disabled'}")
-        btc_cache = get_cached_btc_context()
-        btc_error = get_btc_context_last_error()
-        btc_symbol = "BTCUSDT"
-        if not use_btc_gate:
-            btc_line = (
-                f"{btc_symbol} (age=- ttl=- allow_longs=- allow_shorts=- reason=disabled)"
+        if passed_samples:
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_PRESCORE_PASSED",
+                    samples=_format_samples(passed_samples),
+                )
             )
-        elif btc_cache is None:
-            reason = f"error:{btc_error}" if btc_error else "pending"
-            btc_line = (
-                f"{btc_symbol} (age=- ttl=- allow_longs=- allow_shorts=- reason={reason})"
-            )
+    if st and st.fails_top:
+        if isinstance(st.fails_top, dict):
+            details.append(_format_fails_top(st.fails_top, lang))
         else:
-            btc_ctx, age_sec, ttl_sec = btc_cache
-            allow_longs = btc_ctx.get("allow_longs", False)
-            allow_shorts = btc_ctx.get("allow_shorts", False)
-            ctx_reason = btc_ctx.get("ctx_reason") or "-"
-            btc_line = (
-                f"{btc_symbol} (age={age_sec}s ttl={ttl_sec}s "
-                f"allow_longs={allow_longs} allow_shorts={allow_shorts} "
-                f"reason={ctx_reason})"
-            )
-        current_symbol = st.current_symbol or None
-        extra_current = extra.get("current")
+            details.append(str(st.fails_top))
+    if st and st.near_miss:
+        if isinstance(st.near_miss, dict):
+            details.append(_format_near_miss(st.near_miss, lang))
+        else:
+            details.append(st.near_miss)
+    if st and st.universe_debug:
+        details.append(st.universe_debug)
+    if not details:
+        details.append(i18n.t(lang, "DIAG_NO_DATA_LINE"))
+    return _format_section(i18n.t(lang, "DIAG_SECTION_FILTERS"), status_label, details, lang)
 
-        def _is_btc_candidate(symbol: str | None) -> bool:
-            return bool(symbol) and "BTC" in symbol
-        btc_candidate_symbol = None
-        market_scan_symbol = None
-        if _is_btc_candidate(current_symbol):
-            btc_candidate_symbol = current_symbol
-        elif current_symbol:
-            market_scan_symbol = current_symbol
-        if btc_candidate_symbol is None and _is_btc_candidate(extra_current):
-            btc_candidate_symbol = extra_current
-        if market_scan_symbol is None and extra_current and not _is_btc_candidate(extra_current):
-            market_scan_symbol = extra_current
-        btc_candidate_symbol = btc_candidate_symbol or "-"
-        market_scan_symbol = market_scan_symbol or "-"
-        pos_display = cur or "-"
-        total_display = universe or "-"
-        lines.append(f"BTC context: {btc_line}")
-        lines.append(f"BTC candidate scan: {btc_candidate_symbol}")
-        lines.append(
-            f"Market scan: {market_scan_symbol} ({pos_display} / {total_display})"
-        )
-        cyc = extra.get("cycle")
-        if cyc:
-            lines.append(i18n.t(lang, "DIAG_CYCLE_TIME", cycle=cyc))
 
-        pre_score = (st.last_stats or {}).get("pre_score") if st.last_stats else None
-        if pre_score:
-            threshold = pre_score.get("threshold")
-            threshold_str = (
-                f"{threshold:.1f}" if isinstance(threshold, (int, float)) else "-"
-            )
-            checked = pre_score.get("checked", 0)
-            passed = pre_score.get("passed", 0)
-            failed = pre_score.get("failed", 0)
-            pass_rate = pre_score.get("pass_rate")
-            pass_rate_str = None
-            if isinstance(pass_rate, (int, float)):
-                pass_rate_str = f"{int(round(pass_rate * 100))}%"
-
-            failed_samples = pre_score.get("failed_samples") or []
-            passed_samples = pre_score.get("passed_samples") or []
-            lines.append("")
-            lines.append(i18n.t(lang, "DIAG_PRESCORE_HEADER"))
-            lines.append(i18n.t(lang, "DIAG_PRESCORE_THRESHOLD", threshold=threshold_str))
-            summary = f"• checked: {checked} | passed: {passed} | failed: {failed}"
-            if pass_rate_str:
-                summary += f" | pass rate: {pass_rate_str}"
-            lines.append(summary)
-            if failed_samples:
-                lines.append(
-                    i18n.t(
-                        lang,
-                        "DIAG_PRESCORE_FAILED",
-                        samples=_format_samples(failed_samples),
-                    )
-                )
-            if passed_samples:
-                lines.append(
-                    i18n.t(
-                        lang,
-                        "DIAG_PRESCORE_PASSED",
-                        samples=_format_samples(passed_samples),
-                    )
-                )
-
-        if st.fails_top or st.near_miss or st.universe_debug:
-            lines.append("")
-            if st.fails_top:
-                if isinstance(st.fails_top, dict):
-                    lines.append(_format_fails_top(st.fails_top, lang))
-                else:
-                    lines.append(str(st.fails_top))
-            if st.near_miss:
-                lines.append(st.near_miss)
-            if st.universe_debug:
-                lines.append(st.universe_debug)
-
-        # запросы
-        req = extra.get("req")
-        kl = extra.get("klines")
-        hits = extra.get("klines_hits")
-        misses = extra.get("klines_misses")
-        inflight = extra.get("klines_inflight")
-        ticker_req = extra.get("ticker_req")
-        deep_scans = extra.get("deep_scans")
-        if req or kl or hits or misses or inflight or ticker_req or deep_scans:
-            lines.append("")
-            lines.append(i18n.t(lang, "DIAG_REQUESTS_HEADER"))
-            if req:
-                lines.append(i18n.t(lang, "DIAG_REQUESTS_MADE", count=req))
-            if kl:
-                lines.append(i18n.t(lang, "DIAG_CANDLES", count=kl))
-            if hits or misses:
-                lines.append(
-                    i18n.t(
-                        lang,
-                        "DIAG_CACHE",
-                        hits=hits or 0,
-                        misses=misses or 0,
-                    )
-                )
-            if inflight:
-                lines.append(i18n.t(lang, "DIAG_INFLIGHT", count=inflight))
-            if ticker_req:
-                lines.append(i18n.t(lang, "DIAG_TICKER_REQ", count=ticker_req))
-            if deep_scans:
-                lines.append(i18n.t(lang, "DIAG_DEEP_SCAN", count=deep_scans))
-
-    # Pump/Dump
-    if key == "pumpdump":
-        lines.append("")
-        lines.append(i18n.t(lang, "DIAG_PUMP_HEADER"))
-        prog = extra.get("progress")
-        checked = extra.get("checked")
-        found = extra.get("found")
-        sent = extra.get("sent")
-        if prog:
-            lines.append(i18n.t(lang, "DIAG_PROGRESS", progress=prog))
-        if checked:
-            lines.append(i18n.t(lang, "DIAG_CHECKED", count=checked))
-        if found is not None:
-            lines.append(i18n.t(lang, "DIAG_FOUND", count=found))
-        if sent is not None:
-            lines.append(i18n.t(lang, "DIAG_SENT", count=sent))
-        current = extra.get("current") or (st.current_symbol or None)
-        if current:
-            lines.append(i18n.t(lang, "DIAG_CURRENT_COIN", symbol=current))
-        cyc = extra.get("cycle")
-        if cyc:
-            lines.append(i18n.t(lang, "DIAG_CYCLE_TIME", cycle=cyc))
-        rotation_flag = extra.get("rotation")
-        rotation_n = extra.get("rotation_n")
-        rotation_cursor = extra.get("rotation_cursor")
-        rotation_slice = extra.get("rotation_slice")
-        universe_size = extra.get("universe_size")
-        rotation_added = extra.get("rotation_added")
-        final_candidates = extra.get("final_candidates")
-        scanned = extra.get("scanned")
-        if rotation_flag is not None:
-            cursor_line = f" cursor={rotation_cursor}" if rotation_cursor else ""
-            n_line = f"{rotation_n}" if rotation_n is not None else "0"
-            lines.append(
-                i18n.t(
-                    lang,
-                    "DIAG_ROTATION",
-                    flag=rotation_flag,
-                    n=n_line,
-                    cursor=cursor_line,
-                )
-            )
-        if rotation_slice is not None:
-            lines.append(
-                i18n.t(lang, "DIAG_ROTATION_SLICE", size=rotation_slice)
-            )
-        if universe_size or rotation_added or final_candidates or scanned:
-            lines.append(
-                i18n.t(
-                    lang,
-                    "DIAG_UNIVERSE_LINE",
-                    universe=universe_size or 0,
-                    added=rotation_added or 0,
-                    final=final_candidates or 0,
-                    scanned=scanned or 0,
-                )
-            )
-
-        if st.fails_top or st.universe_debug:
-            lines.append("")
-            if st.fails_top:
-                if isinstance(st.fails_top, dict):
-                    lines.append(_format_fails_top(st.fails_top, lang))
-                else:
-                    lines.append(str(st.fails_top))
-            if st.universe_debug:
-                lines.append(st.universe_debug)
-        hits = extra.get("klines_hits")
-        misses = extra.get("klines_misses")
-        inflight = extra.get("klines_inflight")
-        ticker_req = extra.get("ticker_req")
-        req = extra.get("req")
-        kl = extra.get("klines")
-        if req or kl or hits or misses or inflight or ticker_req:
-            lines.append("")
-            lines.append(i18n.t(lang, "DIAG_REQUESTS_HEADER"))
-            if req:
-                lines.append(i18n.t(lang, "DIAG_REQUESTS_MADE", count=req))
-            if kl:
-                lines.append(i18n.t(lang, "DIAG_CANDLES", count=kl))
-            if hits or misses:
-                lines.append(
-                    i18n.t(
-                        lang,
-                        "DIAG_CACHE",
-                        hits=hits or 0,
-                        misses=misses or 0,
-                    )
-                )
-            if inflight:
-                lines.append(i18n.t(lang, "DIAG_INFLIGHT", count=inflight))
-            if ticker_req:
-                lines.append(i18n.t(lang, "DIAG_TICKER_REQ", count=ticker_req))
-
-    # Binance секция (общая)
-    lines.append("")
-    lines.append(i18n.t(lang, "DIAG_REQUESTS_HEADER"))
-    if st.binance_last_success_ts:
-        lines.append(
+def _format_binance_section(st, now: float, lang: str) -> str:
+    extra = _parse_extra_kv(st.extra or "") if st else {}
+    last_ok = bool(st and st.binance_last_success_ts)
+    has_timeouts = bool(st and st.binance_consecutive_timeouts)
+    status_label = _build_status_label(
+        ok=last_ok and not has_timeouts,
+        warn=has_timeouts or not last_ok,
+        error=False,
+        ok_text=i18n.t(lang, "DIAG_STATUS_WORKING"),
+        warn_text=i18n.t(lang, "DIAG_STATUS_ISSUES"),
+        error_text=i18n.t(lang, "DIAG_STATUS_ERROR"),
+    )
+    details = []
+    if st and st.binance_last_success_ts:
+        details.append(
             i18n.t(
                 lang,
                 "DIAG_BINANCE_LAST_SUCCESS",
@@ -2234,22 +2186,130 @@ def _format_module(key: str, st, now: float, lang: str) -> str:
             )
         )
     else:
-        lines.append(i18n.t(lang, "DIAG_BINANCE_LAST_SUCCESS_NO_DATA"))
-    lines.append(
-        i18n.t(lang, "DIAG_BINANCE_TIMEOUTS", count=st.binance_consecutive_timeouts)
+        details.append(i18n.t(lang, "DIAG_BINANCE_LAST_SUCCESS_NO_DATA"))
+    details.append(
+        i18n.t(lang, "DIAG_BINANCE_TIMEOUTS", count=st.binance_consecutive_timeouts if st else 0)
     )
-    lines.append(
-        i18n.t(lang, "DIAG_BINANCE_STAGE", stage=st.binance_current_stage or "—")
+    details.append(
+        i18n.t(lang, "DIAG_BINANCE_STAGE", stage=st.binance_current_stage or "—" if st else "—")
     )
+    req = extra.get("req")
+    kl = extra.get("klines")
+    hits = extra.get("klines_hits")
+    misses = extra.get("klines_misses")
+    inflight = extra.get("klines_inflight")
+    ticker_req = extra.get("ticker_req")
+    deep_scans = extra.get("deep_scans")
+    if req:
+        details.append(i18n.t(lang, "DIAG_REQUESTS_MADE", count=req))
+    if kl:
+        details.append(i18n.t(lang, "DIAG_CANDLES", count=kl))
+    if hits or misses:
+        details.append(i18n.t(lang, "DIAG_CACHE", hits=hits or 0, misses=misses or 0))
+    if inflight:
+        details.append(i18n.t(lang, "DIAG_INFLIGHT", count=inflight))
+    if ticker_req:
+        details.append(i18n.t(lang, "DIAG_TICKER_REQ", count=ticker_req))
+    if deep_scans:
+        details.append(i18n.t(lang, "DIAG_DEEP_SCAN", count=deep_scans))
+    return _format_section(i18n.t(lang, "DIAG_SECTION_BINANCE"), status_label, details, lang)
 
-    # стабильность
-    lines.append("")
-    lines.append(i18n.t(lang, "DIAG_STABILITY_HEADER"))
-    lines.append(
-        i18n.t(lang, "DIAG_SESSION_RESTARTS", count=st.binance_session_restarts)
-    )
 
-    return "\n".join(lines)
+def _format_pump_section(st, now: float, lang: str) -> str:
+    extra = _parse_extra_kv(st.extra or "")
+    status_label = _build_status_label(
+        ok=bool(st.last_tick) and not st.last_error and not st.last_warn,
+        warn=bool(st.last_warn) or not st.last_tick,
+        error=bool(st.last_error),
+        ok_text=i18n.t(lang, "DIAG_STATUS_WORKING"),
+        warn_text=i18n.t(lang, "DIAG_STATUS_ISSUES"),
+        error_text=i18n.t(lang, "DIAG_STATUS_ERROR"),
+    )
+    tick = (
+        _human_ago(int(now - st.last_tick), lang)
+        if st.last_tick
+        else i18n.t(lang, "DIAG_STATUS_NOT_STARTED")
+    )
+    details = [i18n.t(lang, "DIAG_MODULE_LAST_CYCLE", tick=tick)]
+    if st.last_error:
+        details.append(i18n.t(lang, "DIAG_MODULE_ERROR", error=f"⚠️ {st.last_error}"))
+    if st.last_warn:
+        details.append(i18n.t(lang, "DIAG_MODULE_WARNING", warning=f"⚠️ {st.last_warn}"))
+    prog = extra.get("progress")
+    checked = extra.get("checked")
+    found = extra.get("found")
+    sent = extra.get("sent")
+    if prog:
+        details.append(i18n.t(lang, "DIAG_PROGRESS", progress=prog))
+    if checked:
+        details.append(i18n.t(lang, "DIAG_CHECKED", count=checked))
+    if found is not None:
+        details.append(i18n.t(lang, "DIAG_FOUND", count=found))
+    if sent is not None:
+        details.append(i18n.t(lang, "DIAG_SENT", count=sent))
+    current = extra.get("current") or (st.current_symbol or None)
+    if current:
+        details.append(i18n.t(lang, "DIAG_CURRENT_COIN", symbol=current))
+    cyc = extra.get("cycle")
+    if cyc:
+        details.append(i18n.t(lang, "DIAG_CYCLE_TIME", cycle=cyc))
+    rotation_flag = extra.get("rotation")
+    rotation_n = extra.get("rotation_n")
+    rotation_cursor = extra.get("rotation_cursor")
+    rotation_slice = extra.get("rotation_slice")
+    universe_size = extra.get("universe_size")
+    rotation_added = extra.get("rotation_added")
+    final_candidates = extra.get("final_candidates")
+    scanned = extra.get("scanned")
+    if rotation_flag is not None:
+        cursor_line = f" cursor={rotation_cursor}" if rotation_cursor else ""
+        n_line = f"{rotation_n}" if rotation_n is not None else "0"
+        details.append(
+            i18n.t(
+                lang,
+                "DIAG_ROTATION",
+                flag=rotation_flag,
+                n=n_line,
+                cursor=cursor_line,
+            )
+        )
+    if rotation_slice is not None:
+        details.append(i18n.t(lang, "DIAG_ROTATION_SLICE", size=rotation_slice))
+    if universe_size or rotation_added or final_candidates or scanned:
+        details.append(
+            i18n.t(
+                lang,
+                "DIAG_UNIVERSE_LINE",
+                universe=universe_size or 0,
+                added=rotation_added or 0,
+                final=final_candidates or 0,
+                scanned=scanned or 0,
+            )
+        )
+    if st.fails_top:
+        if isinstance(st.fails_top, dict):
+            details.append(_format_fails_top(st.fails_top, lang))
+        else:
+            details.append(str(st.fails_top))
+    if st.universe_debug:
+        details.append(st.universe_debug)
+    hits = extra.get("klines_hits")
+    misses = extra.get("klines_misses")
+    inflight = extra.get("klines_inflight")
+    ticker_req = extra.get("ticker_req")
+    req = extra.get("req")
+    kl = extra.get("klines")
+    if req:
+        details.append(i18n.t(lang, "DIAG_REQUESTS_MADE", count=req))
+    if kl:
+        details.append(i18n.t(lang, "DIAG_CANDLES", count=kl))
+    if hits or misses:
+        details.append(i18n.t(lang, "DIAG_CACHE", hits=hits or 0, misses=misses or 0))
+    if inflight:
+        details.append(i18n.t(lang, "DIAG_INFLIGHT", count=inflight))
+    if ticker_req:
+        details.append(i18n.t(lang, "DIAG_TICKER_REQ", count=ticker_req))
+    return _format_section(i18n.t(lang, "DIAG_SECTION_PUMPDUMP"), status_label, details, lang)
 
 
 @dp.message(Command("testadmin"))
@@ -2282,38 +2342,19 @@ async def test_admin(message: Message):
 
     now = time.time()
     blocks = []
-    blocks.append(f"{i18n.t(lang, 'DIAG_TITLE')}\n")
-    use_btc_gate_raw = os.getenv("USE_BTC_GATE")
-    use_btc_gate_value = "" if use_btc_gate_raw is None else use_btc_gate_raw
-    blocks.append(f"BTC gate: {'enabled' if get_use_btc_gate() else 'disabled'}")
-    blocks.append(f'USE_BTC_GATE raw: "{use_btc_gate_value}"')
-    blocks.append(
-        "CONFIG "
-        f"AI_MAX_DEEP_PER_CYCLE={AI_MAX_DEEP_PER_CYCLE} "
-        f"AI_STAGE_A_TOP_K={AI_STAGE_A_TOP_K} "
-        f"PRE_SCORE_THRESHOLD={PRE_SCORE_THRESHOLD} "
-        f"MIN_PRE_SCORE={MIN_PRE_SCORE} "
-        f"FINAL_SCORE_THRESHOLD={FINAL_SCORE_THRESHOLD} "
-        f"MIN_VOLUME_5M_USDT={MIN_VOLUME_5M_USDT} "
-        f"PUMP_VOLUME_MUL={PUMP_VOLUME_MUL}"
-    )
-    ai_module = MODULES.get("ai_signals")
-    if ai_module and ai_module.last_error:
-        blocks.append(f"AI errors: {ai_module.last_error}")
-    blocks.append("")
+    blocks.append(i18n.t(lang, "DIAG_TITLE"))
+    blocks.append(_format_overall_status(now, lang))
+    blocks.append(_format_btc_gate_section(lang))
     blocks.append(_format_db_status(lang))
-    blocks.append("")
     blocks.append(_format_market_hub(now, lang))
-    blocks.append("")
-
-    hidden = _hidden_status_modules()
-    for key, st in MODULES.items():
-        if key in hidden:
-            continue
-        if key not in ("ai_signals", "pumpdump"):
-            continue
-        blocks.append(_format_module(key, st, now, lang))
-        blocks.append("\n" + ("—" * 22) + "\n")
+    ai_module = MODULES.get("ai_signals")
+    if ai_module:
+        blocks.append(_format_ai_section(ai_module, now, lang))
+        blocks.append(_format_filters_section(ai_module, lang))
+        blocks.append(_format_binance_section(ai_module, now, lang))
+    pump_module = MODULES.get("pumpdump")
+    if pump_module:
+        blocks.append(_format_pump_section(pump_module, now, lang))
 
     lang = get_user_lang(message.chat.id) or "ru"
     await message.answer(
@@ -4290,7 +4331,7 @@ async def watchlist_scan_once() -> None:
     if module_state and isinstance(stats, dict):
         module_state.last_stats = stats
         module_state.fails_top = stats.get("fails", {})
-        module_state.near_miss = _format_near_miss(stats.get("near_miss", {}))
+        module_state.near_miss = _format_near_miss(stats.get("near_miss", {}), lang)
     deep_scans_done = stats.get("deep_scans_done", 0) if isinstance(stats, dict) else 0
     sent_count = 0
     for signal in _select_signals_for_cycle(signals):
