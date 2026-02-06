@@ -1,4 +1,5 @@
 import asyncio
+import time
 from typing import Dict, List, Optional, Tuple
 
 from binance_client import Candle, get_required_candles, get_quick_candles
@@ -12,26 +13,32 @@ async def get_bundle_with_fallback(
     symbol: str,
     tfs: Tuple[str, ...] = DEFAULT_TFS,
     *,
-    wait_tries: int = 3,
-    wait_sleep: float = 0.2,
+    wait_tries: int = 0,
+    wait_sleep: float = 0.0,
     stale_tfs: Tuple[str, ...] = ("1h", "15m", "5m"),
+    timings: dict[str, float] | None = None,
 ) -> Optional[Dict[str, List[Candle]]]:
     # 1) пытаемся из хаба
     for _ in range(wait_tries):
+        start = time.perf_counter()
         bundle = MARKET_HUB.get_bundle(symbol, tfs)
         if bundle and all(bundle.get(tf) for tf in tfs):
             # если ключевые TF протухли — считаем что нет данных
             if any(MARKET_HUB.is_stale(symbol, tf) for tf in stale_tfs if tf in tfs):
                 bundle = None
             else:
+                if timings is not None:
+                    timings["hub_bundle_dt"] = time.perf_counter() - start
                 return bundle
         await asyncio.sleep(wait_sleep)
+        if timings is not None:
+            timings["hub_bundle_dt"] = time.perf_counter() - start
 
     if is_binance_degraded():
         return None
 
     # 2) fallback — прямой Binance, чтобы не умер прод
-    candles = await get_required_candles(symbol)
+    candles = await get_required_candles(symbol, timings=timings)
     if not candles:
         return None
     out: Dict[str, List[Candle]] = {}
@@ -47,18 +54,27 @@ async def get_quick_with_fallback(
     *,
     tfs: Tuple[str, ...] = ("1h", "15m"),
     limit_overrides: dict[str, int] | None = None,
+    timings: dict[str, float] | None = None,
 ) -> Optional[Dict[str, List[Candle]]]:
+    start = time.perf_counter()
     bundle = MARKET_HUB.get_bundle(symbol, tfs)
     if bundle and all(bundle.get(tf) for tf in tfs):
         if any(MARKET_HUB.is_stale(symbol, tf) for tf in tfs):
             bundle = None
         else:
+            if timings is not None:
+                timings["hub_bundle_dt"] = time.perf_counter() - start
             return bundle
     if is_binance_degraded():
         return None
 
     # fallback
-    quick = await get_quick_candles(symbol, tfs=tfs, limit_overrides=limit_overrides)
+    quick = await get_quick_candles(
+        symbol,
+        tfs=tfs,
+        limit_overrides=limit_overrides,
+        timings=timings,
+    )
     if not quick:
         return None
     for tf in tfs:

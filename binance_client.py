@@ -58,12 +58,16 @@ async def fetch_klines(
     return candles
 
 
-async def get_required_candles(symbol: str):
+async def get_required_candles(symbol: str, *, timings: dict[str, float] | None = None):
     async def _safe(interval: str, limit: int) -> List[Candle]:
+        start = time.perf_counter()
         try:
             return await fetch_klines(symbol, interval, limit)
         except Exception:
             return []
+        finally:
+            if timings is not None:
+                timings[f"klines_{interval}_dt"] = time.perf_counter() - start
 
     tasks = {
         "1d": asyncio.create_task(_safe("1d", KLINES_1D_LIMIT)),
@@ -91,12 +95,17 @@ async def get_quick_candles(
     limit_1h: int = KLINES_1H_LIMIT,
     limit_15m: int = KLINES_15M_LIMIT,
     limit_overrides: dict[str, int] | None = None,
+    timings: dict[str, float] | None = None,
 ) -> dict[str, List[Candle]]:
     async def _safe(interval: str, limit: int) -> List[Candle]:
+        start = time.perf_counter()
         try:
             return await fetch_klines(symbol, interval, limit)
         except Exception:
             return []
+        finally:
+            if timings is not None:
+                timings[f"klines_{interval}_dt"] = time.perf_counter() - start
 
     limits = {
         "1h": limit_1h,
