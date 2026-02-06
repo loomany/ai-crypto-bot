@@ -8,8 +8,8 @@ import aiohttp
 
 import i18n
 
-from binance_client import fetch_klines, Candle
-from binance_rest import binance_request_context, fetch_json, is_binance_degraded
+from binance_client import Candle
+from binance_rest import binance_request_context, fetch_klines, is_binance_degraded
 from symbol_cache import (
     filter_tradeable_symbols,
     get_spot_usdt_symbols,
@@ -86,7 +86,9 @@ async def get_candidate_symbols(
     return result
 
 
-async def get_klines_1m(symbol: str, limit: int = 25) -> list[Candle] | None:
+async def get_klines_1m(
+    symbol: str, limit: int = 25
+) -> list[list[str]] | list[Candle] | None:
     try:
         with binance_request_context("pumpdump"):
             return await fetch_klines(symbol, "1m", limit)
@@ -383,16 +385,20 @@ async def generate_pump_alert(symbol: str) -> str | None:
     если обнаружен памп или дамп.
 
     Использует тот же пороговый анализ, что и scan_pumps(), но работает
-    через binance_client.fetch_klines, чтобы использовать общую логику
-    получения данных.
+    через binance_rest.fetch_klines, чтобы использовать общий кеш свечей.
     """
 
-    klines = await fetch_klines(symbol, "1m", 25)
-    if len(klines) < 6:
+    with binance_request_context("pumpdump"):
+        klines = await fetch_klines(symbol, "1m", 25)
+    if not klines or len(klines) < 6:
         return None
 
-    closes = [k.close for k in klines]
-    volumes = [k.volume for k in klines]
+    if isinstance(klines[0], Candle):
+        closes = [k.close for k in klines]
+        volumes = [k.volume for k in klines]
+    else:
+        closes = [float(k[4]) for k in klines]
+        volumes = [float(k[5]) for k in klines]
 
     last_price = closes[-1]
     price_1m = closes[-2]

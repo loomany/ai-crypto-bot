@@ -1967,14 +1967,16 @@ def _format_market_hub(now: float, lang: str) -> str:
 
     err = MARKET_HUB.last_error
     symbols_count = len(getattr(MARKET_HUB, "_symbols", []) or [])
-    updated = getattr(MARKET_HUB, "last_cycle_updated", 0)
+    attempted = getattr(MARKET_HUB, "last_cycle_attempted", 0)
+    refreshed = getattr(MARKET_HUB, "last_cycle_refreshed", 0)
+    unchanged = getattr(MARKET_HUB, "last_cycle_unchanged", 0)
     skipped = getattr(MARKET_HUB, "last_cycle_skipped_no_klines", 0)
     errors = getattr(MARKET_HUB, "last_cycle_errors", 0)
     dt_ms = getattr(MARKET_HUB, "last_cycle_ms", 0)
     cache_size = getattr(MARKET_HUB, "last_cycle_cache_size", 0)
-    if updated > 0:
+    if refreshed > 0:
         cycle_state = "ok"
-    elif skipped > 0 or errors > 0 or symbols_count > 0:
+    elif skipped > 0 or errors > 0 or attempted > 0 or symbols_count > 0:
         cycle_state = "empty"
     else:
         cycle_state = "idle"
@@ -1988,8 +1990,8 @@ def _format_market_hub(now: float, lang: str) -> str:
     )
     details = [
         i18n.t(lang, "DIAG_LAST_TICK", tick=last_tick),
-        f"• Последний цикл: {cycle_state} | updated={updated} skipped={skipped} "
-        f"errors={errors} dt={dt_ms}ms",
+        f"• Последний цикл: {cycle_state} | attempted={attempted} refreshed={refreshed} "
+        f"unchanged={unchanged} errors={errors} dt={dt_ms}ms",
         f"• Cache: symbols_with_data={cache_size}",
         i18n.t(lang, "DIAG_ACTIVE_SYMBOLS", count=symbols_count),
     ]
@@ -4233,6 +4235,7 @@ async def pump_scan_once(bot: Bot) -> None:
                 f"req={req_count} klines={klines_count} "
                 f"klines_hits={cache_stats.get('hits')} klines_misses={cache_stats.get('misses')} "
                 f"klines_inflight={cache_stats.get('inflight_awaits')} "
+                "klines_source=binance_rest "
                 f"ticker_req={ticker_count} fails={fails_str} "
                 f"rotation={'on' if rotation_enabled else 'off'} "
                 f"rotation_n={rotation_n} rotation_cursor={rotation_cursor}/{rotation_total} "
