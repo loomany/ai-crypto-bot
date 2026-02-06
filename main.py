@@ -873,6 +873,100 @@ def _format_duration(seconds: int) -> str:
     return f"{minutes}м"
 
 
+def _normalize_signal_status(status: str) -> str:
+    normalized = (status or "").upper().strip()
+    if normalized == "NO_FILL":
+        return "NF"
+    if normalized == "EXPIRED":
+        return "EXP"
+    return normalized
+
+
+def _format_outcome_block(event: dict) -> list[str]:
+    status_raw = str(event.get("result") or event.get("status") or "OPEN")
+    status = _normalize_signal_status(status_raw)
+    entry_touched = bool(event.get("entry_touched"))
+    created_at = int(event.get("ts", 0))
+    closed_at = int(event.get("closed_at") or 0)
+    updated_at = int(event.get("updated_at") or 0)
+    last_checked_at = int(event.get("last_checked_at") or 0)
+    finalized_at = closed_at or updated_at
+    close_reason = event.get("close_reason")
+    now = int(time.time())
+    final_statuses = {"TP1", "TP2", "BE", "SL", "EXP", "NF"}
+
+    lines: list[str] = []
+    if status in final_statuses:
+        if status == "TP1":
+            header = "📌 Итог: ✅ TP1 достигнут"
+            comment = "цена дошла до TP1, дальше до TP2 не дошла (это нормально)"
+        elif status == "TP2":
+            header = "📌 Итог: ✅ TP2 достигнут"
+            comment = "цена дошла до TP2, сценарий выполнен полностью"
+        elif status == "BE":
+            header = "📌 Итог: ✅ BE (безубыток)"
+            comment = "сценарий дал движение, риск снят"
+        elif status == "SL":
+            header = "📌 Итог: ❌ SL"
+            comment = "цена дошла до стопа до выполнения TP1"
+        elif status == "NF":
+            header = "📌 Итог: ⏳ NF (вход не был активирован)"
+            comment = "цена не дошла до зоны POI"
+        else:
+            entry_label = "вход был активирован" if entry_touched else "вход не был активирован"
+            header = "📌 Итог: ⏳ EXP (сценарий устарел)"
+            comment = f"{entry_label}, но условия не реализовались"
+
+        lines.append(header)
+        if status in {"NF", "EXP"}:
+            lines.append("⏱ Прошло 12 часов")
+        elif finalized_at:
+            lines.append(f"⏱ Время: {_format_event_time(finalized_at)}")
+        elif last_checked_at:
+            lines.append(f"⏱ Время: {_format_event_time(last_checked_at)}")
+        if close_reason:
+            lines.append(f"🧾 Причина: {close_reason}")
+        lines.append(f"💬 Комментарий: {comment}")
+        return lines
+
+    remaining = SIGNAL_TTL_SECONDS - (now - created_at)
+    status_hint = "ожидает подтверждение" if entry_touched else "ожидает вход"
+    lines.extend(
+        [
+            "📌 Итог: ⏰ В процессе",
+            f"🕒 До истечения: {_format_duration(remaining)}",
+            f"💬 Сейчас: {status_hint}",
+        ]
+    )
+    if last_checked_at:
+        lines.append(f"🔎 Последняя проверка: {_format_event_time(last_checked_at)}")
+    return lines
+
+
+def _format_issue_hint_block(event: dict) -> list[str]:
+    status_raw = str(event.get("result") or event.get("status") or "OPEN")
+    status = _normalize_signal_status(status_raw)
+    close_reason = event.get("close_reason")
+    if status not in {"SL", "EXP", "NF"}:
+        return []
+    lines = ["", "🧩 Что не так было:"]
+    if close_reason:
+        lines.append(f"• {close_reason}")
+        return lines
+    if status == "SL":
+        lines.extend(
+            [
+                "• стоп ближе, чем реальная волатильность (ATR высокий)",
+                "• вход без подтверждения 5–15m или контекст рынка сменился",
+            ]
+        )
+    elif status == "NF":
+        lines.append("• цена не дошла до POI — это нормально, сигнал просто не активировался")
+    else:
+        lines.append("• время жизни 12ч истекло — сценарий больше не актуален")
+    return lines
+
+
 def _format_refresh_report(event: dict, lang: str) -> str:
     status_raw = str(event.get("status", "OPEN")).upper()
     status_map = {
@@ -1035,6 +1129,20 @@ async def refresh_signal(event_id: int) -> dict | None:
 
     status_value = outcome or str(event.get("status", "OPEN"))
     result_value = outcome or str(event.get("result") or status_value)
+    close_reason = None
+    closed_at = None
+    if outcome in {"TP1", "TP2"}:
+        close_reason = f"hit_{outcome.lower()}"
+        closed_at = now
+    elif outcome == "SL":
+        close_reason = "hit_sl"
+        closed_at = now
+    elif outcome == "EXP":
+        close_reason = "expired_after_entry"
+        closed_at = now
+    elif outcome == "NO_FILL":
+        close_reason = "expired_no_fill"
+        closed_at = now
     update_signal_event_refresh(
         event_id=event_id,
         status=status_value,
@@ -1043,6 +1151,8 @@ async def refresh_signal(event_id: int) -> dict | None:
         tp1_hit=tp1_hit,
         tp2_hit=tp2_hit,
         last_checked_at=now,
+        close_reason=close_reason,
+        closed_at=closed_at,
     )
     updated = dict(event)
     updated["status"] = status_value
@@ -1052,6 +1162,10 @@ async def refresh_signal(event_id: int) -> dict | None:
     updated["tp2_hit"] = tp2_hit
     updated["last_checked_at"] = now
     updated["last_price"] = last_price
+    if close_reason:
+        updated["close_reason"] = close_reason
+    if closed_at:
+        updated["closed_at"] = closed_at
     return updated
 
 
@@ -1109,6 +1223,8 @@ def _format_archive_detail(event: dict, lang: str) -> str:
             hours=SIGNAL_TTL_SECONDS // 3600,
         ),
     ]
+    lines.extend(["", *_format_outcome_block(event)])
+    lines.extend(_format_issue_hint_block(event))
     if breakdown_lines:
         lines.extend(
             [
