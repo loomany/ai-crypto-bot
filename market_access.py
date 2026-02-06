@@ -2,6 +2,7 @@ import asyncio
 from typing import Dict, List, Optional, Tuple
 
 from binance_client import Candle, get_required_candles, get_quick_candles
+from binance_rest import is_binance_degraded
 from market_hub import MARKET_HUB
 
 DEFAULT_TFS = ("1d", "4h", "1h", "15m", "5m")
@@ -25,6 +26,9 @@ async def get_bundle_with_fallback(
             else:
                 return bundle
         await asyncio.sleep(wait_sleep)
+
+    if is_binance_degraded():
+        return None
 
     # 2) fallback — прямой Binance, чтобы не умер прод
     candles = await get_required_candles(symbol)
@@ -50,6 +54,9 @@ async def get_quick_with_fallback(
             bundle = None
         else:
             return bundle
+    if is_binance_degraded():
+        return None
+
     # fallback
     quick = await get_quick_candles(symbol, tfs=tfs, limit_overrides=limit_overrides)
     if not quick:

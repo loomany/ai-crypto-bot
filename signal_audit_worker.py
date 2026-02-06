@@ -1,7 +1,7 @@
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from binance_rest import binance_request_context, fetch_klines
+from binance_rest import binance_request_context, fetch_klines, is_binance_degraded
 from health import (
     MODULES,
     mark_ok,
@@ -153,6 +153,9 @@ async def evaluate_open_signals(
     start_ts: float | None = None,
     budget_sec: int = 45,
 ) -> None:
+    if is_binance_degraded():
+        print("[signal_audit] degraded: skip klines evaluation")
+        return
     if open_signals is None:
         open_signals = fetch_open_signals(SIGNAL_TTL_SECONDS)
     if not open_signals:

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from binance_client import Candle
 from market_access import get_bundle_with_fallback, get_quick_with_fallback
+from binance_rest import is_binance_degraded
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
 from market_context import get_market_context
@@ -251,6 +252,8 @@ async def _get_hourly_snapshot(symbol: str) -> Optional[Dict[str, float]]:
 
 
 async def get_alt_watch_symbol(limit: int = 80, batch_size: int = 10) -> Optional[Dict[str, float]]:
+    if is_binance_degraded():
+        limit = min(limit, 30)
     symbols = await get_top_usdt_symbols_by_volume(limit)
     if not symbols:
         return None

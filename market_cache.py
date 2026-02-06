@@ -3,7 +3,12 @@ import os
 import time
 from typing import Any, Dict, List
 
-from binance_rest import fetch_json, get_request_module, get_shared_session
+from binance_rest import (
+    fetch_json,
+    get_request_module,
+    get_shared_session,
+    is_binance_degraded,
+)
 
 BINANCE_FAPI_BASE = "https://fapi.binance.com"
 BINANCE_SPOT_BASE = "https://api.binance.com/api/v3"
@@ -43,6 +48,9 @@ async def _refresh_spot(ttl_sec: int) -> List[Dict[str, Any]]:
     async with _spot_lock:
         if _fresh(_spot_cache, ttl_sec):
             return _spot_cache["data"] or []
+        if is_binance_degraded():
+            print("[BINANCE] degraded: skip spot ticker refresh")
+            return _spot_cache.get("data") or []
         session = await get_shared_session()
         print("[BINANCE] request ALL ticker/24hr spot")
         _track_ticker_request()
@@ -62,6 +70,9 @@ async def _refresh_futures(ttl_sec: int) -> List[Dict[str, Any]]:
     async with _futures_lock:
         if _fresh(_futures_cache, ttl_sec):
             return _futures_cache["data"] or []
+        if is_binance_degraded():
+            print("[BINANCE] degraded: skip futures ticker refresh")
+            return _futures_cache.get("data") or []
         session = await get_shared_session()
         print("[BINANCE] request ALL ticker/24hr futures")
         _track_ticker_request()
@@ -87,6 +98,10 @@ async def get_spot_24h(ttl_sec: int = SPOT_TICKER_24H_TTL_SEC) -> List[Dict[str,
             asyncio.create_task(_refresh_spot(ttl_sec))
         return cached
 
+    if is_binance_degraded():
+        print("[BINANCE] degraded: no spot ticker snapshot available")
+        return []
+
     return await _refresh_spot(ttl_sec)
 
 
@@ -99,5 +114,9 @@ async def get_futures_24h(ttl_sec: int = DEFAULT_TTL_SEC) -> List[Dict[str, Any]
         if not _futures_lock.locked():
             asyncio.create_task(_refresh_futures(ttl_sec))
         return cached
+
+    if is_binance_degraded():
+        print("[BINANCE] degraded: no futures ticker snapshot available")
+        return []
 
     return await _refresh_futures(ttl_sec)

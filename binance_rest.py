@@ -1,5 +1,6 @@
 import asyncio
 import os
+import random
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -30,9 +31,10 @@ _KLINES_CACHE_HITS: dict[str, int] = {}
 _KLINES_CACHE_MISSES: dict[str, int] = {}
 _KLINES_INFLIGHT_AWAITS: dict[str, int] = {}
 _AGGTRADES_CACHE: dict[tuple[str, str, int, int], tuple[float, list]] = {}
-_BINANCE_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
-_MAX_RETRIES = 3
-_RETRY_DELAYS = (1, 2, 4)
+_BINANCE_TIMEOUT = aiohttp.ClientTimeout(
+    total=12, connect=4, sock_connect=4, sock_read=8
+)
+_MAX_RETRIES = 1
 _STATE_LOCK = asyncio.Lock()
 _CONSECUTIVE_TIMEOUTS = 0
 _LAST_SUCCESS_TS = 0.0
@@ -41,6 +43,8 @@ _LAST_RESPONSE_TS = 0.0
 _HAS_RESPONSE = False
 _WATCHDOG_START_TS = time.time()
 _SESSION_RESTARTS = 0
+_BINANCE_DEGRADED_UNTIL = 0.0
+_DEGRADED_STREAK = 0
 
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name)
@@ -133,11 +137,13 @@ async def _record_success(module: Optional[str]) -> None:
 
 
 async def _record_response() -> None:
-    global _LAST_RESPONSE_TS, _HAS_RESPONSE
+    global _LAST_RESPONSE_TS, _HAS_RESPONSE, _DEGRADED_STREAK
     now = time.time()
     async with _STATE_LOCK:
         _LAST_RESPONSE_TS = now
         _HAS_RESPONSE = True
+        if _DEGRADED_STREAK:
+            _DEGRADED_STREAK = 0
 
 
 async def _record_timeout_or_network_error(module: Optional[str]) -> None:
@@ -159,9 +165,29 @@ def get_binance_state() -> dict[str, float | int]:
     }
 
 
+def is_binance_degraded() -> bool:
+    return time.time() < _BINANCE_DEGRADED_UNTIL
+
+
+def get_binance_degraded_until() -> float:
+    return _BINANCE_DEGRADED_UNTIL
+
+
+async def _enter_degraded(reason: str) -> None:
+    global _BINANCE_DEGRADED_UNTIL, _DEGRADED_STREAK
+    now = time.time()
+    duration = random.uniform(120, 300)
+    _BINANCE_DEGRADED_UNTIL = max(_BINANCE_DEGRADED_UNTIL, now + duration)
+    _DEGRADED_STREAK += 1
+    print(
+        "[binance_watchdog] CRITICAL: degraded mode enabled "
+        f"for {int(duration)}s ({reason})"
+    )
+
+
 # ---- optional concurrency gate (reduces socket spikes) ----
 # One more layer in addition to rate limiter/weight tracker.
-BINANCE_SEM = asyncio.Semaphore(int(os.getenv("BINANCE_HTTP_CONCURRENCY", "10")))
+BINANCE_SEM = asyncio.Semaphore(_env_int("BINANCE_MAX_CONCURRENCY", 5))
 KLINES_SEM = asyncio.Semaphore(int(os.getenv("BINANCE_KLINES_CONCURRENCY", "6")))
 AGGTRADES_SEM = asyncio.Semaphore(int(os.getenv("BINANCE_AGGTRADES_CONCURRENCY", "8")))
 
@@ -260,28 +286,44 @@ async def fetch_json(
             # Rate limit / ban protection
             if status in (418, 429) or 500 <= status <= 599:
                 if attempt < _MAX_RETRIES:
-                    delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                    delay = random.uniform(0.5, 1.5) * (2**attempt)
                     if status in (418, 429):
                         await BINANCE_WEIGHT_TRACKER.block_for(delay)
+                    print(
+                        "[BINANCE] retry "
+                        f"status={status} attempt={attempt + 1}/{_MAX_RETRIES + 1} "
+                        f"delay={delay:.2f}s url={url}"
+                    )
                     await asyncio.sleep(delay)
                     continue
+                print(f"[BINANCE] failed status={status} url={url}")
                 return None
 
             await _record_success(module)
             return payload
 
         except asyncio.TimeoutError:
+            print(
+                "[BINANCE] timeout "
+                f"attempt={attempt + 1}/{_MAX_RETRIES + 1} url={url}"
+            )
             await _record_timeout_or_network_error(module)
             if attempt < _MAX_RETRIES:
-                delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                delay = random.uniform(0.5, 1.5) * (2**attempt)
+                print(f"[BINANCE] retry timeout delay={delay:.2f}s url={url}")
                 await asyncio.sleep(delay)
                 continue
             return None
 
         except (aiohttp.ClientConnectorError, aiohttp.ClientPayloadError):
+            print(
+                "[BINANCE] timeout/network "
+                f"attempt={attempt + 1}/{_MAX_RETRIES + 1} url={url}"
+            )
             await _record_timeout_or_network_error(module)
             if attempt < _MAX_RETRIES:
-                delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                delay = random.uniform(0.5, 1.5) * (2**attempt)
+                print(f"[BINANCE] retry network delay={delay:.2f}s url={url}")
                 await asyncio.sleep(delay)
                 continue
             return None
@@ -319,6 +361,10 @@ async def fetch_klines(
                             f"[binance_rest] klines {symbol} {interval} {limit} (cache_hit=True)"
                         )
                         return cached_data[-limit:]
+
+    if is_binance_degraded():
+        print(f"[binance_rest] degraded: skip klines fetch {symbol} {interval}")
+        return None
 
     _increment_stat(_KLINES_CACHE_MISSES, module)
     inflight_key = (symbol, interval, int(start_ms or 0), limit)
@@ -409,6 +455,10 @@ async def fetch_agg_trades(
             )
             return cached[1]
 
+    if is_binance_degraded():
+        print(f"[binance_rest] degraded: skip aggTrades {symbol} {market}")
+        return None
+
     print(f"[binance_rest] aggTrades {symbol} {market} (cache_hit=False)")
     if market == "spot":
         url = f"{BINANCE_BASE_URL}/aggTrades"
@@ -446,7 +496,11 @@ async def binance_watchdog() -> None:
                 "[binance_watchdog] CRITICAL: no Binance responses "
                 f">{int(_BINANCE_WATCHDOG_MAX_AGE_SEC)}s"
             )
-            os._exit(1)
+            if _DEGRADED_STREAK >= 1:
+                print("[binance_watchdog] CRITICAL: degraded recovery failed, exiting")
+                os._exit(1)
+            await _restart_shared_session(reason="watchdog no responses")
+            await _enter_degraded("no responses from Binance")
         if success_age > _BINANCE_WATCHDOG_MAX_AGE_SEC:
             print(
                 "[binance_watchdog] WARNING: no successful Binance responses "

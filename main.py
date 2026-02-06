@@ -22,6 +22,7 @@ from binance_rest import (
     get_shared_session,
     get_klines_cache_stats,
     reset_klines_cache_stats,
+    is_binance_degraded,
 )
 from pump_detector import (
     PUMP_CHUNK_SIZE,
@@ -3025,6 +3026,9 @@ async def _get_ai_universe() -> List[str]:
         print(f"[ai_signals] top-n universe failed: {exc}")
     if not symbols:
         symbols = await get_all_usdt_symbols()
+    if is_binance_degraded() and symbols:
+        degraded_limit = int(os.getenv("BINANCE_DEGRADED_AI_LIMIT", "80"))
+        symbols = symbols[:degraded_limit]
     filtered, removed = filter_tradeable_symbols(symbols)
     exclude_btc = os.getenv("EXCLUDE_BTC_FROM_AI_UNIVERSE", "0").lower() in (
         "1",
