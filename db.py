@@ -695,6 +695,39 @@ def list_signal_events(
         conn.close()
 
 
+def list_open_signal_events(*, max_age_sec: int | None = None) -> List[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        clauses = ["status = 'OPEN'", "(is_test IS NULL OR is_test = 0)"]
+        params: list[object] = []
+        if max_age_sec is not None:
+            since_ts = int(time.time()) - int(max_age_sec)
+            clauses.append("ts >= ?")
+            params.append(since_ts)
+        clauses.append(
+            "NOT ("
+            "symbol LIKE 'TEST%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
+        )
+        _append_blocked_symbols_filter(clauses, params)
+        where_clause = " AND ".join(clauses)
+        cur = conn.execute(
+            f"""
+            SELECT *
+            FROM signal_events
+            WHERE {where_clause}
+            ORDER BY ts ASC
+            """,
+            params,
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
 def count_signal_events(
     *,
     user_id: int | None,
@@ -978,6 +1011,37 @@ def update_signal_event_refresh(
                 1 if tp1_hit else 0,
                 1 if tp2_hit else 0,
                 int(last_checked_at),
+                int(time.time()),
+                int(event_id),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_signal_event_status_by_id(
+    *,
+    event_id: int,
+    status: str,
+    result: str | None,
+    last_checked_at: int | None = None,
+) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE signal_events
+            SET status = ?,
+                result = ?,
+                last_checked_at = COALESCE(?, last_checked_at),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                status,
+                result,
+                int(last_checked_at) if last_checked_at is not None else None,
                 int(time.time()),
                 int(event_id),
             ),
