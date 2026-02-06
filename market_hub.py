@@ -50,6 +50,7 @@ MARKET_HUB_WATCHDOG_INTERVAL_SEC = int(
 )
 
 logger = logging.getLogger(__name__)
+MARKET_HUB_DEGRADED = False
 
 
 def _chunked(items: List[str], size: int) -> List[List[str]]:
@@ -93,6 +94,11 @@ class MarketDataHub:
         self._warmup_symbols_updated_at = 0.0
         self._cycle_offset = 0
         self._watchdog_task: Optional[asyncio.Task] = None
+        self.market_hub_last_loop_ts = 0.0
+        self.market_hub_last_refresh_ts = 0.0
+        self.market_hub_zero_refresh_streak = 0
+        self.hub_restarts = 0
+        self._restart_history: List[float] = []
 
     async def start(self) -> None:
         if self._running and self._task and not self._task.done():
@@ -227,13 +233,13 @@ class MarketDataHub:
             await asyncio.sleep(MARKET_HUB_WATCHDOG_INTERVAL_SEC)
             if not self._running:
                 break
-            last_tick = self.last_cycle_ts
-            if last_tick and time.time() - last_tick > MARKET_HUB_STALL_SEC:
-                stalled_for = int(time.time() - last_tick)
-                logger.error(
-                    "[market_hub] stalled for %ss, restarting task", stalled_for
-                )
-                await self._restart_task(reason="stalled")
+            now = time.time()
+            last_refresh = self.market_hub_last_refresh_ts
+            refresh_stalled = (now - last_refresh) > MARKET_HUB_STALL_SEC
+            zero_streak = self.market_hub_zero_refresh_streak >= 5
+            if refresh_stalled or zero_streak:
+                logger.warning("[market_hub] watchdog restart triggered")
+                await self._restart_task(reason="watchdog")
 
     async def _restart_task(self, reason: str) -> None:
         if self._task and not self._task.done():
@@ -243,6 +249,21 @@ class MarketDataHub:
         self._task = asyncio.create_task(self._run())
         self._task.add_done_callback(self._handle_task_done)
         self.last_error = f"market_hub restart: {reason}"
+        self.market_hub_zero_refresh_streak = 0
+        self.market_hub_last_refresh_ts = time.time()
+        self.market_hub_last_loop_ts = self.market_hub_last_refresh_ts
+        self._record_restart()
+
+    def _record_restart(self) -> None:
+        global MARKET_HUB_DEGRADED
+        now = time.time()
+        self.hub_restarts += 1
+        self._restart_history.append(now)
+        cutoff = now - 600
+        self._restart_history = [ts for ts in self._restart_history if ts >= cutoff]
+        if len(self._restart_history) > 2 and not MARKET_HUB_DEGRADED:
+            MARKET_HUB_DEGRADED = True
+            logger.warning("[market_hub] degraded -> switching to DIRECT fallback")
 
     def _handle_task_done(self, task: asyncio.Task) -> None:
         if not self._running:
@@ -359,7 +380,14 @@ class MarketDataHub:
                         for symbol_candles in self._candles.values()
                         if any(symbol_candles.values())
                     )
-                self.last_cycle_ts = time.time()
+                now = time.time()
+                self.last_cycle_ts = now
+                self.market_hub_last_loop_ts = now
+                if cycle_refreshed:
+                    self.market_hub_last_refresh_ts = now
+                    self.market_hub_zero_refresh_streak = 0
+                else:
+                    self.market_hub_zero_refresh_streak += 1
             await asyncio.sleep(sleep_delay)
 
     async def _refresh_batch(

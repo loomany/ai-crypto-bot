@@ -6,9 +6,17 @@ import time
 from statistics import mean
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from binance_client import Candle
-from market_access import get_bundle_with_fallback, get_quick_with_fallback
-from binance_rest import is_binance_degraded
+from binance_client import (
+    Candle,
+    KLINES_15M_LIMIT,
+    KLINES_1D_LIMIT,
+    KLINES_1H_LIMIT,
+    KLINES_4H_LIMIT,
+    KLINES_5M_LIMIT,
+)
+from market_access import get_bundle_with_fallback
+from binance_rest import get_klines, is_binance_degraded
+from market_hub import MARKET_HUB, MARKET_HUB_DEGRADED
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
 from market_context import get_market_context
@@ -67,6 +75,7 @@ _BTC_CONTEXT_TS: float = 0.0
 _BTC_CONTEXT_LAST_REFRESH_TS: float = 0.0
 _BTC_CONTEXT_LAST_ERROR: str | None = None
 _BTC_CONTEXT_REASON_WARNED: bool = False
+AI_FALLBACK_DIRECT = 0
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +93,10 @@ def get_btc_context_last_error() -> str | None:
 
 def get_btc_context_last_refresh_ts() -> float:
     return _BTC_CONTEXT_LAST_REFRESH_TS
+
+
+def get_ai_fallback_direct() -> int:
+    return AI_FALLBACK_DIRECT
 
 
 async def get_btc_context(*, force_refresh: bool = False) -> Dict[str, Any]:
@@ -264,7 +277,11 @@ async def _gather_klines(
     *,
     timings: dict[str, float] | None = None,
 ) -> Optional[Dict[str, List[Candle]]]:
-    return await get_bundle_with_fallback(symbol, ("1d", "4h", "1h", "15m", "5m"), timings=timings)
+    tfs = ("1d", "4h", "1h", "15m", "5m")
+    bundle = _get_hub_bundle(symbol, tfs, timings=timings)
+    if bundle:
+        return bundle
+    return await _fetch_direct_bundle(symbol, tfs, timings=timings)
 
 
 async def _gather_stage_a_klines(
@@ -274,12 +291,96 @@ async def _gather_stage_a_klines(
     limit: int,
     timings: dict[str, float] | None = None,
 ) -> Optional[Dict[str, List[Candle]]]:
-    return await get_quick_with_fallback(
+    tfs = (tf,)
+    bundle = _get_hub_bundle(symbol, tfs, timings=timings)
+    if bundle:
+        return bundle
+    return await _fetch_direct_bundle(
         symbol,
-        tfs=(tf,),
+        tfs,
         limit_overrides={tf: limit},
         timings=timings,
     )
+
+
+def _get_hub_bundle(
+    symbol: str,
+    tfs: tuple[str, ...],
+    *,
+    timings: dict[str, float] | None = None,
+) -> Optional[Dict[str, List[Candle]]]:
+    if MARKET_HUB_DEGRADED:
+        return None
+    start = time.perf_counter()
+    bundle = MARKET_HUB.get_bundle(symbol, tfs)
+    if bundle and all(bundle.get(tf) for tf in tfs):
+        if any(MARKET_HUB.is_stale(symbol, tf) for tf in tfs):
+            bundle = None
+    else:
+        bundle = None
+    if timings is not None:
+        timings["hub_bundle_dt"] = time.perf_counter() - start
+    return bundle
+
+
+def _convert_raw_klines(raw: list) -> list[Candle]:
+    candles: list[Candle] = []
+    if not raw:
+        return candles
+    for item in raw:
+        if not isinstance(item, list) or len(item) < 7:
+            continue
+        candles.append(
+            Candle(
+                open=float(item[1]),
+                high=float(item[2]),
+                low=float(item[3]),
+                close=float(item[4]),
+                volume=float(item[5]),
+                open_time=int(item[0]),
+                close_time=int(item[6]),
+            )
+        )
+    now_ms = int(time.time() * 1000)
+    if candles and candles[-1].close_time > now_ms:
+        candles.pop()
+    return candles
+
+
+async def _fetch_direct_bundle(
+    symbol: str,
+    tfs: tuple[str, ...],
+    *,
+    limit_overrides: dict[str, int] | None = None,
+    timings: dict[str, float] | None = None,
+) -> Optional[Dict[str, List[Candle]]]:
+    if is_binance_degraded():
+        return None
+    start = time.perf_counter()
+    limits = {
+        "1d": KLINES_1D_LIMIT,
+        "4h": KLINES_4H_LIMIT,
+        "1h": KLINES_1H_LIMIT,
+        "15m": KLINES_15M_LIMIT,
+        "5m": KLINES_5M_LIMIT,
+    }
+    if limit_overrides:
+        limits.update(limit_overrides)
+    tasks = [asyncio.create_task(get_klines(symbol, tf, limits[tf])) for tf in tfs]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    bundle: Dict[str, List[Candle]] = {}
+    for tf, result in zip(tfs, results):
+        if isinstance(result, BaseException) or not isinstance(result, list):
+            return None
+        candles = _convert_raw_klines(result)
+        if not candles:
+            return None
+        bundle[tf] = candles
+    if timings is not None:
+        timings["direct_bundle_dt"] = time.perf_counter() - start
+    global AI_FALLBACK_DIRECT
+    AI_FALLBACK_DIRECT += 1
+    return bundle
 
 
 def _pre_score(candles: Dict[str, List[Candle]], *, tf: str, symbol: str) -> float:
