@@ -51,6 +51,7 @@ from signals import (
     FINAL_SCORE_THRESHOLD,
 )
 from trading_core import compute_atr, compute_ema
+from utils_klines import normalize_klines
 from symbol_cache import (
     filter_tradeable_symbols,
     get_all_usdt_symbols,
@@ -3914,6 +3915,8 @@ async def _compute_candidate_score(symbol: str) -> tuple[int, str]:
         return 0, ""
     if isinstance(candles_1h, BaseException) or isinstance(candles_15m, BaseException):
         return 0, ""
+    candles_1h = normalize_klines(candles_1h) if isinstance(candles_1h, list) else []
+    candles_15m = normalize_klines(candles_15m) if isinstance(candles_15m, list) else []
     if not candles_1h or not candles_15m:
         return 0, ""
     if len(candles_1h) < 2 or len(candles_15m) < 2:
