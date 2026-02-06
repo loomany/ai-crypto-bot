@@ -27,12 +27,14 @@ from binance_rest import (
     fetch_klines,
 )
 from pump_detector import (
-    PUMP_CHUNK_SIZE,
     MIN_VOLUME_5M_USDT,
+    PUMP_CHUNK_SIZE,
     PUMP_VOLUME_MUL,
+    PUMPDUMP_1M_INTERVAL,
+    PUMPDUMP_1M_LIMIT,
+    format_pump_message,
     get_candidate_symbols,
     scan_pumps_chunk,
-    format_pump_message,
 )
 from signals import (
     scan_market,
@@ -4235,7 +4237,8 @@ async def pump_scan_once(bot: Bot) -> None:
                 f"req={req_count} klines={klines_count} "
                 f"klines_hits={cache_stats.get('hits')} klines_misses={cache_stats.get('misses')} "
                 f"klines_inflight={cache_stats.get('inflight_awaits')} "
-                "klines_source=binance_rest "
+                f"klines_source=shared_cache klines_interval={PUMPDUMP_1M_INTERVAL} "
+                f"klines_limit={PUMPDUMP_1M_LIMIT} "
                 f"ticker_req={ticker_count} fails={fails_str} "
                 f"rotation={'on' if rotation_enabled else 'off'} "
                 f"rotation_n={rotation_n} rotation_cursor={rotation_cursor}/{rotation_total} "

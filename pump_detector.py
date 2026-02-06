@@ -17,7 +17,8 @@ from symbol_cache import (
     get_top_usdt_symbols_by_volume,
 )
 
-BINANCE_API = "https://api.binance.com"
+PUMPDUMP_1M_INTERVAL = "1m"
+PUMPDUMP_1M_LIMIT = int(os.getenv("PUMPDUMP_1M_LIMIT", "120"))
 PUMP_1M_THRESHOLD = float(os.getenv("PUMP_1M_THRESHOLD", "1.6"))
 PUMP_5M_THRESHOLD = float(os.getenv("PUMP_5M_THRESHOLD", "3.2"))
 DUMP_1M_THRESHOLD = float(os.getenv("DUMP_1M_THRESHOLD", "-1.6"))
@@ -87,11 +88,11 @@ async def get_candidate_symbols(
 
 
 async def get_klines_1m(
-    symbol: str, limit: int = 25
+    symbol: str, limit: int = PUMPDUMP_1M_LIMIT
 ) -> list[list[str]] | list[Candle] | None:
     try:
         with binance_request_context("pumpdump"):
-            return await fetch_klines(symbol, "1m", limit)
+            return await fetch_klines(symbol, PUMPDUMP_1M_INTERVAL, limit)
     except Exception as exc:
         print(f"[BINANCE] ERROR {symbol}: {exc}")
         return None
@@ -281,7 +282,10 @@ async def scan_pumps_chunk(
         if time_budget_sec is not None and time.time() - start_ts >= time_budget_sec:
             break
         batch = symbols[i : i + batch_size]
-        tasks = [asyncio.create_task(get_klines_1m(symbol, limit=25)) for symbol in batch]
+        tasks = [
+            asyncio.create_task(get_klines_1m(symbol, limit=PUMPDUMP_1M_LIMIT))
+            for symbol in batch
+        ]
         klines_list = await asyncio.gather(*tasks, return_exceptions=True)
 
         for symbol, klines in zip(batch, klines_list):
@@ -327,7 +331,10 @@ async def scan_pumps(
             if time.time() - start_ts >= max_cycle_sec:
                 break
             batch = ordered_symbols[i : i + batch_size]
-            tasks = [asyncio.create_task(get_klines_1m(symbol, limit=25)) for symbol in batch]
+            tasks = [
+                asyncio.create_task(get_klines_1m(symbol, limit=PUMPDUMP_1M_LIMIT))
+                for symbol in batch
+            ]
             klines_list = await asyncio.gather(*tasks, return_exceptions=True)
 
             for symbol, klines in zip(batch, klines_list):
@@ -389,7 +396,7 @@ async def generate_pump_alert(symbol: str) -> str | None:
     """
 
     with binance_request_context("pumpdump"):
-        klines = await fetch_klines(symbol, "1m", 25)
+        klines = await fetch_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT)
     if not klines or len(klines) < 6:
         return None
 
