@@ -834,18 +834,20 @@ def get_signal_outcome_counts(
         cur = conn.execute(
             f"""
             SELECT
+                COUNT(*) AS total,
                 SUM(CASE WHEN status = 'TP1' THEN 1 ELSE 0 END) AS tp1,
                 SUM(CASE WHEN status = 'TP2' THEN 1 ELSE 0 END) AS tp2,
                 SUM(CASE WHEN status = 'BE' THEN 1 ELSE 0 END) AS be,
                 SUM(CASE WHEN status = 'SL' THEN 1 ELSE 0 END) AS sl,
                 SUM(CASE WHEN status IN ('EXP', 'EXPIRED') THEN 1 ELSE 0 END) AS exp,
-                SUM(CASE WHEN status = 'NO_FILL' THEN 1 ELSE 0 END) AS no_fill
+                SUM(CASE WHEN status IN ('NO_FILL', 'NF') THEN 1 ELSE 0 END) AS no_fill
             FROM signal_events
             WHERE {where_clause}
             """,
             params,
         )
         row = cur.fetchone()
+        total = int(row["total"] or 0)
         tp1 = int(row["tp1"] or 0)
         tp2 = int(row["tp2"] or 0)
         be = int(row["be"] or 0)
@@ -853,8 +855,11 @@ def get_signal_outcome_counts(
         exp = int(row["exp"] or 0)
         no_fill = int(row["no_fill"] or 0)
         passed = tp1 + tp2 + be
-        failed = sl + exp + no_fill
+        failed = sl
+        neutral = exp + no_fill
+        in_progress = max(total - passed - failed - neutral, 0)
         return {
+            "total": total,
             "tp1": tp1,
             "tp2": tp2,
             "be": be,
@@ -863,6 +868,8 @@ def get_signal_outcome_counts(
             "no_fill": no_fill,
             "passed": passed,
             "failed": failed,
+            "neutral": neutral,
+            "in_progress": in_progress,
         }
     finally:
         conn.close()
@@ -902,46 +909,85 @@ def get_signal_score_bucket_counts(
             SELECT
                 SUM(CASE
                     WHEN score BETWEEN 90 AND 100
+                    THEN 1 ELSE 0 END) AS b90_total,
+                SUM(CASE
+                    WHEN score BETWEEN 90 AND 100
                      AND status IN ('TP1', 'TP2', 'BE')
                     THEN 1 ELSE 0 END) AS b90_passed,
                 SUM(CASE
                     WHEN score BETWEEN 90 AND 100
-                     AND status IN ('SL', 'EXP', 'EXPIRED', 'NO_FILL')
+                     AND status = 'SL'
                     THEN 1 ELSE 0 END) AS b90_failed,
+                SUM(CASE
+                    WHEN score BETWEEN 90 AND 100
+                     AND status IN ('EXP', 'EXPIRED', 'NO_FILL', 'NF')
+                    THEN 1 ELSE 0 END) AS b90_neutral,
+                SUM(CASE
+                    WHEN score BETWEEN 80 AND 89
+                    THEN 1 ELSE 0 END) AS b80_total,
                 SUM(CASE
                     WHEN score BETWEEN 80 AND 89
                      AND status IN ('TP1', 'TP2', 'BE')
                     THEN 1 ELSE 0 END) AS b80_passed,
                 SUM(CASE
                     WHEN score BETWEEN 80 AND 89
-                     AND status IN ('SL', 'EXP', 'EXPIRED', 'NO_FILL')
+                     AND status = 'SL'
                     THEN 1 ELSE 0 END) AS b80_failed,
+                SUM(CASE
+                    WHEN score BETWEEN 80 AND 89
+                     AND status IN ('EXP', 'EXPIRED', 'NO_FILL', 'NF')
+                    THEN 1 ELSE 0 END) AS b80_neutral,
+                SUM(CASE
+                    WHEN score BETWEEN 70 AND 79
+                    THEN 1 ELSE 0 END) AS b70_total,
                 SUM(CASE
                     WHEN score BETWEEN 70 AND 79
                      AND status IN ('TP1', 'TP2', 'BE')
                     THEN 1 ELSE 0 END) AS b70_passed,
                 SUM(CASE
                     WHEN score BETWEEN 70 AND 79
-                     AND status IN ('SL', 'EXP', 'EXPIRED', 'NO_FILL')
-                    THEN 1 ELSE 0 END) AS b70_failed
+                     AND status = 'SL'
+                    THEN 1 ELSE 0 END) AS b70_failed,
+                SUM(CASE
+                    WHEN score BETWEEN 70 AND 79
+                     AND status IN ('EXP', 'EXPIRED', 'NO_FILL', 'NF')
+                    THEN 1 ELSE 0 END) AS b70_neutral
             FROM signal_events
             WHERE {where_clause}
             """,
             params,
         )
         row = cur.fetchone()
+        b90_total = int(row["b90_total"] or 0)
+        b80_total = int(row["b80_total"] or 0)
+        b70_total = int(row["b70_total"] or 0)
+        b90_passed = int(row["b90_passed"] or 0)
+        b80_passed = int(row["b80_passed"] or 0)
+        b70_passed = int(row["b70_passed"] or 0)
+        b90_failed = int(row["b90_failed"] or 0)
+        b80_failed = int(row["b80_failed"] or 0)
+        b70_failed = int(row["b70_failed"] or 0)
+        b90_neutral = int(row["b90_neutral"] or 0)
+        b80_neutral = int(row["b80_neutral"] or 0)
+        b70_neutral = int(row["b70_neutral"] or 0)
         return {
             "90-100": {
-                "passed": int(row["b90_passed"] or 0),
-                "failed": int(row["b90_failed"] or 0),
+                "passed": b90_passed,
+                "failed": b90_failed,
+                "neutral": b90_neutral,
+                "in_progress": max(b90_total - b90_passed - b90_failed - b90_neutral, 0),
             },
             "80-89": {
-                "passed": int(row["b80_passed"] or 0),
-                "failed": int(row["b80_failed"] or 0),
+                "passed": b80_passed,
+                "failed": b80_failed,
+                "neutral": b80_neutral,
+                "in_progress": max(b80_total - b80_passed - b80_failed - b80_neutral, 0),
             },
             "70-79": {
-                "passed": int(row["b70_passed"] or 0),
-                "failed": int(row["b70_failed"] or 0),
+                "passed": b70_passed,
+                "failed": b70_failed,
+                "neutral": b70_neutral,
+                "in_progress": max(b70_total - b70_passed - b70_failed - b70_neutral, 0),
             },
         }
     finally:

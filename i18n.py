@@ -190,9 +190,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "AI_STATS_SCORE_LABEL": "Score:",
         "AI_STATS_BUCKET_LINE": "{label}:  {total} (TP1+: {winrate:.0f}%)",
         "HISTORY_TITLE": "📊 История сигналов ({period})",
-        "HISTORY_SUMMARY": "✅ Прошло: {passed} | ❌ Не прошло: {failed}",
+        "HISTORY_SUMMARY": (
+            "✅ Прошло: {passed} | ❌ Не прошло: {failed} | "
+            "⏳ Neutral: {neutral} | ⏰ В процессе: {in_progress}"
+        ),
         "HISTORY_STATS_TITLE": "📊 Статистика ({period}) — по Score",
-        "HISTORY_SCORE_BUCKET_LINE": "{label}: ✅ {passed} / ❌ {failed}  ({percent}%)",
+        "HISTORY_SCORE_BUCKET_LINE": (
+            "{label}: ✅ {passed} / ❌ {failed} / ⏳ {neutral} / ⏰ {in_progress}  ({percent}%)"
+        ),
         "HISTORY_NO_SIGNALS": "Нет сигналов за период.",
         "STATUS_OPEN": "Открыт",
         "STATUS_NO_FILL": "Нет входа",
@@ -618,9 +623,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "AI_STATS_SCORE_LABEL": "Score:",
         "AI_STATS_BUCKET_LINE": "{label}:  {total} (TP1+: {winrate:.0f}%)",
         "HISTORY_TITLE": "📊 Signal history ({period})",
-        "HISTORY_SUMMARY": "✅ Success: {passed} | ❌ Fail: {failed}",
+        "HISTORY_SUMMARY": (
+            "✅ Success: {passed} | ❌ Fail: {failed} | "
+            "⏳ Neutral: {neutral} | ⏰ In progress: {in_progress}"
+        ),
         "HISTORY_STATS_TITLE": "📊 Stats ({period}) — by Score",
-        "HISTORY_SCORE_BUCKET_LINE": "{label}: ✅ {passed} / ❌ {failed}  ({percent}%)",
+        "HISTORY_SCORE_BUCKET_LINE": (
+            "{label}: ✅ {passed} / ❌ {failed} / ⏳ {neutral} / ⏰ {in_progress}  ({percent}%)"
+        ),
         "HISTORY_NO_SIGNALS": "No signals for the period.",
         "STATUS_OPEN": "Open",
         "STATUS_NO_FILL": "No entry",

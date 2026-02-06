@@ -653,14 +653,18 @@ def _period_days(period_key: str) -> int | None:
     return None
 
 
-def _status_icon(status: str) -> str:
+def _status_icon(status: str | None) -> str:
     passed = {"TP1", "TP2", "BE"}
-    failed = {"SL", "EXP", "EXPIRED", "NO_FILL"}
-    if status in passed:
+    failed = {"SL"}
+    neutral = {"NF", "NO_FILL", "EXP", "EXPIRED"}
+    normalized = (status or "").upper().strip()
+    if normalized in passed:
         return "✅"
-    if status in failed:
+    if normalized in failed:
         return "❌"
-    return "⏳"
+    if normalized in neutral:
+        return "⏳"
+    return "⏰"
 
 
 def _format_signal_event_status(raw_status: str, lang: str) -> str:
@@ -701,12 +705,16 @@ def _format_archive_list(
             "HISTORY_SUMMARY",
             passed=outcome_counts.get("passed", 0),
             failed=outcome_counts.get("failed", 0),
+            neutral=outcome_counts.get("neutral", 0),
+            in_progress=outcome_counts.get("in_progress", 0),
         )
     )
     def _score_bucket_line(bucket_key: str, label: str) -> str:
         bucket = score_bucket_counts.get(bucket_key, {})
         passed = int(bucket.get("passed", 0))
         failed = int(bucket.get("failed", 0))
+        neutral = int(bucket.get("neutral", 0))
+        in_progress = int(bucket.get("in_progress", 0))
         total = passed + failed
         percent = round((passed / total) * 100) if total > 0 else 0
         return i18n.t(
@@ -715,6 +723,8 @@ def _format_archive_list(
             label=label,
             passed=passed,
             failed=failed,
+            neutral=neutral,
+            in_progress=in_progress,
             percent=percent,
         )
 
