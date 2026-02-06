@@ -644,13 +644,13 @@ def _format_ai_stats_message(stats: Dict[str, Any], period_key: str, lang: str) 
     return "\n".join(lines)
 
 
-def _period_days(period_key: str) -> int | None:
-    if period_key == "1d":
-        return 1
-    if period_key == "7d":
-        return 7
-    if period_key == "30d":
-        return 30
+def window_since(window: str, now: datetime) -> datetime | None:
+    if window == "1d":
+        return now - timedelta(days=1)
+    if window == "7d":
+        return now - timedelta(days=7)
+    if window == "30d":
+        return now - timedelta(days=30)
     return None
 
 
@@ -690,14 +690,15 @@ def _format_event_time(ts: int) -> str:
 
 def _format_archive_list(
     lang: str,
-    period_key: str,
+    time_window: str,
     events: list[dict],
     page: int,
     pages: int,
     outcome_counts: dict,
     score_bucket_counts: dict[str, dict[str, int]],
 ) -> str:
-    title = i18n.t(lang, "HISTORY_TITLE", period=_period_label(period_key, lang))
+    period_label = _period_label(time_window, lang)
+    title = i18n.t(lang, "HISTORY_TITLE", period=period_label)
     lines = [title]
     lines.append("")
     lines.append(
@@ -736,7 +737,7 @@ def _format_archive_list(
             i18n.t(
                 lang,
                 "HISTORY_STATS_TITLE",
-                period=_period_label(period_key, lang),
+                period=period_label,
             ),
             _score_bucket_line("90-100", "90–100"),
             _score_bucket_line("80-89", "80–89"),
@@ -755,7 +756,7 @@ def _format_archive_list(
     )
     lines.append("")
     if not events:
-        lines.append(i18n.t(lang, "HISTORY_NO_SIGNALS"))
+        lines.append(i18n.t(lang, "HISTORY_NO_SIGNALS", period=period_label))
         return "\n".join(lines)
     return "\n".join(lines)
 
@@ -764,8 +765,8 @@ def _history_state_key(user_id: int) -> str:
     return f"history_ctx:{user_id}"
 
 
-def _set_history_context(user_id: int, period_key: str, page: int) -> None:
-    payload = json.dumps({"period": period_key, "page": page})
+def _set_history_context(user_id: int, time_window: str, page: int) -> None:
+    payload = json.dumps({"window": time_window, "page": page})
     set_state(_history_state_key(user_id), payload)
 
 
@@ -777,38 +778,39 @@ def _get_history_context(user_id: int) -> tuple[str, int] | None:
         parsed = json.loads(payload)
     except (TypeError, ValueError):
         return None
-    period_key = str(parsed.get("period", ""))
+    time_window = str(parsed.get("window", ""))
     page = parsed.get("page")
-    if period_key not in {"1d", "7d", "30d", "all"}:
+    if time_window not in {"1d", "7d", "30d", "all"}:
         return None
     try:
         page_value = int(page)
     except (TypeError, ValueError):
         return None
-    return period_key, max(1, page_value)
+    return time_window, max(0, page_value)
 
 
 def _get_history_page(
     *,
-    period_key: str,
+    time_window: str,
     page: int,
 ) -> tuple[int, int, list[dict], dict, dict[str, dict[str, int]]]:
     enforce_signal_ttl()
-    days = _period_days(period_key)
-    since_ts = int(time.time()) - days * 86400 if days is not None else None
+    now = datetime.now(tz=timezone.utc)
+    since = window_since(time_window, now)
+    since_ts = int(since.timestamp()) if since is not None else None
     total = count_signal_events(
         user_id=None,
         since_ts=since_ts,
         min_score=None,
     )
     pages = max(1, (total + 9) // 10)
-    page = max(1, min(page, pages))
+    page = max(0, min(page, pages - 1))
     events_rows = list_signal_events(
         user_id=None,
         since_ts=since_ts,
         min_score=None,
         limit=10,
-        offset=(page - 1) * 10,
+        offset=page * 10,
     )
     events = [dict(row) for row in events_rows]
     outcome_counts = get_signal_outcome_counts(
@@ -822,6 +824,43 @@ def _get_history_page(
         min_score=None,
     )
     return page, pages, events, outcome_counts, score_bucket_counts
+
+
+async def _render_history(
+    *,
+    callback: CallbackQuery,
+    time_window: str,
+    page: int,
+) -> None:
+    if callback.message is None or callback.from_user is None:
+        return
+    page, pages, events, outcome_counts, score_bucket_counts = _get_history_page(
+        time_window=time_window,
+        page=page,
+    )
+    await callback.answer()
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    lang = lang or "ru"
+    _set_history_context(callback.from_user.id, time_window, page)
+    await callback.message.edit_text(
+        _format_archive_list(
+            lang,
+            time_window,
+            events,
+            page,
+            pages,
+            outcome_counts,
+            score_bucket_counts,
+        ),
+        reply_markup=_archive_inline_kb(
+            lang,
+            time_window,
+            page,
+            pages,
+            events,
+            is_admin_user=is_admin(callback.from_user.id),
+        ),
+    )
 
 
 def enforce_signal_ttl() -> int:
@@ -1365,44 +1404,19 @@ async def stats_menu(message: Message):
     )
 
 
-@dp.callback_query(F.data.regexp(r"^history:(1d|7d|30d|all)$"))
+@dp.callback_query(F.data.regexp(r"^hist:(1d|7d|30d|all):\d+$"))
 async def history_callback(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
-    period_key = callback.data.split(":", 1)[1]
-    page, pages, events, outcome_counts, score_bucket_counts = _get_history_page(
-        period_key=period_key,
-        page=1,
-    )
-    print(f"[history] period={period_key} total={len(events)} page={page}/{pages}")
-    await callback.answer()
-    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-    lang = lang or "ru"
-    _set_history_context(callback.from_user.id, period_key, page)
-    await callback.message.edit_text(
-        _format_archive_list(
-            lang,
-            period_key,
-            events,
-            page,
-            pages,
-            outcome_counts,
-            score_bucket_counts,
-        ),
-        reply_markup=_archive_inline_kb(
-            lang,
-            period_key,
-            page,
-            pages,
-            events,
-            is_admin_user=is_admin(callback.from_user.id),
-        ),
-    )
+    _, time_window, page_raw = callback.data.split(":")
+    page_value = max(0, int(page_raw))
+    print(f"[history] window={time_window} page={page_value}")
+    await _render_history(callback=callback, time_window=time_window, page=page_value)
 
 
 def _archive_inline_kb(
     lang: str,
-    period_key: str,
+    time_window: str,
     page: int,
     pages: int,
     events: list[dict],
@@ -1410,6 +1424,16 @@ def _archive_inline_kb(
     is_admin_user: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    period_label = _period_label(time_window, lang)
+    if not events:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "HISTORY_NO_SIGNALS_BUTTON", period=period_label),
+                    callback_data="hist_noop",
+                )
+            ]
+        )
     for event in events:
         event_status = str(event.get("status", ""))
         status_icon = _status_icon(event_status)
@@ -1421,7 +1445,7 @@ def _archive_inline_kb(
                         f"{event.get('symbol')} {event.get('side')} | "
                         f"{_format_event_time(int(event.get('ts', 0)))}"
                     ),
-                    callback_data=f"sig_open:{event.get('id')}",
+                    callback_data=f"sig_open:{time_window}:{event.get('id')}",
                 )
             ]
         )
@@ -1436,18 +1460,18 @@ def _archive_inline_kb(
             )
 
     nav_row: list[InlineKeyboardButton] = []
-    if page > 1:
+    if page > 0:
         nav_row.append(
             InlineKeyboardButton(
                 text=i18n.t(lang, "NAV_PREV"),
-                callback_data=f"archive:list:{period_key}:{page - 1}",
+                callback_data=f"hist:{time_window}:{page - 1}",
             )
         )
-    if page < pages:
+    if page < pages - 1:
         nav_row.append(
             InlineKeyboardButton(
                 text=i18n.t(lang, "NAV_NEXT"),
-                callback_data=f"archive:list:{period_key}:{page + 1}",
+                callback_data=f"hist:{time_window}:{page + 1}",
             )
         )
     if nav_row:
@@ -1456,7 +1480,7 @@ def _archive_inline_kb(
         [
             InlineKeyboardButton(
                 text=i18n.t(lang, "NAV_BACK"),
-                callback_data=f"archive:back:{period_key}",
+                callback_data="hist_back",
             )
         ]
     )
@@ -1492,42 +1516,7 @@ def _archive_detail_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@dp.callback_query(F.data.regexp(r"^archive:list:(1d|7d|30d|all):\d+$"))
-async def archive_list(callback: CallbackQuery):
-    if callback.message is None or callback.from_user is None:
-        return
-    _, _, period_key, page_raw = callback.data.split(":")
-    page_value = max(1, int(page_raw))
-    page, pages, events, outcome_counts, score_bucket_counts = _get_history_page(
-        period_key=period_key,
-        page=page_value,
-    )
-    await callback.answer()
-    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-    lang = lang or "ru"
-    _set_history_context(callback.from_user.id, period_key, page)
-    await callback.message.edit_text(
-        _format_archive_list(
-            lang,
-            period_key,
-            events,
-            page,
-            pages,
-            outcome_counts,
-            score_bucket_counts,
-        ),
-        reply_markup=_archive_inline_kb(
-            lang,
-            period_key,
-            page,
-            pages,
-            events,
-            is_admin_user=is_admin(callback.from_user.id),
-        ),
-    )
-
-
-@dp.callback_query(F.data.regexp(r"^sig_open:\d+$"))
+@dp.callback_query(F.data.regexp(r"^sig_open:(1d|7d|30d|all):\d+$"))
 async def sig_open(callback: CallbackQuery):
     logger.warning("SIG_OPEN HANDLER FIRED: %s", callback.data)
     if callback.message is None or callback.from_user is None:
@@ -1535,7 +1524,8 @@ async def sig_open(callback: CallbackQuery):
     await callback.answer()
     try:
         logger.info("sig_open callback: %s", callback.data)
-        event_id = int(callback.data.split(":", 1)[1])
+        _, time_window, event_id_raw = callback.data.split(":")
+        event_id = int(event_id_raw)
         event_row = get_signal_by_id(event_id)
         if event_row is None:
             lang = get_user_lang(callback.from_user.id) or "ru"
@@ -1544,11 +1534,11 @@ async def sig_open(callback: CallbackQuery):
         event = dict(event_row)
         lang = get_user_lang(callback.from_user.id) if callback.from_user else None
         lang = lang or "ru"
-        back_callback = "archive:back:all"
+        back_callback = f"hist:{time_window}:0"
         context = _get_history_context(callback.from_user.id)
         if context:
-            period_key, page = context
-            back_callback = f"archive:list:{period_key}:{page}"
+            stored_window, page = context
+            back_callback = f"hist:{stored_window}:{page}"
         detail_text = _format_archive_detail(event, lang)
         detail_markup = _archive_detail_kb(
             lang=lang,
@@ -1571,7 +1561,7 @@ async def sig_open(callback: CallbackQuery):
             )
 
 
-@dp.callback_query(F.data.regexp(r"^archive:back:(1d|7d|30d|all)$"))
+@dp.callback_query(F.data == "hist_back")
 async def archive_back(callback: CallbackQuery):
     if callback.message is None:
         return
@@ -1582,6 +1572,11 @@ async def archive_back(callback: CallbackQuery):
         i18n.t(lang, "STATS_PICK_TEXT"),
         reply_markup=stats_inline_kb(lang),
     )
+
+
+@dp.callback_query(F.data == "hist_noop")
+async def history_noop(callback: CallbackQuery):
+    await callback.answer()
 
 
 @dp.callback_query(F.data.regexp(r"^sig_refresh:\d+$"))
@@ -1618,15 +1613,15 @@ async def sig_refresh(callback: CallbackQuery):
         if callback.message.text and callback.message.text.startswith("📊"):
             context = _get_history_context(callback.from_user.id)
             if context:
-                period_key, page = context
+                time_window, page = context
                 page, pages, events, outcome_counts, score_bucket_counts = _get_history_page(
-                    period_key=period_key,
+                    time_window=time_window,
                     page=page,
                 )
                 await callback.message.edit_text(
                     _format_archive_list(
                         lang,
-                        period_key,
+                        time_window,
                         events,
                         page,
                         pages,
@@ -1635,7 +1630,7 @@ async def sig_refresh(callback: CallbackQuery):
                     ),
                     reply_markup=_archive_inline_kb(
                         lang,
-                        period_key,
+                        time_window,
                         page,
                         pages,
                         events,
@@ -1649,11 +1644,11 @@ async def sig_refresh(callback: CallbackQuery):
         if event is None:
             await callback.message.answer(report_text)
             return
-        back_callback = "archive:back:all"
+        back_callback = "hist_back"
         context = _get_history_context(callback.from_user.id)
         if context:
-            period_key, page = context
-            back_callback = f"archive:list:{period_key}:{page}"
+            time_window, page = context
+            back_callback = f"hist:{time_window}:{page}"
         with suppress(Exception):
             await callback.message.edit_text(
                 _format_archive_detail(dict(event), lang),
