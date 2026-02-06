@@ -90,6 +90,22 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signal_events ADD COLUMN breakdown_json TEXT")
         if "is_test" not in cols:
             conn.execute("ALTER TABLE signal_events ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0")
+        if "result" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN result TEXT")
+        if "last_checked_at" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN last_checked_at INTEGER")
+        if "updated_at" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN updated_at INTEGER")
+        if "entry_touched" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN entry_touched INTEGER")
+        if "tp1_hit" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN tp1_hit INTEGER")
+        if "tp2_hit" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN tp2_hit INTEGER")
+        if "refresh_count" not in cols:
+            conn.execute(
+                "ALTER TABLE signal_events ADD COLUMN refresh_count INTEGER NOT NULL DEFAULT 0"
+            )
         conn.commit()
     finally:
         conn.close()
@@ -926,6 +942,47 @@ def get_signal_event(
             params,
         )
         return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def update_signal_event_refresh(
+    *,
+    event_id: int,
+    status: str,
+    result: str | None,
+    entry_touched: bool,
+    tp1_hit: bool,
+    tp2_hit: bool,
+    last_checked_at: int,
+) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE signal_events
+            SET status = ?,
+                result = ?,
+                entry_touched = ?,
+                tp1_hit = ?,
+                tp2_hit = ?,
+                last_checked_at = ?,
+                updated_at = ?,
+                refresh_count = COALESCE(refresh_count, 0) + 1
+            WHERE id = ?
+            """,
+            (
+                status,
+                result,
+                1 if entry_touched else 0,
+                1 if tp1_hit else 0,
+                1 if tp2_hit else 0,
+                int(last_checked_at),
+                int(time.time()),
+                int(event_id),
+            ),
+        )
+        conn.commit()
     finally:
         conn.close()
 
