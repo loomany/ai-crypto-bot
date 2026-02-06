@@ -1290,11 +1290,12 @@ async def sig_open(callback: CallbackQuery):
     try:
         logger.info("sig_open callback: %s", callback.data)
         event_id = int(callback.data.split(":", 1)[1])
-        event = get_signal_by_id(event_id)
-        if event is None:
+        event_row = get_signal_by_id(event_id)
+        if event_row is None:
             lang = get_user_lang(callback.from_user.id) or "ru"
             await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
             return
+        event = dict(event_row)
         lang = get_user_lang(callback.from_user.id) if callback.from_user else None
         lang = lang or "ru"
         back_callback = "archive:back:all"
@@ -1302,7 +1303,7 @@ async def sig_open(callback: CallbackQuery):
         if context:
             period_key, page = context
             back_callback = f"archive:list:{period_key}:{page}"
-        detail_text = _format_archive_detail(dict(event), lang)
+        detail_text = _format_archive_detail(event, lang)
         detail_markup = _archive_detail_kb(
             lang=lang,
             back_callback=back_callback,
