@@ -497,8 +497,10 @@ async def binance_watchdog() -> None:
                 f">{int(_BINANCE_WATCHDOG_MAX_AGE_SEC)}s"
             )
             if _DEGRADED_STREAK >= 1:
-                print("[binance_watchdog] CRITICAL: degraded recovery failed, exiting")
-                os._exit(1)
+                print(
+                    "[binance_watchdog] CRITICAL: degraded recovery failed, "
+                    "retrying without exit"
+                )
             await _restart_shared_session(reason="watchdog no responses")
             await _enter_degraded("no responses from Binance")
         if success_age > _BINANCE_WATCHDOG_MAX_AGE_SEC:
