@@ -1280,33 +1280,38 @@ async def archive_list(callback: CallbackQuery):
 async def sig_open(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
-    event_id = int(callback.data.split(":", 1)[1])
-    event = get_signal_event(
-        user_id=None,
-        event_id=event_id,
-    )
-    if event is None:
-        lang = get_user_lang(callback.from_user.id) or "ru"
-        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
-        return
-    await callback.answer()
-    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-    lang = lang or "ru"
-    back_callback = "archive:back:all"
-    context = _get_history_context(callback.from_user.id)
-    if context:
-        period_key, page = context
-        back_callback = f"archive:list:{period_key}:{page}"
-    await callback.message.edit_text(
-        _format_archive_detail(dict(event), lang),
-        reply_markup=_archive_detail_kb(
-            lang=lang,
-            back_callback=back_callback,
+    try:
+        event_id = int(callback.data.split(":", 1)[1])
+        event = get_signal_event(
+            user_id=None,
             event_id=event_id,
-            event_status=str(event.get("status", "")),
-            is_admin_user=is_admin(callback.from_user.id),
-        ),
-    )
+        )
+        if event is None:
+            lang = get_user_lang(callback.from_user.id) or "ru"
+            await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+            return
+        await callback.answer()
+        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+        lang = lang or "ru"
+        back_callback = "archive:back:all"
+        context = _get_history_context(callback.from_user.id)
+        if context:
+            period_key, page = context
+            back_callback = f"archive:list:{period_key}:{page}"
+        await callback.message.edit_text(
+            _format_archive_detail(dict(event), lang),
+            reply_markup=_archive_detail_kb(
+                lang=lang,
+                back_callback=back_callback,
+                event_id=event_id,
+                event_status=str(event.get("status", "")),
+                is_admin_user=is_admin(callback.from_user.id),
+            ),
+        )
+    except Exception as exc:
+        mark_error("sig_open", str(exc))
+        with suppress(Exception):
+            await callback.answer("Ошибка, см. логи", show_alert=True)
 
 
 @dp.callback_query(F.data.regexp(r"^archive:back:(1d|7d|30d|all)$"))
@@ -1326,80 +1331,88 @@ async def archive_back(callback: CallbackQuery):
 async def sig_refresh(callback: CallbackQuery):
     if callback.from_user is None:
         return
-    if not is_admin(callback.from_user.id):
-        await callback.answer("Недостаточно прав", show_alert=True)
-        return
-    await callback.answer("🔄 Проверяю Binance…")
-    event_id = int(callback.data.split(":", 1)[1])
-    refreshed = await refresh_signal(event_id)
-    if refreshed is None:
-        await callback.answer(i18n.t(get_user_lang(callback.from_user.id) or "ru", "SIGNAL_NOT_FOUND"), show_alert=True)
-        return
-    if isinstance(refreshed, dict) and refreshed.get("error") == "cooldown":
-        retry_after = int(refreshed.get("retry_after", 0))
-        await callback.answer(f"Подождите {retry_after} сек.", show_alert=True)
-        return
-    if isinstance(refreshed, dict) and refreshed.get("error") == "degraded":
-        await callback.answer("Binance временно недоступен", show_alert=True)
-        return
+    try:
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Недостаточно прав", show_alert=True)
+            return
+        await callback.answer("🔄 Проверяю Binance…")
+        event_id = int(callback.data.split(":", 1)[1])
+        refreshed = await refresh_signal(event_id)
+        if refreshed is None:
+            await callback.answer(
+                i18n.t(get_user_lang(callback.from_user.id) or "ru", "SIGNAL_NOT_FOUND"),
+                show_alert=True,
+            )
+            return
+        if isinstance(refreshed, dict) and refreshed.get("error") == "cooldown":
+            retry_after = int(refreshed.get("retry_after", 0))
+            await callback.answer(f"Подождите {retry_after} сек.", show_alert=True)
+            return
+        if isinstance(refreshed, dict) and refreshed.get("error") == "degraded":
+            await callback.answer("Binance временно недоступен", show_alert=True)
+            return
 
-    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-    lang = lang or "ru"
-    report_text = _format_refresh_report(refreshed, lang)
+        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+        lang = lang or "ru"
+        report_text = _format_refresh_report(refreshed, lang)
 
-    if callback.message is None:
-        return
-    if callback.message.text and callback.message.text.startswith("📊"):
+        if callback.message is None:
+            return
+        if callback.message.text and callback.message.text.startswith("📊"):
+            context = _get_history_context(callback.from_user.id)
+            if context:
+                period_key, page = context
+                page, pages, events, outcome_counts, score_bucket_counts = _get_history_page(
+                    period_key=period_key,
+                    page=page,
+                )
+                await callback.message.edit_text(
+                    _format_archive_list(
+                        lang,
+                        period_key,
+                        events,
+                        page,
+                        pages,
+                        outcome_counts,
+                        score_bucket_counts,
+                    ),
+                    reply_markup=_archive_inline_kb(
+                        lang,
+                        period_key,
+                        page,
+                        pages,
+                        events,
+                        is_admin_user=True,
+                    ),
+                )
+                await callback.message.answer(report_text)
+                return
+
+        event = get_signal_event(user_id=None, event_id=event_id)
+        if event is None:
+            await callback.message.answer(report_text)
+            return
+        back_callback = "archive:back:all"
         context = _get_history_context(callback.from_user.id)
         if context:
             period_key, page = context
-            page, pages, events, outcome_counts, score_bucket_counts = _get_history_page(
-                period_key=period_key,
-                page=page,
-            )
+            back_callback = f"archive:list:{period_key}:{page}"
+        with suppress(Exception):
             await callback.message.edit_text(
-                _format_archive_list(
-                    lang,
-                    period_key,
-                    events,
-                    page,
-                    pages,
-                    outcome_counts,
-                    score_bucket_counts,
-                ),
-                reply_markup=_archive_inline_kb(
-                    lang,
-                    period_key,
-                    page,
-                    pages,
-                    events,
+                _format_archive_detail(dict(event), lang),
+                reply_markup=_archive_detail_kb(
+                    lang=lang,
+                    back_callback=back_callback,
+                    event_id=event_id,
+                    event_status=str(event.get("status", "")),
                     is_admin_user=True,
                 ),
             )
-            await callback.message.answer(report_text)
-            return
-
-    event = get_signal_event(user_id=None, event_id=event_id)
-    if event is None:
         await callback.message.answer(report_text)
-        return
-    back_callback = "archive:back:all"
-    context = _get_history_context(callback.from_user.id)
-    if context:
-        period_key, page = context
-        back_callback = f"archive:list:{period_key}:{page}"
-    with suppress(Exception):
-        await callback.message.edit_text(
-            _format_archive_detail(dict(event), lang),
-            reply_markup=_archive_detail_kb(
-                lang=lang,
-                back_callback=back_callback,
-                event_id=event_id,
-                event_status=str(event.get("status", "")),
-                is_admin_user=True,
-            ),
-        )
-    await callback.message.answer(report_text)
+    except Exception as exc:
+        mark_error("sig_refresh", str(exc))
+        with suppress(Exception):
+            await callback.answer("Ошибка, см. логи", show_alert=True)
 
 @dp.callback_query(F.data == "ai_notify_on")
 async def ai_notify_on(callback: CallbackQuery):
