@@ -94,11 +94,13 @@ from db import (
     purge_symbol,
     insert_signal_event,
     list_signal_events,
+    list_open_signal_events,
     count_signal_events,
     get_signal_outcome_counts,
     get_signal_score_bucket_counts,
     get_signal_event,
     update_signal_event_refresh,
+    update_signal_event_status_by_id,
     get_last_pumpdump_signal,
     set_last_pumpdump_signal,
     purge_test_signals,
@@ -775,6 +777,7 @@ def _get_history_page(
     period_key: str,
     page: int,
 ) -> tuple[int, int, list[dict], dict, dict[str, dict[str, int]]]:
+    enforce_signal_ttl()
     days = _period_days(period_key)
     since_ts = int(time.time()) - days * 86400 if days is not None else None
     total = count_signal_events(
@@ -803,6 +806,107 @@ def _get_history_page(
         min_score=None,
     )
     return page, pages, events, outcome_counts, score_bucket_counts
+
+
+def enforce_signal_ttl() -> int:
+    now = int(time.time())
+    updated = 0
+    open_events = list_open_signal_events()
+    for row in open_events:
+        event = dict(row)
+        created_at = int(event.get("ts", 0))
+        if created_at <= 0:
+            continue
+        age_sec = now - created_at
+        if age_sec < SIGNAL_TTL_SECONDS:
+            continue
+        tp2_hit = bool(event.get("tp2_hit"))
+        tp1_hit = bool(event.get("tp1_hit"))
+        entry_touched = bool(event.get("entry_touched"))
+        if tp2_hit:
+            status_value = "TP2"
+        elif tp1_hit:
+            status_value = "TP1"
+        else:
+            status_value = "EXP" if entry_touched else "NO_FILL"
+        update_signal_event_status_by_id(
+            event_id=int(event.get("id", 0)),
+            status=status_value,
+            result=status_value,
+            last_checked_at=now,
+        )
+        updated += 1
+    return updated
+
+
+def _format_price(value: float) -> str:
+    if value == 0:
+        return "0"
+    if value >= 100:
+        return f"{value:,.2f}".replace(",", " ")
+    if value >= 1:
+        return f"{value:,.4f}".replace(",", " ")
+    return f"{value:.6f}"
+
+
+def _format_duration(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if hours > 0:
+        return f"{hours}ч {minutes}м"
+    return f"{minutes}м"
+
+
+def _format_refresh_report(event: dict, lang: str) -> str:
+    status_raw = str(event.get("status", "OPEN")).upper()
+    status_map = {
+        "OPEN": i18n.t(lang, "STATUS_OPEN"),
+        "TP1": "TP1 ✅",
+        "TP2": "TP2 ✅",
+        "SL": "SL ⛔",
+        "EXP": "EXP ⌛",
+        "EXPIRED": "EXP ⌛",
+        "NO_FILL": "NF ⏳",
+        "BE": "BE",
+        "AMBIGUOUS": i18n.t(lang, "STATUS_AMBIGUOUS"),
+    }
+    status_label = status_map.get(status_raw, status_raw)
+    symbol = event.get("symbol")
+    side = event.get("side")
+    score = int(event.get("score", 0))
+    last_price = event.get("last_price")
+    last_checked_at = int(event.get("last_checked_at") or time.time())
+    created_at = int(event.get("ts", 0))
+    entry_from = float(event.get("poi_low", 0.0))
+    entry_to = float(event.get("poi_high", 0.0))
+    entry_touched = bool(event.get("entry_touched"))
+    lines = [
+        "✅ Обновлено",
+        "",
+        f"Сигнал: {symbol} {side} (Score {score})",
+    ]
+    if last_price is not None:
+        lines.append(f"Текущая цена: {_format_price(float(last_price))}")
+    lines.append(f"Последняя проверка: {_format_event_time(last_checked_at)}")
+    lines.append("")
+    if status_raw == "OPEN":
+        status_label = (
+            "OPEN / активирован" if entry_touched else "OPEN / ожидает вход"
+        )
+    lines.append(f"Статус: {status_label}")
+    if status_raw == "OPEN":
+        touched_label = "тронуто" if entry_touched else "не тронуто"
+        lines.append(f"• entry: {entry_from:.4f}–{entry_to:.4f} ({touched_label})")
+        remaining = SIGNAL_TTL_SECONDS - (int(time.time()) - created_at)
+        lines.append(f"• до конца жизни: {_format_duration(remaining)}")
+    elif status_raw in {"NO_FILL"}:
+        lines.append("• прошло 12ч")
+        lines.append("• цена не дошла до входа")
+    elif status_raw in {"EXP", "EXPIRED"}:
+        lines.append("• прошло 12ч после активации")
+        lines.append("• сценарий устарел")
+    return "\n".join(lines)
 
 
 def _parse_refresh_kline(kline: list[Any]) -> dict | None:
@@ -859,6 +963,7 @@ async def refresh_signal(event_id: int) -> dict | None:
     with binance_request_context("signal_refresh"):
         data = await fetch_klines(symbol, "5m", limit, start_ms=start_ms)
     candles: list[dict] = []
+    last_price: float | None = None
     if data:
         cutoff_ms = cutoff_ts * 1000
         for item in data:
@@ -870,6 +975,8 @@ async def refresh_signal(event_id: int) -> dict | None:
             if parsed["open_time"] > cutoff_ms:
                 break
             candles.append(parsed)
+        if candles:
+            last_price = candles[-1]["close"]
 
     entry_from = float(event.get("poi_low", 0.0))
     entry_to = float(event.get("poi_high", 0.0))
@@ -929,6 +1036,7 @@ async def refresh_signal(event_id: int) -> dict | None:
     updated["tp1_hit"] = tp1_hit
     updated["tp2_hit"] = tp2_hit
     updated["last_checked_at"] = now
+    updated["last_price"] = last_price
     return updated
 
 
@@ -1054,24 +1162,27 @@ def _archive_inline_kb(
     for event in events:
         event_status = str(event.get("status", ""))
         status_icon = _status_icon(event_status)
-        row = [
-            InlineKeyboardButton(
-                text=(
-                    f"{status_icon} Score {int(event.get('score', 0))} · "
-                    f"{event.get('symbol')} {event.get('side')} | "
-                    f"{_format_event_time(int(event.get('ts', 0)))}"
-                ),
-                callback_data=f"sig_open:{event.get('id')}",
-            )
-        ]
-        if is_admin_user and event_status == "OPEN":
-            row.append(
+        rows.append(
+            [
                 InlineKeyboardButton(
-                    text="🔄",
-                    callback_data=f"sig_refresh:{event.get('id')}",
+                    text=(
+                        f"{status_icon} Score {int(event.get('score', 0))} • "
+                        f"{event.get('symbol')} {event.get('side')} | "
+                        f"{_format_event_time(int(event.get('ts', 0)))}"
+                    ),
+                    callback_data=f"sig_open:{event.get('id')}",
                 )
+            ]
+        )
+        if is_admin_user:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="🔄 Обновить",
+                        callback_data=f"sig_refresh:{event.get('id')}",
+                    )
+                ]
             )
-        rows.append(row)
 
     nav_row: list[InlineKeyboardButton] = []
     if page > 1:
@@ -1110,11 +1221,11 @@ def _archive_detail_kb(
     is_admin_user: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    if is_admin_user and event_status == "OPEN":
+    if is_admin_user:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🔄",
+                    text="🔄 Обновить",
                     callback_data=f"sig_refresh:{event_id}",
                 )
             ]
@@ -1218,7 +1329,7 @@ async def sig_refresh(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("Недостаточно прав", show_alert=True)
         return
-    await callback.answer("🔄 Обновляю…")
+    await callback.answer("🔄 Проверяю Binance…")
     event_id = int(callback.data.split(":", 1)[1])
     refreshed = await refresh_signal(event_id)
     if refreshed is None:
@@ -1232,10 +1343,12 @@ async def sig_refresh(callback: CallbackQuery):
         await callback.answer("Binance временно недоступен", show_alert=True)
         return
 
-    if callback.message is None:
-        return
     lang = get_user_lang(callback.from_user.id) if callback.from_user else None
     lang = lang or "ru"
+    report_text = _format_refresh_report(refreshed, lang)
+
+    if callback.message is None:
+        return
     if callback.message.text and callback.message.text.startswith("📊"):
         context = _get_history_context(callback.from_user.id)
         if context:
@@ -1263,11 +1376,12 @@ async def sig_refresh(callback: CallbackQuery):
                     is_admin_user=True,
                 ),
             )
+            await callback.message.answer(report_text)
             return
 
     event = get_signal_event(user_id=None, event_id=event_id)
     if event is None:
-        await callback.message.answer("Обновлено.")
+        await callback.message.answer(report_text)
         return
     back_callback = "archive:back:all"
     context = _get_history_context(callback.from_user.id)
@@ -1281,9 +1395,11 @@ async def sig_refresh(callback: CallbackQuery):
                 lang=lang,
                 back_callback=back_callback,
                 event_id=event_id,
+                event_status=str(event.get("status", "")),
                 is_admin_user=True,
             ),
         )
+    await callback.message.answer(report_text)
 
 @dp.callback_query(F.data == "ai_notify_on")
 async def ai_notify_on(callback: CallbackQuery):
