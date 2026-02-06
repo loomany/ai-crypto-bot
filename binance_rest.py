@@ -26,7 +26,7 @@ BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 # cache by (symbol, interval) to reuse across different LIMIT requests
 # value: (ts, data_list)
 _KLINES_CACHE: dict[tuple[str, str], tuple[float, list]] = {}
-_KLINES_INFLIGHT: dict[tuple[str, str, int, int], asyncio.Task] = {}
+_KLINES_INFLIGHT: dict[tuple[str, str, int], tuple[asyncio.Task, int]] = {}
 _KLINES_CACHE_HITS: dict[str, int] = {}
 _KLINES_CACHE_MISSES: dict[str, int] = {}
 _KLINES_INFLIGHT_AWAITS: dict[str, int] = {}
@@ -58,11 +58,13 @@ def _env_int(name: str, default: int) -> int:
 
 _KLINES_CACHE_TTL_SEC_DEFAULT = 20
 _KLINES_CACHE_TTL_BY_INTERVAL = {
-    "1d": _env_int("KLINES_TTL_1D", 60 * 30),
-    "4h": _env_int("KLINES_TTL_4H", 60 * 15),
-    "1h": _env_int("KLINES_TTL_1H", 300),
-    "15m": _env_int("KLINES_TTL_15M", 120),
-    "5m": _env_int("KLINES_TTL_5M", 120),
+    "1d": _env_int("KLINES_TTL_1D", 60 * 60 * 6),
+    "4h": _env_int("KLINES_TTL_4H", 60 * 60),
+    "1h": _env_int("KLINES_TTL_1H", 60 * 20),
+    "30m": _env_int("KLINES_TTL_30M", 60 * 15),
+    "15m": _env_int("KLINES_TTL_15M", 60 * 10),
+    "5m": _env_int("KLINES_TTL_5M", 60 * 4),
+    "3m": _env_int("KLINES_TTL_3M", 90),
     "1m": _env_int("KLINES_TTL_1M", 60),
 }
 _KLINES_CACHE_LOCK = asyncio.Lock()
@@ -367,11 +369,12 @@ async def fetch_klines(
         return None
 
     _increment_stat(_KLINES_CACHE_MISSES, module)
-    inflight_key = (symbol, interval, int(start_ms or 0), limit)
+    inflight_key = (symbol, interval, int(start_ms or 0))
     created = False
+    requested_limit = limit
     async with _KLINES_INFLIGHT_LOCK:
-        task = _KLINES_INFLIGHT.get(inflight_key)
-        if task is None:
+        inflight = _KLINES_INFLIGHT.get(inflight_key)
+        if inflight is None:
             created = True
             task = asyncio.create_task(
                 _fetch_klines_from_binance(
@@ -383,20 +386,43 @@ async def fetch_klines(
                     now=now,
                 )
             )
-            _KLINES_INFLIGHT[inflight_key] = task
+            _KLINES_INFLIGHT[inflight_key] = (task, requested_limit)
+        else:
+            task, inflight_limit = inflight
+            if inflight_limit < requested_limit:
+                created = True
+                task = asyncio.create_task(
+                    _fetch_klines_from_binance(
+                        symbol,
+                        interval,
+                        requested_limit,
+                        start_ms=start_ms,
+                        cache_key=cache_key,
+                        now=now,
+                    )
+                )
+                _KLINES_INFLIGHT[inflight_key] = (task, requested_limit)
 
     if not created:
         _increment_stat(_KLINES_INFLIGHT_AWAITS, module)
         print(
             f"[binance_rest] INFLIGHT await klines {symbol} {interval} {limit}"
         )
-        return await task
+        data = await task
+        if not isinstance(data, list):
+            return None
+        return data[-limit:]
 
     try:
-        return await task
+        data = await task
+        if not isinstance(data, list):
+            return None
+        return data[-limit:]
     finally:
         async with _KLINES_INFLIGHT_LOCK:
-            _KLINES_INFLIGHT.pop(inflight_key, None)
+            inflight = _KLINES_INFLIGHT.get(inflight_key)
+            if inflight and inflight[0] is task:
+                _KLINES_INFLIGHT.pop(inflight_key, None)
 
 
 async def _fetch_klines_from_binance(

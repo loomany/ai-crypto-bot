@@ -137,6 +137,20 @@ from settings import SIGNAL_TTL_SECONDS
 
 logger = logging.getLogger(__name__)
 DEFAULT_LANG = "ru"
+_LOG_THROTTLE_SEC = 30.0
+_LAST_LOG_TS: Dict[str, float] = {}
+
+
+def _log_throttled(key: str, message: str, *args: Any, exc: Exception | None = None) -> None:
+    now = time.monotonic()
+    last = _LAST_LOG_TS.get(key, 0.0)
+    if now - last < _LOG_THROTTLE_SEC:
+        return
+    _LAST_LOG_TS[key] = now
+    if exc is not None:
+        logger.exception(message, *args)
+    else:
+        logger.warning(message, *args)
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -296,13 +310,28 @@ def migrate_legacy_notify_settings() -> None:
             continue
         try:
             set_user_pref(int(chat_id), key, int(enabled))
-        except Exception:
+        except Exception as exc:
+            _log_throttled(
+                "db_migrate_pref",
+                "[db_error] op=set_user_pref chat_id=%s key=%s err=%s",
+                chat_id,
+                key,
+                exc,
+                exc=exc,
+            )
             continue
 
     for (chat_id,) in legacy_rows:
         try:
             set_user_pref(int(chat_id), "ai_signals_enabled", 1)
-        except Exception:
+        except Exception as exc:
+            _log_throttled(
+                "db_migrate_legacy_pref",
+                "[db_error] op=set_user_pref chat_id=%s key=ai_signals_enabled err=%s",
+                chat_id,
+                exc,
+                exc=exc,
+            )
             continue
 
 
@@ -1916,8 +1945,19 @@ def _format_market_hub(now: float, lang: str) -> str:
     else:
         last_tick = i18n.t(lang, "SYSTEM_STATUS_LAST_CYCLE_NO_DATA")
 
-    err = MARKET_HUB.last_error or i18n.t(lang, "SYSTEM_STATUS_LAST_CYCLE_NO_DATA")
+    err = MARKET_HUB.last_error
     symbols_count = len(getattr(MARKET_HUB, "_symbols", []) or [])
+    updated = getattr(MARKET_HUB, "last_cycle_updated", 0)
+    skipped = getattr(MARKET_HUB, "last_cycle_skipped_no_klines", 0)
+    errors = getattr(MARKET_HUB, "last_cycle_errors", 0)
+    dt_ms = getattr(MARKET_HUB, "last_cycle_ms", 0)
+    cache_size = getattr(MARKET_HUB, "last_cycle_cache_size", 0)
+    if updated > 0:
+        cycle_state = "ok"
+    elif skipped > 0 or errors > 0 or symbols_count > 0:
+        cycle_state = "empty"
+    else:
+        cycle_state = "idle"
     status_label = _build_status_label(
         ok=bool(MARKET_HUB.last_ok_at) and not MARKET_HUB.last_error,
         warn=bool(MARKET_HUB.last_error) or not MARKET_HUB.last_ok_at,
@@ -1928,9 +1968,13 @@ def _format_market_hub(now: float, lang: str) -> str:
     )
     details = [
         i18n.t(lang, "DIAG_LAST_TICK", tick=last_tick),
-        i18n.t(lang, "DIAG_ERRORS", error=f"⚠️ {err}" if MARKET_HUB.last_error else err),
+        f"• Последний цикл: {cycle_state} | updated={updated} skipped={skipped} "
+        f"errors={errors} dt={dt_ms}ms",
+        f"• Cache: symbols_with_data={cache_size}",
         i18n.t(lang, "DIAG_ACTIVE_SYMBOLS", count=symbols_count),
     ]
+    if err:
+        details.append(i18n.t(lang, "DIAG_ERRORS", error=f"⚠️ {err}"))
     return _format_section(i18n.t(lang, "DIAG_MARKET_HUB_TITLE"), status_label, details, lang)
 
 
@@ -3096,8 +3140,14 @@ async def user_lock_callback(callback: CallbackQuery):
                 user_id=user_id,
             ),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_throttled(
+            "tg_send_fail_user_lock",
+            "[tg_send_fail] user_id=%s action=user_lock_notice err=%s",
+            user_id,
+            exc,
+            exc=exc,
+        )
 
 
 @dp.callback_query(F.data.regexp(r"^user_unlock:\d+$"))
@@ -3121,8 +3171,14 @@ async def user_unlock_callback(callback: CallbackQuery):
             user_id,
             i18n.t(get_user_lang(user_id) or "ru", "USER_UNLOCKED_NOTICE"),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_throttled(
+            "tg_send_fail_user_unlock",
+            "[tg_send_fail] user_id=%s action=user_unlock_notice err=%s",
+            user_id,
+            exc,
+            exc=exc,
+        )
 
 
 @dp.callback_query(F.data.regexp(r"^user_del_confirm:\d+$"))
@@ -3168,8 +3224,14 @@ async def user_delete_callback(callback: CallbackQuery):
             user_id,
             i18n.t(get_user_lang(user_id) or "ru", "USER_DELETED_NOTICE"),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_throttled(
+            "tg_send_fail_user_delete",
+            "[tg_send_fail] user_id=%s action=user_deleted_notice err=%s",
+            user_id,
+            exc,
+            exc=exc,
+        )
     lang = get_user_lang(callback.from_user.id) if callback.from_user else None
     lang = lang or "ru"
     text, markup = _users_list_payload(
@@ -3240,12 +3302,24 @@ async def receipt_message_handler(message: Message):
     if admin_chat_id != 0:
         try:
             await message.bot.send_message(admin_chat_id, admin_text)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_throttled(
+                "tg_send_fail_receipt",
+                "[tg_send_fail] user_id=%s action=receipt_admin_text err=%s",
+                user.id,
+                exc,
+                exc=exc,
+            )
         try:
             await message.copy_to(admin_chat_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_throttled(
+                "tg_send_fail_receipt_copy",
+                "[tg_send_fail] user_id=%s action=receipt_copy err=%s",
+                user.id,
+                exc,
+                exc=exc,
+            )
     await message.answer(i18n.t(get_user_lang(user.id) or "ru", "RECEIPT_SENT_CONFIRM"))
 
 
@@ -4011,7 +4085,13 @@ async def pump_scan_once(bot: Bot) -> None:
         total = len(candidates)
         try:
             cursor = int(get_state("pumpdump_cursor", "0") or "0")
-        except Exception:
+        except Exception as exc:
+            _log_throttled(
+                "db_pumpdump_cursor",
+                "[db_error] op=get_state key=pumpdump_cursor err=%s",
+                exc,
+                exc=exc,
+            )
             cursor = 0
         if cursor >= len(candidates):
             cursor = 0
