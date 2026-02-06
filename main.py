@@ -520,6 +520,10 @@ WATCHLIST_MAX = int(os.getenv("WATCHLIST_MAX", "30"))
 WATCHLIST_TTL_MIN = int(os.getenv("WATCHLIST_TTL_MIN", "30"))
 WATCHLIST_COOLDOWN_MIN = int(os.getenv("WATCHLIST_COOLDOWN_MIN", "45"))
 WATCHLIST_SCAN_EVERY_SEC = int(os.getenv("WATCHLIST_SCAN_EVERY_SEC", "60"))
+MAX_WATCHLIST_CONCURRENCY = int(os.getenv("MAX_WATCHLIST_CONCURRENCY", "8"))
+WATCHLIST_SLOW_REPORT_THRESHOLD_SEC = float(
+    os.getenv("WATCHLIST_SLOW_REPORT_THRESHOLD_SEC", "40")
+)
 AI_DEEP_TOP_K = int(os.getenv("AI_DEEP_TOP_K", os.getenv("AI_MAX_DEEP_PER_CYCLE", "3")))
 CANDIDATE_SCORE_MIN = int(os.getenv("CANDIDATE_SCORE_MIN", "40"))
 
@@ -1938,6 +1942,22 @@ def _format_samples(samples: list[tuple[str, float]]) -> str:
     return ", ".join(formatted)
 
 
+def _format_slowest_symbols(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return "-"
+    parts = []
+    for item in items:
+        symbol = item.get("symbol", "-")
+        total_dt = item.get("total_dt", 0.0)
+        steps = item.get("steps", {}) or {}
+        step_parts = [
+            f"{key}={value:.2f}s" for key, value in sorted(steps.items(), key=lambda kv: kv[1], reverse=True)
+        ]
+        steps_str = ", ".join(step_parts) if step_parts else "-"
+        parts.append(f"{symbol} {total_dt:.2f}s ({steps_str})")
+    return "; ".join(parts)
+
+
 def _format_market_hub(now: float, lang: str) -> str:
     if MARKET_HUB.last_ok_at:
         ok_ago = int(now - MARKET_HUB.last_ok_at)
@@ -2130,6 +2150,23 @@ def _format_ai_section(st, now: float, lang: str) -> str:
     cyc = extra.get("cycle")
     if cyc:
         details.append(i18n.t(lang, "DIAG_CYCLE_TIME", cycle=cyc))
+
+    state = st.state or {}
+    watchlist_dt = state.get("last_watchlist_dt")
+    if isinstance(watchlist_dt, (int, float)):
+        details.append(f"• Watchlist cycle dt: {watchlist_dt:.2f}s")
+    timeout_at = state.get("last_watchlist_timeout_at")
+    if isinstance(timeout_at, (int, float)) and timeout_at > 0:
+        details.append(f"• Watchlist timeout: {_human_ago(int(now - timeout_at), lang)}")
+    timeout_count = state.get("fail_symbol_timeout_count")
+    if isinstance(timeout_count, int):
+        details.append(f"• Symbol timeouts: {timeout_count}")
+    slowest_symbols = state.get("top_slowest_symbols")
+    if slowest_symbols:
+        details.append(f"• Top slowest: {_format_slowest_symbols(slowest_symbols)}")
+    last_timeout_breakdown = state.get("last_timeout_breakdown")
+    if last_timeout_breakdown:
+        details.append(f"• Last timeout breakdown: {last_timeout_breakdown}")
 
     details.append(i18n.t(lang, "DIAG_AI_CONFIG_TITLE"))
     details.extend(
@@ -4361,7 +4398,11 @@ async def watchlist_scan_once() -> None:
     symbols = [row["symbol"] for row in rows]
     priority_scores = {row["symbol"]: float(row["score"]) for row in rows}
     blocked_symbols = get_blocked_symbols()
+    fetch_symbols_start = time.perf_counter()
     spot_symbols = await get_spot_usdt_symbols()
+    fetch_symbols_dt = time.perf_counter() - fetch_symbols_start
+    if module_state:
+        module_state.state["fetch_symbols_dt"] = fetch_symbols_dt
     allowed_symbols = set(spot_symbols) if spot_symbols else set(symbols)
     blocked_in_watchlist = [symbol for symbol in symbols if symbol in blocked_symbols]
     missing_in_binance = (
@@ -4410,12 +4451,18 @@ async def watchlist_scan_once() -> None:
             time_budget=BUDGET,
             deep_scan_limit=AI_DEEP_TOP_K,
             priority_scores=priority_scores,
+            max_concurrency=MAX_WATCHLIST_CONCURRENCY,
+            diag_state=module_state.state if module_state else None,
         )
     print("[ai_signals] watchlist stats:", stats)
     module_state = MODULES.get("ai_signals")
     if module_state and isinstance(stats, dict):
         module_state.last_stats = stats
         module_state.fails_top = stats.get("fails", {})
+        module_state.state["top_slowest_symbols"] = stats.get("slowest_symbols", [])
+        module_state.state["fail_symbol_timeout_count"] = stats.get("fails", {}).get(
+            "fail_symbol_timeout", 0
+        )
         prev_near_miss = module_state.near_miss
         try:
             module_state.near_miss = _format_near_miss(stats.get("near_miss", {}), lang)
@@ -4425,6 +4472,23 @@ async def watchlist_scan_once() -> None:
             logger.exception("AI signals error")
     deep_scans_done = stats.get("deep_scans_done", 0) if isinstance(stats, dict) else 0
     sent_count = 0
+    state = module_state.state if module_state else {}
+
+    def _merge_symbol_step(symbol: str, step: str, dt: float) -> None:
+        if not symbol or dt <= 0:
+            return
+        items = state.get("top_slowest_symbols") or []
+        for item in items:
+            if item.get("symbol") == symbol:
+                steps = item.setdefault("steps", {})
+                steps[step] = dt
+                item["total_dt"] = item.get("total_dt", 0.0) + dt
+                break
+        else:
+            items.append({"symbol": symbol, "total_dt": dt, "steps": {step: dt}})
+        items.sort(key=lambda item: item.get("total_dt", 0.0), reverse=True)
+        state["top_slowest_symbols"] = items[:5]
+
     for signal in _select_signals_for_cycle(signals):
         if time.time() - start > BUDGET:
             print("[AI] watchlist budget exceeded, stopping early")
@@ -4436,16 +4500,20 @@ async def watchlist_scan_once() -> None:
         print(
             f"[ai_signals] WATCHLIST SEND {signal['symbol']} {signal['direction']} score={score}"
         )
+        send_start = time.perf_counter()
         await send_signal_to_all(signal)
+        _merge_symbol_step(signal.get("symbol", ""), "send_dt", time.perf_counter() - send_start)
         sent_count += 1
         ttl_until = now + WATCHLIST_TTL_MIN * 60
         cooldown_until = now + WATCHLIST_COOLDOWN_MIN * 60
+        db_start = time.perf_counter()
         update_watchlist_after_signal(
             signal["symbol"],
             ttl_until=ttl_until,
             cooldown_until=cooldown_until,
             last_seen=now,
         )
+        _merge_symbol_step(signal.get("symbol", ""), "db_dt", time.perf_counter() - db_start)
 
     pruned = prune_watchlist(now, WATCHLIST_MAX)
     active_watchlist, total_watchlist = get_watchlist_counts(now)
@@ -4460,6 +4528,26 @@ async def watchlist_scan_once() -> None:
     )
 
 
+def _build_watchlist_timeout_report(
+    *,
+    state: Dict[str, Any],
+    cycle_dt: float,
+    timeout_s: float,
+    timed_out: bool,
+) -> str:
+    fetch_symbols_dt = state.get("fetch_symbols_dt")
+    fetch_str = f"{fetch_symbols_dt:.2f}s" if isinstance(fetch_symbols_dt, (int, float)) else "-"
+    slowest = _format_slowest_symbols(state.get("top_slowest_symbols") or [])
+    timeout_count = state.get("fail_symbol_timeout_count", 0)
+    status = "timeout" if timed_out else "slow"
+    return (
+        f"{status} watchlist dt={cycle_dt:.2f}s limit={timeout_s}s "
+        f"fetch_symbols_dt={fetch_str} "
+        f"symbol_timeouts={timeout_count} "
+        f"slowest={slowest}"
+    )
+
+
 async def watchlist_worker_loop() -> None:
     while True:
         cycle_start = time.perf_counter()
@@ -4467,13 +4555,39 @@ async def watchlist_worker_loop() -> None:
         print("[ai_signals] watchlist cycle start")
         mark_tick("ai_signals", extra="watchlist heartbeat")
         t0 = time.perf_counter()
+        module_state = MODULES.get("ai_signals")
         try:
             await asyncio.wait_for(watchlist_scan_once(), timeout=timeout_s)
-            print(f"[ai_signals] watchlist cycle ok, dt={time.perf_counter() - t0:.2f}s")
+            cycle_dt = time.perf_counter() - t0
+            print(f"[ai_signals] watchlist cycle ok, dt={cycle_dt:.2f}s")
+            if module_state:
+                module_state.state["last_watchlist_dt"] = cycle_dt
+            if cycle_dt > WATCHLIST_SLOW_REPORT_THRESHOLD_SEC:
+                state = module_state.state if module_state else {}
+                report = _build_watchlist_timeout_report(
+                    state=state,
+                    cycle_dt=cycle_dt,
+                    timeout_s=timeout_s,
+                    timed_out=False,
+                )
+                if module_state:
+                    module_state.state["last_timeout_breakdown"] = report
+                print(f"[ai_signals] watchlist slow report: {report}")
         except asyncio.TimeoutError:
-            print(
-                f"[ai_signals] watchlist TIMEOUT >{timeout_s}s, dt={time.perf_counter() - t0:.2f}s"
+            cycle_dt = time.perf_counter() - t0
+            print(f"[ai_signals] watchlist TIMEOUT >{timeout_s}s, dt={cycle_dt:.2f}s")
+            if module_state:
+                module_state.state["last_watchlist_timeout_at"] = time.time()
+            state = module_state.state if module_state else {}
+            report = _build_watchlist_timeout_report(
+                state=state,
+                cycle_dt=cycle_dt,
+                timeout_s=timeout_s,
+                timed_out=True,
             )
+            if module_state:
+                module_state.state["last_timeout_breakdown"] = report
+            print(f"[ai_signals] watchlist timeout report: {report}")
             mark_error("ai_signals", f"watchlist timeout >{timeout_s}s")
         except Exception as e:
             print(f"[ai_signals] watchlist ERROR {type(e).__name__}: {e}")

@@ -47,6 +47,9 @@ AI_CHEAP_LIMIT = int(os.getenv("AI_CHEAP_LIMIT", "120"))
 AI_CHEAP_TF = os.getenv("AI_CHEAP_TF", "15m")
 AGGTRADES_TOP_K = int(os.getenv("AGGTRADES_TOP_K", "2"))
 KLINES_CONCURRENCY = int(os.getenv("KLINES_CONCURRENCY", "10"))
+PER_SYMBOL_TIMEOUT_SEC = float(os.getenv("PER_SYMBOL_TIMEOUT_SEC", "2.5"))
+MAX_WATCHLIST_CONCURRENCY = int(os.getenv("MAX_WATCHLIST_CONCURRENCY", "8"))
+SLOW_REPORT_SYMBOLS = int(os.getenv("SLOW_REPORT_SYMBOLS", "5"))
 REQUIRE_15M_CONFIRM_ON_EXPANDED = os.getenv("REQUIRE_15M_CONFIRM_ON_EXPANDED", "true").lower() in (
     "1",
     "true",
@@ -254,8 +257,12 @@ def _volume_ratio(volumes: Sequence[float]) -> Tuple[float, float]:
     return ratio, avg
 
 
-async def _gather_klines(symbol: str) -> Optional[Dict[str, List[Candle]]]:
-    return await get_bundle_with_fallback(symbol, ("1d", "4h", "1h", "15m", "5m"))
+async def _gather_klines(
+    symbol: str,
+    *,
+    timings: dict[str, float] | None = None,
+) -> Optional[Dict[str, List[Candle]]]:
+    return await get_bundle_with_fallback(symbol, ("1d", "4h", "1h", "15m", "5m"), timings=timings)
 
 
 async def _gather_stage_a_klines(
@@ -263,8 +270,14 @@ async def _gather_stage_a_klines(
     *,
     tf: str,
     limit: int,
+    timings: dict[str, float] | None = None,
 ) -> Optional[Dict[str, List[Candle]]]:
-    return await get_quick_with_fallback(symbol, tfs=(tf,), limit_overrides={tf: limit})
+    return await get_quick_with_fallback(
+        symbol,
+        tfs=(tf,),
+        limit_overrides={tf: limit},
+        timings=timings,
+    )
 
 
 def _pre_score(candles: Dict[str, List[Candle]], *, tf: str, symbol: str) -> float:
@@ -380,6 +393,7 @@ async def _prepare_signal(
     near_miss: Dict[str, int] | None = None,
     debug_state: Dict[str, int] | None = None,
     fetch_orderflow: bool = True,
+    timings: dict[str, float] | None = None,
 ) -> Optional[Dict[str, Any]]:
     def _inc_fail(reason: str) -> None:
         if stats is None:
@@ -422,6 +436,7 @@ async def _prepare_signal(
             f"side={scenario}"
         )
 
+    setup_start = time.perf_counter()
     candles_1d = candles["1d"]
     candles_4h = candles["4h"]
     candles_1h = candles["1h"]
@@ -637,6 +652,10 @@ async def _prepare_signal(
         _inc_fail("fail_atr_ok")
         return None
 
+    if timings is not None:
+        timings["setup_dt"] = time.perf_counter() - setup_start
+
+    confirm_start = time.perf_counter()
     if fetch_orderflow:
         orderflow = await analyze_orderflow(symbol)
     else:
@@ -645,7 +664,10 @@ async def _prepare_signal(
     # --- AI-паттерны и Market Regime ---
     pattern_info = await analyze_ai_patterns(symbol, candles_1h, candles_15m, candles_5m)
     market_info = await get_market_regime()
+    if timings is not None:
+        timings["confirm_dt"] = time.perf_counter() - confirm_start
 
+    score_start = time.perf_counter()
     context = {
         "candidate_side": candidate_side,
         "global_trend": global_trend,
@@ -723,6 +745,9 @@ async def _prepare_signal(
         _inc_fail("fail_volume_ratio")
         return None
 
+    if timings is not None:
+        timings["score_dt"] = time.perf_counter() - score_start
+
     support_level = nearest_low if nearest_low is not None else level_touched
     resistance_level = nearest_high if nearest_high is not None else level_touched
 
@@ -769,6 +794,8 @@ async def scan_market(
     time_budget: float | None = None,
     deep_scan_limit: int | None = None,
     priority_scores: Dict[str, float] | None = None,
+    max_concurrency: int | None = None,
+    diag_state: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]] | Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Сканирует весь рынок Binance по спотовым USDT-парам и возвращает сигналы.
@@ -812,9 +839,60 @@ async def scan_market(
     deep_scans_done = 0
     max_deep_scans = AI_DEEP_TOP_K if deep_scan_limit is None else deep_scan_limit
     semaphore = asyncio.Semaphore(KLINES_CONCURRENCY)
+    symbol_semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency else None
+    symbol_timings: Dict[str, Dict[str, float]] = {}
+
+    def _ensure_symbol_timings(symbol: str) -> Dict[str, float]:
+        return symbol_timings.setdefault(symbol, {})
+
+    def _update_total(symbol: str, dt: float) -> None:
+        timings = _ensure_symbol_timings(symbol)
+        timings["total_dt"] = timings.get("total_dt", 0.0) + dt
+
+    def _refresh_slowest() -> None:
+        items = []
+        for sym, timings in symbol_timings.items():
+            total = timings.get("total_dt", 0.0)
+            if total <= 0:
+                continue
+            steps = {k: v for k, v in timings.items() if k != "total_dt"}
+            items.append(
+                {
+                    "symbol": sym,
+                    "total_dt": total,
+                    "steps": steps,
+                }
+            )
+        items.sort(key=lambda item: item["total_dt"], reverse=True)
+        top_items = items[:SLOW_REPORT_SYMBOLS]
+        if diag_state is not None:
+            diag_state["top_slowest_symbols"] = top_items
+
+    def _build_slowest() -> list[dict[str, Any]]:
+        items = []
+        for sym, timings in symbol_timings.items():
+            total = timings.get("total_dt", 0.0)
+            if total <= 0:
+                continue
+            steps = {k: v for k, v in timings.items() if k != "total_dt"}
+            items.append(
+                {
+                    "symbol": sym,
+                    "total_dt": total,
+                    "steps": steps,
+                }
+            )
+        items.sort(key=lambda item: item["total_dt"], reverse=True)
+        return items[:SLOW_REPORT_SYMBOLS]
 
     async def _with_semaphore(awaitable, *args, **kwargs):
         async with semaphore:
+            return await awaitable(*args, **kwargs)
+
+    async def _with_symbol_semaphore(awaitable, *args, **kwargs):
+        if symbol_semaphore is None:
+            return await awaitable(*args, **kwargs)
+        async with symbol_semaphore:
             return await awaitable(*args, **kwargs)
 
     def _add_pre_score_sample(samples: list[tuple[str, float]], symbol: str, score: float) -> None:
@@ -832,6 +910,7 @@ async def scan_market(
                     "fails": fails,
                     "near_miss": near_miss,
                     "pre_score": pre_score_stats,
+                    "slowest_symbols": _build_slowest(),
                 }
             return []
     else:
@@ -839,29 +918,56 @@ async def scan_market(
 
     signals: List[Dict[str, Any]] = []
 
+    async def _run_prescore(
+        symbol: str,
+    ) -> tuple[str, Optional[Dict[str, List[Candle]]], Optional[float]]:
+        symbol_start = time.perf_counter()
+        timings = _ensure_symbol_timings(symbol)
+        try:
+            quick = await _with_semaphore(
+                _gather_stage_a_klines,
+                symbol,
+                tf=AI_CHEAP_TF,
+                limit=AI_CHEAP_LIMIT,
+                timings=timings,
+            )
+            if not quick:
+                return symbol, None, None
+            prescore_start = time.perf_counter()
+            pre_score_value = _pre_score(quick, tf=AI_CHEAP_TF, symbol=symbol)
+            timings["prescore_dt"] = time.perf_counter() - prescore_start
+            return symbol, quick, pre_score_value
+        finally:
+            _update_total(symbol, time.perf_counter() - symbol_start)
+            _refresh_slowest()
+
+    async def _run_prescore_with_timeout(
+        symbol: str,
+    ) -> tuple[str, Optional[Dict[str, List[Candle]]], Optional[float]]:
+        try:
+            coro = _with_symbol_semaphore(_run_prescore, symbol)
+            if PER_SYMBOL_TIMEOUT_SEC > 0:
+                return await asyncio.wait_for(coro, timeout=PER_SYMBOL_TIMEOUT_SEC)
+            return await coro
+        except asyncio.TimeoutError:
+            fails["fail_symbol_timeout"] = fails.get("fail_symbol_timeout", 0) + 1
+            timings = _ensure_symbol_timings(symbol)
+            timings["timeout"] = PER_SYMBOL_TIMEOUT_SEC
+            _refresh_slowest()
+            return symbol, None, None
+
     scored: List[Tuple[str, float]] = []
     for i in range(0, len(symbols), batch_size):
         if time_budget is not None and time.time() - start_time > time_budget:
             break
         batch = symbols[i : i + batch_size]
         checked += len(batch)
-        quick_tasks = [
-            asyncio.create_task(
-                _with_semaphore(
-                    _gather_stage_a_klines,
-                    symbol,
-                    tf=AI_CHEAP_TF,
-                    limit=AI_CHEAP_LIMIT,
-                )
-            )
-            for symbol in batch
-        ]
+        quick_tasks = [asyncio.create_task(_run_prescore_with_timeout(symbol)) for symbol in batch]
         quick_list = await asyncio.gather(*quick_tasks)
-        for symbol, quick in zip(batch, quick_list):
+        for symbol, quick, pre_score in quick_list:
             if not quick:
                 fails["fail_no_quick"] = fails.get("fail_no_quick", 0) + 1
                 continue
-            pre_score = _pre_score(quick, tf=AI_CHEAP_TF, symbol=symbol)
             pre_score_stats["checked"] += 1
             if pre_score < PRE_SCORE_THRESHOLD:
                 fails["fail_pre_score"] = fails.get("fail_pre_score", 0) + 1
@@ -885,6 +991,7 @@ async def scan_market(
                 "fails": fails,
                 "near_miss": near_miss,
                 "pre_score": pre_score_stats,
+                "slowest_symbols": _build_slowest(),
             }
         return signals
 
@@ -915,32 +1022,62 @@ async def scan_market(
                 "fails": fails,
                 "near_miss": near_miss,
                 "pre_score": pre_score_stats,
+                "slowest_symbols": _build_slowest(),
             }
         return signals
 
     orderflow_candidates = {
         symbol for symbol, _ in ranked[: min(AGGTRADES_TOP_K, len(candidate_symbols))]
     }
-    tasks = [asyncio.create_task(_with_semaphore(_gather_klines, symbol)) for symbol in candidate_symbols]
-    klines_list = await asyncio.gather(*tasks)
 
-    for symbol, klines in zip(candidate_symbols, klines_list):
-        if not klines:
-            fails["fail_no_klines"] = fails.get("fail_no_klines", 0) + 1
+    async def _run_deep(symbol: str) -> tuple[str, Optional[Dict[str, Any]], bool, bool]:
+        symbol_start = time.perf_counter()
+        timings = _ensure_symbol_timings(symbol)
+        try:
+            klines = await _with_semaphore(_gather_klines, symbol, timings=timings)
+            if not klines:
+                return symbol, None, False, False
+            signal = await _prepare_signal(
+                symbol,
+                klines,
+                btc_ctx,
+                free_mode=free_mode,
+                min_score=min_score,
+                stats=fails if return_stats else None,
+                near_miss=near_miss if return_stats else None,
+                debug_state=debug_state,
+                fetch_orderflow=symbol in orderflow_candidates,
+                timings=timings,
+            )
+            return symbol, signal, True, False
+        finally:
+            _update_total(symbol, time.perf_counter() - symbol_start)
+            _refresh_slowest()
+
+    async def _run_deep_with_timeout(
+        symbol: str,
+    ) -> tuple[str, Optional[Dict[str, Any]], bool, bool]:
+        try:
+            coro = _with_symbol_semaphore(_run_deep, symbol)
+            if PER_SYMBOL_TIMEOUT_SEC > 0:
+                return await asyncio.wait_for(coro, timeout=PER_SYMBOL_TIMEOUT_SEC)
+            return await coro
+        except asyncio.TimeoutError:
+            fails["fail_symbol_timeout"] = fails.get("fail_symbol_timeout", 0) + 1
+            timings = _ensure_symbol_timings(symbol)
+            timings["timeout"] = PER_SYMBOL_TIMEOUT_SEC
+            _refresh_slowest()
+            return symbol, None, False, True
+
+    tasks = [asyncio.create_task(_run_deep_with_timeout(symbol)) for symbol in candidate_symbols]
+    results = await asyncio.gather(*tasks)
+
+    for symbol, signal, has_klines, timed_out in results:
+        if not has_klines:
+            if not timed_out:
+                fails["fail_no_klines"] = fails.get("fail_no_klines", 0) + 1
             continue
         klines_ok += 1
-
-        signal = await _prepare_signal(
-            symbol,
-            klines,
-            btc_ctx,
-            free_mode=free_mode,
-            min_score=min_score,
-            stats=fails if return_stats else None,
-            near_miss=near_miss if return_stats else None,
-            debug_state=debug_state,
-            fetch_orderflow=symbol in orderflow_candidates,
-        )
         if signal:
             signals.append(signal)
 
@@ -956,5 +1093,6 @@ async def scan_market(
             "fails": fails,
             "near_miss": near_miss,
             "pre_score": pre_score_stats,
+            "slowest_symbols": _build_slowest(),
         }
     return signals
