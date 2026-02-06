@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -69,6 +70,7 @@ from health import (
     update_module_progress,
     update_current_symbol,
 )
+
 from db import (
     init_db as init_storage_db,
     get_user_pref,
@@ -130,6 +132,8 @@ from keyboards import (
     stats_inline_kb,
 )
 from settings import SIGNAL_TTL_SECONDS
+
+logger = logging.getLogger(__name__)
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -1280,7 +1284,12 @@ async def archive_list(callback: CallbackQuery):
 async def sig_open(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
+    if is_admin(callback.from_user.id):
+        await callback.answer(f"DEBUG: {callback.data}", show_alert=True)
+    else:
+        await callback.answer()
     try:
+        logger.info("sig_open callback: %s", callback.data)
         event_id = int(callback.data.split(":", 1)[1])
         event = get_signal_event(
             user_id=None,
@@ -1290,7 +1299,6 @@ async def sig_open(callback: CallbackQuery):
             lang = get_user_lang(callback.from_user.id) or "ru"
             await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
             return
-        await callback.answer()
         lang = get_user_lang(callback.from_user.id) if callback.from_user else None
         lang = lang or "ru"
         back_callback = "archive:back:all"
@@ -1310,8 +1318,9 @@ async def sig_open(callback: CallbackQuery):
         )
     except Exception as exc:
         mark_error("sig_open", str(exc))
+        logger.exception("sig_open failed: %s", exc)
         with suppress(Exception):
-            await callback.answer("Ошибка, см. логи", show_alert=True)
+            await callback.answer("⚠️ Ошибка открытия сигнала (см. логи)", show_alert=True)
 
 
 @dp.callback_query(F.data.regexp(r"^archive:back:(1d|7d|30d|all)$"))
