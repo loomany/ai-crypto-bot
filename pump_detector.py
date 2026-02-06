@@ -156,6 +156,10 @@ def _calc_signal_with_reason(
     klines_1m: list[list[str]] | list[Candle],
     klines_5m: list[list[str]] | list[Candle],
 ) -> tuple[Dict[str, Any] | None, str]:
+    if not isinstance(klines_1m, list):
+        klines_1m = []
+    if not isinstance(klines_5m, list):
+        klines_5m = []
     if not klines_1m or len(klines_1m) < 2:
         return None, "fail_short_1m_series"
     if not klines_5m or len(klines_5m) < 2:
@@ -316,10 +320,14 @@ async def scan_pumps_chunk(
             if progress_cb:
                 progress_cb(symbol)
             checked += 1
-            if isinstance(klines, Exception):
+            if isinstance(klines, BaseException) or isinstance(klines, asyncio.CancelledError):
                 fails["fail_klines_exception"] = fails.get("fail_klines_exception", 0) + 1
                 continue
             _, klines_1m, klines_5m = klines
+            if not isinstance(klines_1m, list):
+                klines_1m = []
+            if not isinstance(klines_5m, list):
+                klines_5m = []
             sig, reason = _calc_signal_with_reason(symbol, klines_1m, klines_5m)
             if sig:
                 results.append(sig)
@@ -367,9 +375,13 @@ async def scan_pumps(
 
             for symbol, klines in zip(batch, klines_list):
                 checked += 1
-                if isinstance(klines, Exception):
+                if isinstance(klines, BaseException) or isinstance(klines, asyncio.CancelledError):
                     continue
                 klines_1m, klines_5m = klines
+                if not isinstance(klines_1m, list):
+                    klines_1m = []
+                if not isinstance(klines_5m, list):
+                    klines_5m = []
                 sig = _calc_signal_from_klines(symbol, klines_1m, klines_5m)
                 if sig:
                     results.append(sig)
@@ -429,6 +441,10 @@ async def generate_pump_alert(symbol: str) -> str | None:
             get_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT, start_ms=None),
             get_klines(symbol, PUMPDUMP_5M_INTERVAL, PUMPDUMP_5M_LIMIT, start_ms=None),
         )
+    if not isinstance(klines_1m, list):
+        klines_1m = []
+    if not isinstance(klines_5m, list):
+        klines_5m = []
     if not klines_1m or not klines_5m or len(klines_1m) < 2 or len(klines_5m) < 2:
         return None
 

@@ -3780,7 +3780,9 @@ async def send_signal_to_all(
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for (chat_id, should_log, kind), res in zip(recipients, results):
-        if isinstance(res, Exception):
+        if isinstance(res, asyncio.CancelledError):
+            raise res
+        if isinstance(res, BaseException):
             print(f"[ai_signals] Failed to send to {chat_id}: {res}")
             stats["errors"] += 1
             continue
