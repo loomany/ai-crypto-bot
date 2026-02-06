@@ -101,6 +101,7 @@ from db import (
     get_signal_outcome_counts,
     get_signal_score_bucket_counts,
     get_signal_event,
+    get_signal_by_id,
     update_signal_event_refresh,
     update_signal_event_status_by_id,
     get_last_pumpdump_signal,
@@ -1280,21 +1281,15 @@ async def archive_list(callback: CallbackQuery):
     )
 
 
-@dp.callback_query(F.data.regexp(r"^sig_open:\d+$"))
+@dp.callback_query(F.data.startswith("sig_open:"))
 async def sig_open(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
-    if is_admin(callback.from_user.id):
-        await callback.answer(f"DEBUG: {callback.data}", show_alert=True)
-    else:
-        await callback.answer()
+    await callback.answer()
     try:
         logger.info("sig_open callback: %s", callback.data)
         event_id = int(callback.data.split(":", 1)[1])
-        event = get_signal_event(
-            user_id=None,
-            event_id=event_id,
-        )
+        event = get_signal_by_id(event_id)
         if event is None:
             lang = get_user_lang(callback.from_user.id) or "ru"
             await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
@@ -1320,7 +1315,7 @@ async def sig_open(callback: CallbackQuery):
         mark_error("sig_open", str(exc))
         logger.exception("sig_open failed: %s", exc)
         with suppress(Exception):
-            await callback.answer("⚠️ Ошибка открытия сигнала (см. логи)", show_alert=True)
+            await callback.answer("⚠️ Ошибка открытия сигнала", show_alert=True)
 
 
 @dp.callback_query(F.data.regexp(r"^archive:back:(1d|7d|30d|all)$"))

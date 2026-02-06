@@ -979,6 +979,10 @@ def get_signal_event(
         conn.close()
 
 
+def get_signal_by_id(signal_id: int) -> Optional[sqlite3.Row]:
+    return get_signal_event(user_id=None, event_id=signal_id)
+
+
 def update_signal_event_refresh(
     *,
     event_id: int,
