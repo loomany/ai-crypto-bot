@@ -106,6 +106,10 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE signal_events ADD COLUMN refresh_count INTEGER NOT NULL DEFAULT 0"
             )
+        if "closed_at" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN closed_at INTEGER")
+        if "close_reason" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN close_reason TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -1038,6 +1042,8 @@ def update_signal_event_refresh(
     tp1_hit: bool,
     tp2_hit: bool,
     last_checked_at: int,
+    close_reason: str | None = None,
+    closed_at: int | None = None,
 ) -> None:
     conn = get_conn()
     try:
@@ -1051,6 +1057,8 @@ def update_signal_event_refresh(
                 tp2_hit = ?,
                 last_checked_at = ?,
                 updated_at = ?,
+                close_reason = COALESCE(?, close_reason),
+                closed_at = COALESCE(closed_at, ?),
                 refresh_count = COALESCE(refresh_count, 0) + 1
             WHERE id = ?
             """,
@@ -1062,6 +1070,8 @@ def update_signal_event_refresh(
                 1 if tp2_hit else 0,
                 int(last_checked_at),
                 int(time.time()),
+                close_reason,
+                closed_at,
                 int(event_id),
             ),
         )
