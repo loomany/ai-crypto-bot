@@ -191,8 +191,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "AI_STATS_BUCKET_LINE": "{label}:  {total} (TP1+: {winrate:.0f}%)",
         "HISTORY_TITLE": "📊 История сигналов ({period})",
         "HISTORY_SUMMARY": (
-            "✅ Прошло: {passed} | ❌ Не прошло: {failed} | "
-            "⏳ Neutral: {neutral} | ⏰ В процессе: {in_progress}"
+            "✅ Прошло: {passed}\n"
+            "❌ Не прошло: {failed}\n"
+            "⏳ Neutral: {neutral}\n"
+            "⏰ В процессе: {in_progress}"
         ),
         "HISTORY_STATS_TITLE": "📊 Статистика ({period}) — по Score",
         "HISTORY_SCORE_BUCKET_LINE": (
@@ -624,8 +626,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "AI_STATS_BUCKET_LINE": "{label}:  {total} (TP1+: {winrate:.0f}%)",
         "HISTORY_TITLE": "📊 Signal history ({period})",
         "HISTORY_SUMMARY": (
-            "✅ Success: {passed} | ❌ Fail: {failed} | "
-            "⏳ Neutral: {neutral} | ⏰ In progress: {in_progress}"
+            "✅ Success: {passed}\n"
+            "❌ Fail: {failed}\n"
+            "⏳ Neutral: {neutral}\n"
+            "⏰ In progress: {in_progress}"
         ),
         "HISTORY_STATS_TITLE": "📊 Stats ({period}) — by Score",
         "HISTORY_SCORE_BUCKET_LINE": (
