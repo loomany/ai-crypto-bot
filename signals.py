@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import math
 import os
 import time
@@ -60,6 +61,9 @@ _BTC_CONTEXT_CACHE: Dict[str, Any] | None = None
 _BTC_CONTEXT_TS: float = 0.0
 _BTC_CONTEXT_LAST_REFRESH_TS: float = 0.0
 _BTC_CONTEXT_LAST_ERROR: str | None = None
+_BTC_CONTEXT_REASON_WARNED: bool = False
+
+logger = logging.getLogger(__name__)
 
 
 def get_cached_btc_context() -> tuple[Dict[str, Any], int, int] | None:
@@ -105,8 +109,12 @@ async def get_btc_context(*, force_refresh: bool = False) -> Dict[str, Any]:
         fallback = {
             "trend_1d": "range",
             "trend_1h": "range",
+            "trend_4h": "range",
             "rsi_15m": 50.0,
             "volume_ratio_15m": 0.0,
+            "ema_bias": "unknown",
+            "atr_volatility": 0.0,
+            "btc_mode": "neutral",
             "allow_longs": True,
             "allow_shorts": True,
             "ctx_reason": "fallback_neutral",
@@ -117,11 +125,18 @@ async def get_btc_context(*, force_refresh: bool = False) -> Dict[str, Any]:
         _BTC_CONTEXT_LAST_ERROR = None
         return dict(fallback)
 
+    candles_4h = candles.get("4h", []) if candles else []
+    candles_1h = candles.get("1h", []) if candles else []
+    candles_gate = candles_4h or candles_1h
+
     daily_structure = detect_trend_and_structure(candles_1d)
-    h1_structure = detect_trend_and_structure(candles_1h)
+    gate_structure = detect_trend_and_structure(candles_gate)
+    h1_structure = detect_trend_and_structure(candles_1h) if candles_1h else gate_structure
+    h4_structure = detect_trend_and_structure(candles_4h) if candles_4h else gate_structure
 
     btc_trend_1d = daily_structure["trend"]
     btc_trend_1h = h1_structure["trend"]
+    btc_trend_4h = h4_structure["trend"]
 
     rsi_15m_value = get_cached_rsi(BTC_SYMBOL, "15m", candles_15m)
 
@@ -132,34 +147,96 @@ async def get_btc_context(*, force_refresh: bool = False) -> Dict[str, Any]:
 
     allow_longs = (
         btc_trend_1d in ("up", "range")
-        and btc_trend_1h == "up"
+        and gate_structure["trend"] == "up"
         and 40 <= rsi_15m_value <= 65
         and volume_ratio_15m >= 1.2
     )
 
     allow_shorts = (
         btc_trend_1d in ("down", "range")
-        and btc_trend_1h == "down"
+        and gate_structure["trend"] == "down"
         and 35 <= rsi_15m_value <= 70
         and volume_ratio_15m >= 1.2
     )
 
+    closes_1h = [c.close for c in (candles_1h or candles_gate)]
+    ema200 = get_cached_ema(BTC_SYMBOL, "1h", candles_1h or candles_gate, 200)
+    ema_bias = "unknown"
+    if ema200 and closes_1h:
+        last_close = closes_1h[-1]
+        if last_close > ema200:
+            ema_bias = "above_ema200"
+        elif last_close < ema200:
+            ema_bias = "below_ema200"
+        else:
+            ema_bias = "near_ema200"
+
+    atr_value = get_cached_atr(BTC_SYMBOL, "1h", candles_1h or candles_gate, 14)
+    atr_volatility = (atr_value / closes_1h[-1] * 100.0) if (atr_value and closes_1h) else 0.0
+    high_volatility = atr_volatility >= 2.2
+
     ctx_reason = None
+    if not allow_longs and allow_shorts:
+        if high_volatility:
+            ctx_reason = "high_volatility_lock"
+        elif btc_trend_4h == "down":
+            ctx_reason = "trend_down_4h"
+        elif ema_bias == "below_ema200":
+            ctx_reason = "below_ema200"
+        elif btc_trend_1d not in ("up", "range"):
+            ctx_reason = "trend_down_1d"
+        elif not (40 <= rsi_15m_value <= 65):
+            ctx_reason = "rsi_15m_out_of_range"
+        elif volume_ratio_15m < 1.2:
+            ctx_reason = "volume_ratio_low"
+    elif not allow_shorts and allow_longs:
+        if high_volatility:
+            ctx_reason = "high_volatility_lock"
+        elif btc_trend_4h == "up":
+            ctx_reason = "trend_up_4h"
+        elif ema_bias == "above_ema200":
+            ctx_reason = "above_ema200"
+        elif btc_trend_1d not in ("down", "range"):
+            ctx_reason = "trend_up_1d"
+        elif not (35 <= rsi_15m_value <= 70):
+            ctx_reason = "rsi_15m_out_of_range"
+        elif volume_ratio_15m < 1.2:
+            ctx_reason = "volume_ratio_low"
     if not allow_longs and not allow_shorts:
         allow_longs = True
         allow_shorts = True
-        ctx_reason = f"{ctx_reason};fallback_neutral" if ctx_reason else "fallback_neutral"
+        ctx_reason = "fallback_neutral"
+
+    if allow_longs and allow_shorts and not ctx_reason:
+        ctx_reason = "neutral"
+
+    btc_mode = "neutral"
+    if high_volatility:
+        btc_mode = "high_volatility_lock"
+    elif allow_shorts and not allow_longs:
+        btc_mode = "bearish_bias"
+    elif allow_longs and not allow_shorts:
+        btc_mode = "bullish_bias"
 
     context = {
         "trend_1d": btc_trend_1d,
         "trend_1h": btc_trend_1h,
+        "trend_4h": btc_trend_4h,
         "rsi_15m": rsi_15m_value,
         "volume_ratio_15m": volume_ratio_15m,
+        "ema_bias": ema_bias,
+        "atr_volatility": atr_volatility,
+        "btc_mode": btc_mode,
         "allow_longs": allow_longs,
         "allow_shorts": allow_shorts,
     }
-    if ctx_reason:
-        context["ctx_reason"] = ctx_reason
+    if not ctx_reason:
+        ctx_reason = "unknown"
+        global _BTC_CONTEXT_REASON_WARNED
+        if not _BTC_CONTEXT_REASON_WARNED:
+            logger.warning("BTC gate context reason missing; defaulting to 'unknown'.")
+            _BTC_CONTEXT_REASON_WARNED = True
+    context["ctx_reason"] = ctx_reason
     _BTC_CONTEXT_CACHE = context
     _BTC_CONTEXT_TS = now
     _BTC_CONTEXT_LAST_REFRESH_TS = now
