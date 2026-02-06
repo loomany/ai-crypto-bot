@@ -1886,7 +1886,7 @@ def _format_near_miss(near_miss: dict, lang: str) -> str:
 def _build_rotation_order(symbols: list[str], *, shuffle: bool) -> list[str]:
     if not shuffle:
         return list(symbols)
-    seed = datetime.utcnow().strftime("%Y-%m-%d")
+    seed = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     rng = random.Random(seed)
     ordered = list(symbols)
     rng.shuffle(ordered)

@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from binance_rest import fetch_klines as fetch_klines_raw
 
+KLINES_1M_LIMIT = int(os.environ.get("KLINES_1M_LIMIT", "120"))
 KLINES_5M_LIMIT = int(os.environ.get("KLINES_5M_LIMIT", "120"))
 KLINES_15M_LIMIT = int(os.environ.get("KLINES_15M_LIMIT", "160"))
 KLINES_1H_LIMIT = int(os.environ.get("KLINES_1H_LIMIT", "120"))
