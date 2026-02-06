@@ -1,6 +1,6 @@
 from typing import Any, Dict, List
 
-from binance_client import Candle
+from ai_types import Candle
 
 
 async def analyze_ai_patterns(

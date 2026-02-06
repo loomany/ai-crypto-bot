@@ -1,9 +1,9 @@
 import asyncio
 import os
 import time
-from dataclasses import dataclass
 from typing import List, Optional
 
+from ai_types import Candle
 from binance_rest import fetch_klines as fetch_klines_raw
 
 KLINES_1M_LIMIT = int(os.environ.get("KLINES_1M_LIMIT", "120"))
@@ -12,17 +12,6 @@ KLINES_15M_LIMIT = int(os.environ.get("KLINES_15M_LIMIT", "160"))
 KLINES_1H_LIMIT = int(os.environ.get("KLINES_1H_LIMIT", "120"))
 KLINES_4H_LIMIT = int(os.environ.get("KLINES_4H_LIMIT", "120"))
 KLINES_1D_LIMIT = int(os.environ.get("KLINES_1D_LIMIT", "60"))
-
-
-@dataclass
-class Candle:
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-    open_time: int
-    close_time: int
 
 
 async def fetch_klines(
