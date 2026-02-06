@@ -4652,9 +4652,24 @@ async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     print("Бот запущен!")
     init_app_db()
+    startup_delay_sec = int(os.getenv("STARTUP_DELAY_SEC", "120"))
+    watchlist_task: asyncio.Task | None = None
+
     async def _delayed_task(delay_sec: float, coro: Awaitable[Any]):
         await asyncio.sleep(delay_sec)
         return await coro
+
+    async def startup_sequence() -> None:
+        nonlocal watchlist_task
+        await asyncio.sleep(startup_delay_sec)
+        symbols: list[str] = []
+        with binance_request_context("ai_signals"):
+            symbols = await _get_ai_universe()
+        if symbols:
+            MARKET_HUB.set_symbols(symbols)
+        await MARKET_HUB.start()
+        print("[startup] MarketHub started after delay")
+        watchlist_task = asyncio.create_task(watchlist_worker_loop())
 
     pump_task = asyncio.create_task(
         _delayed_task(6, safe_worker_loop("pumpdump", lambda: pump_scan_once(bot)))
@@ -4663,13 +4678,11 @@ async def main():
     signals_task = asyncio.create_task(
         _delayed_task(12, safe_worker_loop("ai_signals", ai_scan_once))
     )
-    watchlist_task = asyncio.create_task(_delayed_task(14, watchlist_worker_loop()))
     audit_task = asyncio.create_task(_delayed_task(18, signal_audit_worker_loop()))
     watchdog_task = asyncio.create_task(watchdog())
     binance_watchdog_task = asyncio.create_task(binance_watchdog())
+    startup_task = asyncio.create_task(startup_sequence())
     try:
-        await MARKET_HUB.start()
-        print("[market_hub] started")
         await dp.start_polling(bot)
     finally:
         await MARKET_HUB.stop()
@@ -4679,9 +4692,10 @@ async def main():
         pump_task.cancel()
         with suppress(asyncio.CancelledError):
             await pump_task
-        watchlist_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await watchlist_task
+        if watchlist_task:
+            watchlist_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await watchlist_task
         audit_task.cancel()
         with suppress(asyncio.CancelledError):
             await audit_task
@@ -4691,6 +4705,9 @@ async def main():
         binance_watchdog_task.cancel()
         with suppress(asyncio.CancelledError):
             await binance_watchdog_task
+        startup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await startup_task
         await close_shared_session()
 
 
