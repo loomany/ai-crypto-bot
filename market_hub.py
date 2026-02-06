@@ -399,7 +399,15 @@ class MarketDataHub:
         any_ok = False
         now = time.time()
         for result in results:
-            if isinstance(result, Exception):
+            # gather(return_exceptions=True) may return CancelledError (BaseException)
+            if isinstance(result, BaseException):
+                # CancelledError is normal on batch timeout; don't treat as hard error
+                if isinstance(result, asyncio.CancelledError):
+                    continue
+                errors_count += 1
+                continue
+            # defensive: ensure tuple shape
+            if not isinstance(result, tuple) or len(result) != 3:
                 errors_count += 1
                 continue
             symbol, data, error = result
