@@ -10,7 +10,6 @@ import i18n
 
 from binance_client import Candle
 from binance_rest import binance_request_context, get_klines, is_binance_degraded
-from market_hub import MARKET_HUB, MARKET_HUB_DEGRADED
 from symbol_cache import (
     filter_tradeable_symbols,
     get_spot_usdt_symbols,
@@ -117,17 +116,6 @@ def _inc_pump_fallback_direct() -> None:
     PUMP_FALLBACK_DIRECT += 1
 
 
-def _get_hub_klines(symbol: str, interval: str) -> list[list[str]] | list[Candle] | None:
-    if MARKET_HUB_DEGRADED:
-        return None
-    klines = MARKET_HUB.get_candles(symbol, interval)
-    if not klines:
-        return None
-    if MARKET_HUB.is_stale(symbol, interval):
-        return None
-    return klines
-
-
 def _passes_5m_trigger(
     klines_5m: list[list[str]] | list[Candle],
 ) -> tuple[bool, str]:
@@ -163,11 +151,9 @@ def _passes_5m_trigger(
 
 
 async def _fetch_5m_klines(symbol: str) -> list[list[str]] | list[Candle] | None:
-    klines_5m = _get_hub_klines(symbol, PUMPDUMP_5M_INTERVAL)
-    if not klines_5m:
-        klines_5m = await get_shared_klines(symbol, PUMPDUMP_5M_INTERVAL, PUMPDUMP_5M_LIMIT)
-        if klines_5m:
-            _inc_pump_fallback_direct()
+    klines_5m = await get_shared_klines(symbol, PUMPDUMP_5M_INTERVAL, PUMPDUMP_5M_LIMIT)
+    if klines_5m:
+        _inc_pump_fallback_direct()
     return klines_5m
 
 
@@ -393,11 +379,9 @@ async def scan_pumps_chunk(
                 fails[trigger_reason] = fails.get(trigger_reason, 0) + 1
                 continue
 
-            klines_1m = _get_hub_klines(symbol, PUMPDUMP_1M_INTERVAL)
-            if not klines_1m:
-                klines_1m = await get_shared_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT)
-                if klines_1m:
-                    _inc_pump_fallback_direct()
+            klines_1m = await get_shared_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT)
+            if klines_1m:
+                _inc_pump_fallback_direct()
             if not isinstance(klines_1m, list):
                 klines_1m = []
             sig, reason = _calc_signal_with_reason(symbol, klines_1m, klines_5m)
@@ -447,11 +431,9 @@ async def scan_pumps(
                 trigger_ok, _ = _passes_5m_trigger(klines_5m)
                 if not trigger_ok:
                     continue
-                klines_1m = _get_hub_klines(symbol, PUMPDUMP_1M_INTERVAL)
-                if not klines_1m:
-                    klines_1m = await get_shared_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT)
-                    if klines_1m:
-                        _inc_pump_fallback_direct()
+                klines_1m = await get_shared_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT)
+                if klines_1m:
+                    _inc_pump_fallback_direct()
                 if not isinstance(klines_1m, list):
                     klines_1m = []
                 sig = _calc_signal_from_klines(symbol, klines_1m, klines_5m)
@@ -512,7 +494,12 @@ async def generate_pump_alert(symbol: str) -> str | None:
         klines_1m, klines_5m = await asyncio.gather(
             get_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT, start_ms=None),
             get_klines(symbol, PUMPDUMP_5M_INTERVAL, PUMPDUMP_5M_LIMIT, start_ms=None),
+            return_exceptions=True,
         )
+    if isinstance(klines_1m, BaseException):
+        klines_1m = []
+    if isinstance(klines_5m, BaseException):
+        klines_5m = []
     if not isinstance(klines_1m, list):
         klines_1m = []
     if not isinstance(klines_5m, list):

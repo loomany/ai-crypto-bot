@@ -1,8 +1,10 @@
+import asyncio
+import time
 from statistics import mean
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from binance_client import Candle
-from market_access import get_bundle_with_fallback
+from binance_rest import get_klines, is_binance_degraded
 from trading_core import _compute_rsi_series, compute_ema, detect_trend_and_structure
 
 
@@ -17,7 +19,7 @@ async def get_market_regime() -> Dict[str, Any]:
           • среднедневная волатильность за 30 дней
     """
     symbol = "BTCUSDT"
-    data = await get_bundle_with_fallback(symbol, ("1d", "4h", "1h", "15m"))
+    data = await _fetch_direct_bundle(symbol, ("1d", "4h", "1h", "15m"))
     candles_1d: List[Candle] = data.get("1d") or [] if data else []
     candles_4h: List[Candle] = data.get("4h") or [] if data else []
     candles_1h: List[Candle] = data.get("1h") or [] if data else []
@@ -132,3 +134,52 @@ async def get_market_regime() -> Dict[str, Any]:
         "allow_longs": allow_longs,
         "allow_shorts": allow_shorts,
     }
+
+
+def _convert_raw_klines(raw: list) -> list[Candle]:
+    candles: list[Candle] = []
+    if not raw:
+        return candles
+    for item in raw:
+        if not isinstance(item, list) or len(item) < 7:
+            continue
+        candles.append(
+            Candle(
+                open=float(item[1]),
+                high=float(item[2]),
+                low=float(item[3]),
+                close=float(item[4]),
+                volume=float(item[5]),
+                open_time=int(item[0]),
+                close_time=int(item[6]),
+            )
+        )
+    now_ms = int(time.time() * 1000)
+    if candles and candles[-1].close_time > now_ms:
+        candles.pop()
+    return candles
+
+
+async def _fetch_direct_bundle(
+    symbol: str,
+    tfs: tuple[str, ...],
+) -> Optional[Dict[str, List[Candle]]]:
+    if is_binance_degraded():
+        return None
+    limits = {
+        "1d": 60,
+        "4h": 120,
+        "1h": 120,
+        "15m": 160,
+    }
+    tasks = [asyncio.create_task(get_klines(symbol, tf, limits[tf])) for tf in tfs]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    bundle: Dict[str, List[Candle]] = {}
+    for tf, result in zip(tfs, results):
+        if isinstance(result, BaseException) or not isinstance(result, list):
+            return None
+        candles = _convert_raw_klines(result)
+        if not candles or len(candles) < 20:
+            return None
+        bundle[tf] = candles
+    return bundle

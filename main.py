@@ -36,7 +36,6 @@ from pump_detector import (
     PUMPDUMP_5M_LIMIT,
     format_pump_message,
     get_candidate_symbols,
-    get_pump_fallback_direct,
     scan_pumps_chunk,
 )
 from signals import (
@@ -50,9 +49,7 @@ from signals import (
     PRE_SCORE_THRESHOLD,
     MIN_PRE_SCORE,
     FINAL_SCORE_THRESHOLD,
-    get_ai_fallback_direct,
 )
-from market_access import get_quick_with_fallback
 from trading_core import compute_atr, compute_ema
 from symbol_cache import (
     filter_tradeable_symbols,
@@ -193,6 +190,10 @@ def _env_bool(name: str, default: str = "0") -> bool:
 
 def get_use_btc_gate() -> bool:
     return _env_bool("USE_BTC_GATE", "0")
+
+
+def get_use_market_hub() -> bool:
+    return _env_bool("USE_MARKET_HUB", "0")
 
 
 def is_admin(user_id: int) -> bool:
@@ -1972,6 +1973,20 @@ def _format_slowest_symbols(items: list[dict[str, Any]]) -> str:
 
 
 def _format_market_hub(now: float, lang: str) -> str:
+    if not get_use_market_hub():
+        status_label = _build_status_label(
+            ok=False,
+            warn=True,
+            error=False,
+            ok_text=i18n.t(lang, "DIAG_STATUS_WORKING"),
+            warn_text=i18n.t(lang, "DIAG_STATUS_DISABLED"),
+            error_text=i18n.t(lang, "DIAG_STATUS_ERROR"),
+        )
+        details = [
+            "• MarketHub: DISABLED",
+            "• Mode: DIRECT",
+        ]
+        return _format_section(i18n.t(lang, "DIAG_MARKET_HUB_TITLE"), status_label, details, lang)
     if MARKET_HUB.last_ok_at:
         ok_ago = int(now - MARKET_HUB.last_ok_at)
         last_tick = _human_ago(ok_ago, lang)
@@ -2024,8 +2039,6 @@ def _format_market_hub(now: float, lang: str) -> str:
     details.append(
         f"• hub_zero_refresh_streak={getattr(MARKET_HUB, 'market_hub_zero_refresh_streak', 0)}"
     )
-    details.append(f"• ai_fallback_direct={get_ai_fallback_direct()}")
-    details.append(f"• pump_fallback_direct={get_pump_fallback_direct()}")
     details.append(f"• universe_size={universe_size}")
     details.append(f"• market_hub_symbols_size={symbols_count}")
     if cycle_reason:
@@ -3891,11 +3904,18 @@ async def _get_ai_universe() -> List[str]:
 
 
 async def _compute_candidate_score(symbol: str) -> tuple[int, str]:
-    candles = await get_quick_with_fallback(symbol)
-    if not candles:
+    try:
+        candles_1h, candles_15m = await asyncio.gather(
+            fetch_klines(symbol, "1h", 120),
+            fetch_klines(symbol, "15m", 160),
+            return_exceptions=True,
+        )
+    except Exception:
         return 0, ""
-    candles_1h = candles.get("1h") or []
-    candles_15m = candles.get("15m") or []
+    if isinstance(candles_1h, BaseException) or isinstance(candles_15m, BaseException):
+        return 0, ""
+    if not candles_1h or not candles_15m:
+        return 0, ""
     if len(candles_1h) < 2 or len(candles_15m) < 2:
         return 0, ""
 
@@ -4306,13 +4326,8 @@ async def ai_scan_once() -> None:
 
         with binance_request_context("ai_signals"):
             symbols = await _get_ai_universe()
-        if symbols:
-            print(f"[market_hub] set_symbols called: n={len(symbols)} sample={symbols[:5]}")
+        if symbols and get_use_market_hub():
             MARKET_HUB.set_symbols(symbols)
-            print(
-                f"[market_hub] after set_symbols: "
-                f"hub_n={len(getattr(MARKET_HUB, '_symbols', []))}"
-            )
             if module_state:
                 module_state.state["universe_symbols"] = symbols
         if not symbols:
@@ -4680,10 +4695,13 @@ async def main():
         symbols: list[str] = []
         with binance_request_context("ai_signals"):
             symbols = await _get_ai_universe()
-        if symbols:
-            MARKET_HUB.set_symbols(symbols)
-        await MARKET_HUB.start()
-        print("[startup] MarketHub started after delay")
+        if get_use_market_hub():
+            if symbols:
+                MARKET_HUB.set_symbols(symbols)
+            await MARKET_HUB.start()
+            print("[startup] MarketHub started after delay")
+        else:
+            print("[startup] MarketHub disabled")
         watchlist_task = asyncio.create_task(watchlist_worker_loop())
 
     pump_task = asyncio.create_task(
@@ -4700,7 +4718,8 @@ async def main():
     try:
         await dp.start_polling(bot)
     finally:
-        await MARKET_HUB.stop()
+        if get_use_market_hub():
+            await MARKET_HUB.stop()
         signals_task.cancel()
         with suppress(asyncio.CancelledError):
             await signals_task
