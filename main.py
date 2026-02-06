@@ -1985,6 +1985,9 @@ def _format_market_hub(now: float, lang: str) -> str:
     dt_ms = getattr(MARKET_HUB, "last_cycle_ms", 0)
     cache_size = getattr(MARKET_HUB, "last_cycle_cache_size", 0)
     hub_running = bool(getattr(MARKET_HUB, "_running", False))
+    hub_task_alive = bool(getattr(MARKET_HUB, "is_task_alive", lambda: False)())
+    warmup_active = bool(getattr(MARKET_HUB, "_warmup_active", False))
+    cycle_reason = getattr(MARKET_HUB, "last_cycle_reason", None)
     if not hub_running:
         cycle_state = "idle"
     elif symbols_count == 0:
@@ -2007,8 +2010,12 @@ def _format_market_hub(now: float, lang: str) -> str:
         f"• Последний цикл: {cycle_state} | attempted={attempted} refreshed={refreshed} "
         f"unchanged={unchanged} errors={errors} dt={dt_ms}ms",
         f"• Cache: symbols_with_data={cache_size}",
+        f"• warmup_active={str(warmup_active).lower()}",
+        f"• market_hub_task_alive={str(hub_task_alive).lower()}",
         i18n.t(lang, "DIAG_ACTIVE_SYMBOLS", count=symbols_count),
     ]
+    if cycle_reason:
+        details.append(f"• cycle_reason={cycle_reason}")
     if err:
         details.append(i18n.t(lang, "DIAG_ERRORS", error=f"⚠️ {err}"))
     return _format_section(i18n.t(lang, "DIAG_MARKET_HUB_TITLE"), status_label, details, lang)
