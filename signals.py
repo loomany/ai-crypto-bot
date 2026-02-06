@@ -6,13 +6,14 @@ import time
 from statistics import mean
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from binance_client import Candle
+from ai_types import Candle
 from binance_rest import get_klines, is_binance_degraded
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
 from market_context import get_market_context
 from market_regime import get_market_regime
 from indicators_cache import get_cached_atr, get_cached_ema, get_cached_rsi
+from utils_klines import normalize_klines
 from trading_core import (
     _compute_rsi_series,
     _nearest_level,
@@ -296,30 +297,6 @@ async def _gather_stage_a_klines(
     )
 
 
-def _convert_raw_klines(raw: list) -> list[Candle]:
-    candles: list[Candle] = []
-    if not raw:
-        return candles
-    for item in raw:
-        if not isinstance(item, list) or len(item) < 7:
-            continue
-        candles.append(
-            Candle(
-                open=float(item[1]),
-                high=float(item[2]),
-                low=float(item[3]),
-                close=float(item[4]),
-                volume=float(item[5]),
-                open_time=int(item[0]),
-                close_time=int(item[6]),
-            )
-        )
-    now_ms = int(time.time() * 1000)
-    if candles and candles[-1].close_time > now_ms:
-        candles.pop()
-    return candles
-
-
 async def _fetch_direct_bundle(
     symbol: str,
     tfs: tuple[str, ...],
@@ -339,7 +316,7 @@ async def _fetch_direct_bundle(
     for tf, result in zip(tfs, results):
         if isinstance(result, BaseException) or not isinstance(result, list):
             return None
-        candles = _convert_raw_klines(result)
+        candles = normalize_klines(result)
         if not candles or len(candles) < MIN_KLINES_REQUIRED:
             return None
         bundle[tf] = candles

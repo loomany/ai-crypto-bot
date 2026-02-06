@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, Tuple, Optional
 
-from binance_client import Candle
+from ai_types import Candle
 from trading_core import _compute_rsi_series, compute_atr, compute_ema
 
 _INDICATOR_CACHE: Dict[Tuple[str, str, int, str, int], Optional[float]] = {}

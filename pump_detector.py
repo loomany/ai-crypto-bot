@@ -8,7 +8,7 @@ import aiohttp
 
 import i18n
 
-from binance_client import Candle
+from ai_types import Candle
 from binance_rest import binance_request_context, get_klines, is_binance_degraded
 from symbol_cache import (
     filter_tradeable_symbols,

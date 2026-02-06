@@ -4,7 +4,8 @@ from typing import Dict, List, Optional, Tuple
 
 import os
 
-from binance_client import Candle, get_required_candles, get_quick_candles
+from ai_types import Candle
+from binance_client import get_required_candles, get_quick_candles
 from binance_rest import is_binance_degraded
 from market_hub import MARKET_HUB
 

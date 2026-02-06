@@ -2,7 +2,7 @@ import time
 from statistics import mean
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from binance_client import Candle
+from ai_types import Candle
 from binance_rest import fetch_json
 
 # ==============================
