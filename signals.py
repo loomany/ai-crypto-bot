@@ -808,7 +808,11 @@ async def scan_market(
         min_score = FINAL_SCORE_THRESHOLD
 
     if symbols is None:
+        fetch_start = time.perf_counter()
         symbols = await get_spot_usdt_symbols()
+        fetch_dt = time.perf_counter() - fetch_start
+        if diag_state is not None:
+            diag_state["fetch_symbols_dt"] = fetch_dt
 
     btc_ctx = await get_btc_context() if use_btc_gate else {
         "allow_longs": True,
@@ -837,6 +841,7 @@ async def scan_market(
         "pass_rate": 0.0,
     }
     start_time = time.time()
+    prescore_start = time.perf_counter()
     debug_state = {"used": 0, "max": MAX_FAIL_DEBUG_LOGS_PER_CYCLE}
     deep_scans_done = 0
     max_deep_scans = AI_DEEP_TOP_K if deep_scan_limit is None else deep_scan_limit
@@ -980,6 +985,14 @@ async def scan_market(
             _add_pre_score_sample(pre_score_stats["passed_samples"], symbol, pre_score)
             scored.append((symbol, pre_score))
 
+    prescore_dt = time.perf_counter() - prescore_start
+    if diag_state is not None:
+        diag_state["prescore_dt"] = prescore_dt
+        diag_state["symbols_checked"] = checked
+        diag_state["symbols_prescored"] = pre_score_stats["checked"]
+        diag_state["klines_concurrency"] = KLINES_CONCURRENCY
+        diag_state["symbol_concurrency"] = max_concurrency or 0
+
     if not scored:
         pre_score_stats["pass_rate"] = pre_score_stats["passed"] / max(
             1, pre_score_stats["checked"]
@@ -1071,10 +1084,50 @@ async def scan_market(
             _refresh_slowest()
             return symbol, None, False, True
 
-    tasks = [asyncio.create_task(_run_deep_with_timeout(symbol)) for symbol in candidate_symbols]
-    results = await asyncio.gather(*tasks)
+    remaining = None if time_budget is None else max(0.0, time_budget - (time.time() - start_time))
+    if remaining is not None and remaining <= 0:
+        logger.warning("[ai_signals] watchlist budget exceeded before deep scan")
+        if diag_state is not None:
+            diag_state["deep_skipped_budget"] = True
+        if return_stats:
+            pre_score_stats["pass_rate"] = pre_score_stats["passed"] / max(
+                1, pre_score_stats["checked"]
+            )
+            return signals, {
+                "checked": checked,
+                "klines_ok": klines_ok,
+                "deep_scans_done": deep_scans_done,
+                "signals_found": len(signals),
+                "fails": fails,
+                "near_miss": near_miss,
+                "pre_score": pre_score_stats,
+                "slowest_symbols": _build_slowest(),
+            }
+        return signals
 
-    for symbol, signal, has_klines, timed_out in results:
+    deep_start = time.perf_counter()
+    tasks = [asyncio.create_task(_run_deep_with_timeout(symbol)) for symbol in candidate_symbols]
+    try:
+        deep_task = asyncio.gather(*tasks, return_exceptions=True)
+        if remaining is None:
+            results = await deep_task
+        else:
+            results = await asyncio.wait_for(deep_task, timeout=remaining)
+    except asyncio.TimeoutError:
+        for task in tasks:
+            task.cancel()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        fails["fail_watchlist_budget"] = fails.get("fail_watchlist_budget", 0) + 1
+        logger.warning("[ai_signals] watchlist budget exceeded during deep scan")
+    deep_dt = time.perf_counter() - deep_start
+    if diag_state is not None:
+        diag_state["deep_dt"] = deep_dt
+        diag_state["deep_candidates"] = len(candidate_symbols)
+
+    for result in results:
+        if isinstance(result, Exception):
+            continue
+        symbol, signal, has_klines, timed_out = result
         if not has_klines:
             if not timed_out:
                 fails["fail_no_klines"] = fails.get("fail_no_klines", 0) + 1

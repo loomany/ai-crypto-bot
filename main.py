@@ -66,6 +66,7 @@ from health import (
     get_request_count,
     mark_tick,
     mark_ok,
+    mark_warn,
     mark_error,
     reset_klines_request_count,
     reset_request_count,
@@ -4574,12 +4575,23 @@ def _build_watchlist_timeout_report(
 ) -> str:
     fetch_symbols_dt = state.get("fetch_symbols_dt")
     fetch_str = f"{fetch_symbols_dt:.2f}s" if isinstance(fetch_symbols_dt, (int, float)) else "-"
+    prescore_dt = state.get("prescore_dt")
+    prescore_str = f"{prescore_dt:.2f}s" if isinstance(prescore_dt, (int, float)) else "-"
+    deep_dt = state.get("deep_dt")
+    deep_str = f"{deep_dt:.2f}s" if isinstance(deep_dt, (int, float)) else "-"
     slowest = _format_slowest_symbols(state.get("top_slowest_symbols") or [])
     timeout_count = state.get("fail_symbol_timeout_count", 0)
+    checked = state.get("symbols_checked", 0)
+    prescored = state.get("symbols_prescored", 0)
+    deep_candidates = state.get("deep_candidates", 0)
+    klines_conc = state.get("klines_concurrency", 0)
+    symbol_conc = state.get("symbol_concurrency", 0)
     status = "timeout" if timed_out else "slow"
     return (
         f"{status} watchlist dt={cycle_dt:.2f}s limit={timeout_s}s "
-        f"fetch_symbols_dt={fetch_str} "
+        f"fetch_symbols_dt={fetch_str} prescore_dt={prescore_str} deep_dt={deep_str} "
+        f"checked={checked} prescored={prescored} deep_candidates={deep_candidates} "
+        f"klines_conc={klines_conc} symbol_conc={symbol_conc} "
         f"symbol_timeouts={timeout_count} "
         f"slowest={slowest}"
     )
@@ -4625,7 +4637,7 @@ async def watchlist_worker_loop() -> None:
             if module_state:
                 module_state.state["last_timeout_breakdown"] = report
             print(f"[ai_signals] watchlist timeout report: {report}")
-            mark_error("ai_signals", f"watchlist timeout >{timeout_s}s")
+            mark_warn("ai_signals", f"watchlist timeout >{timeout_s}s")
         except Exception as e:
             print(f"[ai_signals] watchlist ERROR {type(e).__name__}: {e}")
             mark_error("ai_signals", str(e))
