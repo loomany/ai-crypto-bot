@@ -6,17 +6,8 @@ import time
 from statistics import mean
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from binance_client import (
-    Candle,
-    KLINES_15M_LIMIT,
-    KLINES_1D_LIMIT,
-    KLINES_1H_LIMIT,
-    KLINES_4H_LIMIT,
-    KLINES_5M_LIMIT,
-)
-from market_access import get_bundle_with_fallback
+from binance_client import Candle
 from binance_rest import get_klines, is_binance_degraded
-from market_hub import MARKET_HUB, MARKET_HUB_DEGRADED
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
 from market_context import get_market_context
@@ -69,6 +60,14 @@ REQUIRE_15M_CONFIRM_ON_EXPANDED = os.getenv("REQUIRE_15M_CONFIRM_ON_EXPANDED", "
 MAX_FAIL_DEBUG_LOGS_PER_CYCLE = int(os.getenv("MAX_FAIL_DEBUG_LOGS_PER_CYCLE", "8"))
 AI_STAGE_A_TOP_K = int(os.getenv("AI_STAGE_A_TOP_K", "10"))
 BTC_CONTEXT_TTL_SEC = int(os.getenv("BTC_CONTEXT_TTL_SEC", "90"))
+AI_DIRECT_LIMITS = {
+    "1d": 60,
+    "4h": 120,
+    "1h": 120,
+    "15m": 160,
+    "5m": 160,
+}
+MIN_KLINES_REQUIRED = 20
 
 _BTC_CONTEXT_CACHE: Dict[str, Any] | None = None
 _BTC_CONTEXT_TS: float = 0.0
@@ -115,7 +114,7 @@ async def get_btc_context(*, force_refresh: bool = False) -> Dict[str, Any]:
         return dict(_BTC_CONTEXT_CACHE)
 
     try:
-        candles = await get_bundle_with_fallback(BTC_SYMBOL, ("1d", "4h", "1h", "15m"))
+        candles = await _fetch_direct_bundle(BTC_SYMBOL, ("1d", "4h", "1h", "15m"))
     except Exception as exc:
         _BTC_CONTEXT_LAST_ERROR = str(exc)
         raise
@@ -278,9 +277,6 @@ async def _gather_klines(
     timings: dict[str, float] | None = None,
 ) -> Optional[Dict[str, List[Candle]]]:
     tfs = ("1d", "4h", "1h", "15m", "5m")
-    bundle = _get_hub_bundle(symbol, tfs, timings=timings)
-    if bundle:
-        return bundle
     return await _fetch_direct_bundle(symbol, tfs, timings=timings)
 
 
@@ -292,35 +288,12 @@ async def _gather_stage_a_klines(
     timings: dict[str, float] | None = None,
 ) -> Optional[Dict[str, List[Candle]]]:
     tfs = (tf,)
-    bundle = _get_hub_bundle(symbol, tfs, timings=timings)
-    if bundle:
-        return bundle
     return await _fetch_direct_bundle(
         symbol,
         tfs,
         limit_overrides={tf: limit},
         timings=timings,
     )
-
-
-def _get_hub_bundle(
-    symbol: str,
-    tfs: tuple[str, ...],
-    *,
-    timings: dict[str, float] | None = None,
-) -> Optional[Dict[str, List[Candle]]]:
-    if MARKET_HUB_DEGRADED:
-        return None
-    start = time.perf_counter()
-    bundle = MARKET_HUB.get_bundle(symbol, tfs)
-    if bundle and all(bundle.get(tf) for tf in tfs):
-        if any(MARKET_HUB.is_stale(symbol, tf) for tf in tfs):
-            bundle = None
-    else:
-        bundle = None
-    if timings is not None:
-        timings["hub_bundle_dt"] = time.perf_counter() - start
-    return bundle
 
 
 def _convert_raw_klines(raw: list) -> list[Candle]:
@@ -357,13 +330,7 @@ async def _fetch_direct_bundle(
     if is_binance_degraded():
         return None
     start = time.perf_counter()
-    limits = {
-        "1d": KLINES_1D_LIMIT,
-        "4h": KLINES_4H_LIMIT,
-        "1h": KLINES_1H_LIMIT,
-        "15m": KLINES_15M_LIMIT,
-        "5m": KLINES_5M_LIMIT,
-    }
+    limits = dict(AI_DIRECT_LIMITS)
     if limit_overrides:
         limits.update(limit_overrides)
     tasks = [asyncio.create_task(get_klines(symbol, tf, limits[tf])) for tf in tfs]
@@ -373,7 +340,7 @@ async def _fetch_direct_bundle(
         if isinstance(result, BaseException) or not isinstance(result, list):
             return None
         candles = _convert_raw_klines(result)
-        if not candles:
+        if not candles or len(candles) < MIN_KLINES_REQUIRED:
             return None
         bundle[tf] = candles
     if timings is not None:
@@ -425,7 +392,7 @@ def _pre_score(candles: Dict[str, List[Candle]], *, tf: str, symbol: str) -> flo
 
 
 async def _get_hourly_snapshot(symbol: str) -> Optional[Dict[str, float]]:
-    bundle = await get_bundle_with_fallback(symbol, ("1h",))
+    bundle = await _fetch_direct_bundle(symbol, ("1h",))
     if not bundle:
         return None
     candles_1h = bundle.get("1h") or []
@@ -459,10 +426,10 @@ async def get_alt_watch_symbol(limit: int = 80, batch_size: int = 10) -> Optiona
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i : i + batch_size]
         tasks = [asyncio.create_task(_get_hourly_snapshot(symbol)) for symbol in batch]
-        snapshots = await asyncio.gather(*tasks)
+        snapshots = await asyncio.gather(*tasks, return_exceptions=True)
 
         for symbol, snapshot in zip(batch, snapshots):
-            if not snapshot:
+            if isinstance(snapshot, BaseException) or not snapshot:
                 continue
             if symbol == BTC_SYMBOL:
                 continue
@@ -1032,13 +999,17 @@ async def scan_market(
         symbol_start = time.perf_counter()
         timings = _ensure_symbol_timings(symbol)
         try:
-            quick = await _with_semaphore(
-                _gather_stage_a_klines,
-                symbol,
-                tf=AI_CHEAP_TF,
-                limit=AI_CHEAP_LIMIT,
-                timings=timings,
-            )
+            try:
+                quick = await _with_semaphore(
+                    _gather_stage_a_klines,
+                    symbol,
+                    tf=AI_CHEAP_TF,
+                    limit=AI_CHEAP_LIMIT,
+                    timings=timings,
+                )
+            except Exception:
+                fails["fail_symbol_error"] = fails.get("fail_symbol_error", 0) + 1
+                return symbol, None, None
             if not quick:
                 return symbol, None, None
             prescore_start = time.perf_counter()
@@ -1071,10 +1042,14 @@ async def scan_market(
         batch = symbols[i : i + batch_size]
         checked += len(batch)
         quick_tasks = [asyncio.create_task(_run_prescore_with_timeout(symbol)) for symbol in batch]
-        quick_list = await asyncio.gather(*quick_tasks)
-        for symbol, quick, pre_score in quick_list:
+        quick_list = await asyncio.gather(*quick_tasks, return_exceptions=True)
+        for item in quick_list:
+            if isinstance(item, BaseException):
+                fails["fail_symbol_error"] = fails.get("fail_symbol_error", 0) + 1
+                continue
+            symbol, quick, pre_score = item
             if not quick:
-                fails["fail_no_quick"] = fails.get("fail_no_quick", 0) + 1
+                fails["fail_no_klines"] = fails.get("fail_no_klines", 0) + 1
                 continue
             pre_score_stats["checked"] += 1
             if pre_score < PRE_SCORE_THRESHOLD:
@@ -1150,7 +1125,11 @@ async def scan_market(
         symbol_start = time.perf_counter()
         timings = _ensure_symbol_timings(symbol)
         try:
-            klines = await _with_semaphore(_gather_klines, symbol, timings=timings)
+            try:
+                klines = await _with_semaphore(_gather_klines, symbol, timings=timings)
+            except Exception:
+                fails["fail_symbol_error"] = fails.get("fail_symbol_error", 0) + 1
+                return symbol, None, False, False
             if not klines:
                 return symbol, None, False, False
             signal = await _prepare_signal(
