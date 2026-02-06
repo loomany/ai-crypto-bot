@@ -23,6 +23,7 @@ from binance_rest import (
     get_klines_cache_stats,
     reset_klines_cache_stats,
     is_binance_degraded,
+    fetch_klines,
 )
 from pump_detector import (
     PUMP_CHUNK_SIZE,
@@ -97,6 +98,7 @@ from db import (
     get_signal_outcome_counts,
     get_signal_score_bucket_counts,
     get_signal_event,
+    update_signal_event_refresh,
     get_last_pumpdump_signal,
     set_last_pumpdump_signal,
     purge_test_signals,
@@ -737,15 +739,197 @@ def _format_archive_list(
     if not events:
         lines.append(i18n.t(lang, "HISTORY_NO_SIGNALS"))
         return "\n".join(lines)
-
-    for idx, event in enumerate(events, start=1):
-        status_icon = _status_icon(str(event.get("status", "")))
-        lines.append(
-            f"{status_icon} {idx}) Score {int(event.get('score', 0))} — "
-            f"{event.get('symbol')} {event.get('side')} | "
-            f"{_format_event_time(int(event.get('ts', 0)))}"
-        )
     return "\n".join(lines)
+
+
+def _history_state_key(user_id: int) -> str:
+    return f"history_ctx:{user_id}"
+
+
+def _set_history_context(user_id: int, period_key: str, page: int) -> None:
+    payload = json.dumps({"period": period_key, "page": page})
+    set_state(_history_state_key(user_id), payload)
+
+
+def _get_history_context(user_id: int) -> tuple[str, int] | None:
+    payload = get_state(_history_state_key(user_id))
+    if not payload:
+        return None
+    try:
+        parsed = json.loads(payload)
+    except (TypeError, ValueError):
+        return None
+    period_key = str(parsed.get("period", ""))
+    page = parsed.get("page")
+    if period_key not in {"1d", "7d", "30d", "all"}:
+        return None
+    try:
+        page_value = int(page)
+    except (TypeError, ValueError):
+        return None
+    return period_key, max(1, page_value)
+
+
+def _get_history_page(
+    *,
+    period_key: str,
+    page: int,
+) -> tuple[int, int, list[dict], dict, dict[str, dict[str, int]]]:
+    days = _period_days(period_key)
+    since_ts = int(time.time()) - days * 86400 if days is not None else None
+    total = count_signal_events(
+        user_id=None,
+        since_ts=since_ts,
+        min_score=None,
+    )
+    pages = max(1, (total + 9) // 10)
+    page = max(1, min(page, pages))
+    events_rows = list_signal_events(
+        user_id=None,
+        since_ts=since_ts,
+        min_score=None,
+        limit=10,
+        offset=(page - 1) * 10,
+    )
+    events = [dict(row) for row in events_rows]
+    outcome_counts = get_signal_outcome_counts(
+        user_id=None,
+        since_ts=since_ts,
+        min_score=None,
+    )
+    score_bucket_counts = get_signal_score_bucket_counts(
+        user_id=None,
+        since_ts=since_ts,
+        min_score=None,
+    )
+    return page, pages, events, outcome_counts, score_bucket_counts
+
+
+def _parse_refresh_kline(kline: list[Any]) -> dict | None:
+    try:
+        return {
+            "open_time": int(kline[0]),
+            "high": float(kline[2]),
+            "low": float(kline[3]),
+            "close": float(kline[4]),
+        }
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _entry_filled(candle: dict, entry_from: float, entry_to: float) -> bool:
+    return float(candle["low"]) <= entry_to and float(candle["high"]) >= entry_from
+
+
+def _check_hits(
+    candle: dict,
+    direction: str,
+    sl: float,
+    tp1: float,
+    tp2: float,
+) -> tuple[bool, bool, bool]:
+    if direction == "long":
+        sl_hit = float(candle["low"]) <= sl
+        tp1_hit = float(candle["high"]) >= tp1
+        tp2_hit = float(candle["high"]) >= tp2
+    else:
+        sl_hit = float(candle["high"]) >= sl
+        tp1_hit = float(candle["low"]) <= tp1
+        tp2_hit = float(candle["low"]) <= tp2
+    return sl_hit, tp1_hit, tp2_hit
+
+
+async def refresh_signal(event_id: int) -> dict | None:
+    event = get_signal_event(user_id=None, event_id=event_id)
+    if event is None:
+        return None
+    now = int(time.time())
+    last_checked = int(event["last_checked_at"] or 0)
+    refresh_cooldown = int(os.getenv("SIGNAL_REFRESH_COOLDOWN_SEC", "12"))
+    if last_checked and now - last_checked < refresh_cooldown:
+        return {"error": "cooldown", "retry_after": refresh_cooldown - (now - last_checked)}
+    if is_binance_degraded():
+        return {"error": "degraded"}
+
+    symbol = str(event.get("symbol", ""))
+    created_at = int(event.get("ts", 0))
+    cutoff_ts = min(now, created_at + SIGNAL_TTL_SECONDS)
+    start_ms = created_at * 1000
+    limit = max(200, int(SIGNAL_TTL_SECONDS / 300) + 20)
+    with binance_request_context("signal_refresh"):
+        data = await fetch_klines(symbol, "5m", limit, start_ms=start_ms)
+    candles: list[dict] = []
+    if data:
+        cutoff_ms = cutoff_ts * 1000
+        for item in data:
+            parsed = _parse_refresh_kline(item)
+            if not parsed:
+                continue
+            if parsed["open_time"] < start_ms:
+                continue
+            if parsed["open_time"] > cutoff_ms:
+                break
+            candles.append(parsed)
+
+    entry_from = float(event.get("poi_low", 0.0))
+    entry_to = float(event.get("poi_high", 0.0))
+    sl = float(event.get("sl", 0.0))
+    tp1 = float(event.get("tp1", 0.0))
+    tp2 = float(event.get("tp2", 0.0))
+    side = str(event.get("side", "")).upper()
+    direction = "long" if side in {"LONG", "BUY"} else "short"
+
+    entry_touched = False
+    tp1_hit = False
+    tp2_hit = False
+    outcome: str | None = None
+
+    for candle in candles:
+        if not entry_touched and _entry_filled(candle, entry_from, entry_to):
+            entry_touched = True
+        if not entry_touched:
+            continue
+        sl_hit, tp1_hit_candle, tp2_hit_candle = _check_hits(
+            candle, direction, sl, tp1, tp2
+        )
+        if tp2_hit_candle:
+            tp2_hit = True
+            outcome = "TP2"
+            break
+        if tp1_hit_candle:
+            tp1_hit = True
+        if sl_hit and not tp1_hit:
+            outcome = "SL"
+            break
+
+    if outcome is None:
+        if tp1_hit:
+            outcome = "TP1"
+        elif now - created_at >= SIGNAL_TTL_SECONDS:
+            if entry_touched:
+                outcome = "EXP"
+            else:
+                outcome = "NO_FILL"
+
+    status_value = outcome or str(event.get("status", "OPEN"))
+    result_value = outcome or str(event.get("result") or status_value)
+    update_signal_event_refresh(
+        event_id=event_id,
+        status=status_value,
+        result=result_value,
+        entry_touched=entry_touched,
+        tp1_hit=tp1_hit,
+        tp2_hit=tp2_hit,
+        last_checked_at=now,
+    )
+    updated = dict(event)
+    updated["status"] = status_value
+    updated["result"] = result_value
+    updated["entry_touched"] = entry_touched
+    updated["tp1_hit"] = tp1_hit
+    updated["tp2_hit"] = tp2_hit
+    updated["last_checked_at"] = now
+    return updated
 
 
 def _format_archive_detail(event: dict, lang: str) -> str:
@@ -827,37 +1011,15 @@ async def history_callback(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
     period_key = callback.data.split(":", 1)[1]
-    page = 1
-    days = _period_days(period_key)
-    since_ts = int(time.time()) - days * 86400 if days is not None else None
-    total = count_signal_events(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=None,
+    page, pages, events, outcome_counts, score_bucket_counts = _get_history_page(
+        period_key=period_key,
+        page=1,
     )
-    print(f"[history] period={period_key} total={total}")
-    pages = max(1, (total + 9) // 10)
-    events_rows = list_signal_events(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=None,
-        limit=10,
-        offset=0,
-    )
-    events = [dict(row) for row in events_rows]
-    outcome_counts = get_signal_outcome_counts(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=None,
-    )
-    score_bucket_counts = get_signal_score_bucket_counts(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=None,
-    )
+    print(f"[history] period={period_key} total={len(events)} page={page}/{pages}")
     await callback.answer()
     lang = get_user_lang(callback.from_user.id) if callback.from_user else None
     lang = lang or "ru"
+    _set_history_context(callback.from_user.id, period_key, page)
     await callback.message.edit_text(
         _format_archive_list(
             lang,
@@ -868,7 +1030,14 @@ async def history_callback(callback: CallbackQuery):
             outcome_counts,
             score_bucket_counts,
         ),
-        reply_markup=_archive_inline_kb(lang, period_key, page, pages, events),
+        reply_markup=_archive_inline_kb(
+            lang,
+            period_key,
+            page,
+            pages,
+            events,
+            is_admin_user=is_admin(callback.from_user.id),
+        ),
     )
 
 
@@ -878,21 +1047,30 @@ def _archive_inline_kb(
     page: int,
     pages: int,
     events: list[dict],
+    *,
+    is_admin_user: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    for idx, event in enumerate(events, start=1):
+    for event in events:
         status_icon = _status_icon(str(event.get("status", "")))
-        rows.append(
-            [
+        row = [
+            InlineKeyboardButton(
+                text=(
+                    f"{status_icon} Score {int(event.get('score', 0))} — "
+                    f"{event.get('symbol')} {event.get('side')} | "
+                    f"{_format_event_time(int(event.get('ts', 0)))}"
+                ),
+                callback_data=f"sig_open:{event.get('id')}",
+            )
+        ]
+        if is_admin_user:
+            row.append(
                 InlineKeyboardButton(
-                    text=(
-                        f"{status_icon} Score {int(event.get('score', 0))} — "
-                        f"{event.get('symbol')} {event.get('side')}"
-                    ),
-                    callback_data=f"archive:detail:{period_key}:{page}:{event.get('id')}",
+                    text="🔄",
+                    callback_data=f"sig_refresh:{event.get('id')}",
                 )
-            ]
-        )
+            )
+        rows.append(row)
 
     nav_row: list[InlineKeyboardButton] = []
     if page > 1:
@@ -922,17 +1100,32 @@ def _archive_inline_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _archive_detail_kb(lang: str, period_key: str, page: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def _archive_detail_kb(
+    *,
+    lang: str,
+    back_callback: str,
+    event_id: int,
+    is_admin_user: bool,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if is_admin_user:
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text=i18n.t(lang, "NAV_BACK"),
-                    callback_data=f"archive:list:{period_key}:{page}",
+                    text="🔄",
+                    callback_data=f"sig_refresh:{event_id}",
                 )
             ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=i18n.t(lang, "NAV_BACK"),
+                callback_data=back_callback,
+            )
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @dp.callback_query(F.data.regexp(r"^archive:list:(1d|7d|30d|all):\d+$"))
@@ -940,38 +1133,15 @@ async def archive_list(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
     _, _, period_key, page_raw = callback.data.split(":")
-    page = max(1, int(page_raw))
-    days = _period_days(period_key)
-    since_ts = int(time.time()) - days * 86400 if days is not None else None
-    total = count_signal_events(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=None,
-    )
-    pages = max(1, (total + 9) // 10)
-    if page > pages:
-        page = pages
-    events_rows = list_signal_events(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=None,
-        limit=10,
-        offset=(page - 1) * 10,
-    )
-    events = [dict(row) for row in events_rows]
-    outcome_counts = get_signal_outcome_counts(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=None,
-    )
-    score_bucket_counts = get_signal_score_bucket_counts(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=None,
+    page_value = max(1, int(page_raw))
+    page, pages, events, outcome_counts, score_bucket_counts = _get_history_page(
+        period_key=period_key,
+        page=page_value,
     )
     await callback.answer()
     lang = get_user_lang(callback.from_user.id) if callback.from_user else None
     lang = lang or "ru"
+    _set_history_context(callback.from_user.id, period_key, page)
     await callback.message.edit_text(
         _format_archive_list(
             lang,
@@ -982,19 +1152,25 @@ async def archive_list(callback: CallbackQuery):
             outcome_counts,
             score_bucket_counts,
         ),
-        reply_markup=_archive_inline_kb(lang, period_key, page, pages, events),
+        reply_markup=_archive_inline_kb(
+            lang,
+            period_key,
+            page,
+            pages,
+            events,
+            is_admin_user=is_admin(callback.from_user.id),
+        ),
     )
 
 
-@dp.callback_query(F.data.regexp(r"^archive:detail:(1d|7d|30d|all):\d+:\d+$"))
-async def archive_detail(callback: CallbackQuery):
+@dp.callback_query(F.data.regexp(r"^sig_open:\d+$"))
+async def sig_open(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
-    _, _, period_key, page_raw, event_id_raw = callback.data.split(":")
-    page = max(1, int(page_raw))
+    event_id = int(callback.data.split(":", 1)[1])
     event = get_signal_event(
         user_id=None,
-        event_id=int(event_id_raw),
+        event_id=event_id,
     )
     if event is None:
         lang = get_user_lang(callback.from_user.id) or "ru"
@@ -1003,9 +1179,19 @@ async def archive_detail(callback: CallbackQuery):
     await callback.answer()
     lang = get_user_lang(callback.from_user.id) if callback.from_user else None
     lang = lang or "ru"
+    back_callback = "archive:back:all"
+    context = _get_history_context(callback.from_user.id)
+    if context:
+        period_key, page = context
+        back_callback = f"archive:list:{period_key}:{page}"
     await callback.message.edit_text(
         _format_archive_detail(dict(event), lang),
-        reply_markup=_archive_detail_kb(lang, period_key, page),
+        reply_markup=_archive_detail_kb(
+            lang=lang,
+            back_callback=back_callback,
+            event_id=event_id,
+            is_admin_user=is_admin(callback.from_user.id),
+        ),
     )
 
 
@@ -1020,6 +1206,81 @@ async def archive_back(callback: CallbackQuery):
         i18n.t(lang, "STATS_PICK_TEXT"),
         reply_markup=stats_inline_kb(lang),
     )
+
+
+@dp.callback_query(F.data.regexp(r"^sig_refresh:\d+$"))
+async def sig_refresh(callback: CallbackQuery):
+    if callback.from_user is None:
+        return
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав", show_alert=True)
+        return
+    await callback.answer("🔄 Обновляю…")
+    event_id = int(callback.data.split(":", 1)[1])
+    refreshed = await refresh_signal(event_id)
+    if refreshed is None:
+        await callback.answer(i18n.t(get_user_lang(callback.from_user.id) or "ru", "SIGNAL_NOT_FOUND"), show_alert=True)
+        return
+    if isinstance(refreshed, dict) and refreshed.get("error") == "cooldown":
+        retry_after = int(refreshed.get("retry_after", 0))
+        await callback.answer(f"Подождите {retry_after} сек.", show_alert=True)
+        return
+    if isinstance(refreshed, dict) and refreshed.get("error") == "degraded":
+        await callback.answer("Binance временно недоступен", show_alert=True)
+        return
+
+    if callback.message is None:
+        return
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    lang = lang or "ru"
+    if callback.message.text and callback.message.text.startswith("📊"):
+        context = _get_history_context(callback.from_user.id)
+        if context:
+            period_key, page = context
+            page, pages, events, outcome_counts, score_bucket_counts = _get_history_page(
+                period_key=period_key,
+                page=page,
+            )
+            await callback.message.edit_text(
+                _format_archive_list(
+                    lang,
+                    period_key,
+                    events,
+                    page,
+                    pages,
+                    outcome_counts,
+                    score_bucket_counts,
+                ),
+                reply_markup=_archive_inline_kb(
+                    lang,
+                    period_key,
+                    page,
+                    pages,
+                    events,
+                    is_admin_user=True,
+                ),
+            )
+            return
+
+    event = get_signal_event(user_id=None, event_id=event_id)
+    if event is None:
+        await callback.message.answer("Обновлено.")
+        return
+    back_callback = "archive:back:all"
+    context = _get_history_context(callback.from_user.id)
+    if context:
+        period_key, page = context
+        back_callback = f"archive:list:{period_key}:{page}"
+    with suppress(Exception):
+        await callback.message.edit_text(
+            _format_archive_detail(dict(event), lang),
+            reply_markup=_archive_detail_kb(
+                lang=lang,
+                back_callback=back_callback,
+                event_id=event_id,
+                is_admin_user=True,
+            ),
+        )
 
 @dp.callback_query(F.data == "ai_notify_on")
 async def ai_notify_on(callback: CallbackQuery):
