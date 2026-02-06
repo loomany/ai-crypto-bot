@@ -129,6 +129,9 @@ class MarketDataHub:
 
     def set_symbols(self, symbols: Iterable[str]) -> None:
         clean = [symbol for symbol in symbols if symbol]
+        if not clean:
+            logger.error("[market_hub] set_symbols called with EMPTY list — ignored")
+            return
         seen = set()
         ordered: List[str] = []
         for symbol in clean:
@@ -266,9 +269,21 @@ class MarketDataHub:
             try:
                 symbols = list(self._symbols_ordered or self._symbols)
                 if not symbols:
-                    cycle_reason = "no_symbols"
-                    self._warmup_active = False
-                    sleep_delay = 1.0
+                    # If universe not set yet, seed from top-volume symbols so hub can warm up
+                    seeded: List[str] = []
+                    try:
+                        seeded = await get_top_usdt_symbols_by_volume(WARMUP_TOP_SYMBOLS)
+                    except Exception as exc:
+                        logger.error("[market_hub] seed symbols fetch failed: %s", exc)
+
+                    if seeded:
+                        self.set_symbols(seeded)
+                        symbols = list(self._symbols_ordered or self._symbols)
+                        cycle_reason = "seeded_symbols"
+                    else:
+                        cycle_reason = "no_symbols"
+                        self._warmup_active = False
+                        sleep_delay = 1.0
                 else:
                     cache_size = sum(
                         1

@@ -4297,7 +4297,12 @@ async def ai_scan_once() -> None:
         with binance_request_context("ai_signals"):
             symbols = await _get_ai_universe()
         if symbols:
+            print(f"[market_hub] set_symbols called: n={len(symbols)} sample={symbols[:5]}")
             MARKET_HUB.set_symbols(symbols)
+            print(
+                f"[market_hub] after set_symbols: "
+                f"hub_n={len(getattr(MARKET_HUB, '_symbols', []))}"
+            )
             if module_state:
                 module_state.state["universe_symbols"] = symbols
         if not symbols:
