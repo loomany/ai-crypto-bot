@@ -13,7 +13,7 @@ from binance_client import (
     KLINES_5M_LIMIT,
     fetch_klines,
 )
-from binance_rest import binance_request_context
+from binance_rest import binance_request_context, is_binance_degraded
 
 DEFAULT_TFS: Tuple[str, ...] = ("1d", "4h", "1h", "15m", "5m")
 HUB_BATCH_SIZE = int(os.getenv("HUB_BATCH_SIZE", "6"))
@@ -118,6 +118,8 @@ class MarketDataHub:
             await asyncio.sleep(0.2)
 
     async def _refresh_batch(self, tf: str, symbols: List[str]) -> None:
+        if is_binance_degraded():
+            return
         symbols_to_fetch = [symbol for symbol in symbols if self.is_stale(symbol, tf)]
         if not symbols_to_fetch:
             return
