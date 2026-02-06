@@ -56,14 +56,18 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def get_klines_ttl_sec(interval: str) -> int:
+    return _KLINES_CACHE_TTL_BY_INTERVAL.get(interval, _KLINES_CACHE_TTL_SEC_DEFAULT)
+
+
 _KLINES_CACHE_TTL_SEC_DEFAULT = 20
 _KLINES_CACHE_TTL_BY_INTERVAL = {
-    "1d": _env_int("KLINES_TTL_1D", 60 * 60 * 6),
-    "4h": _env_int("KLINES_TTL_4H", 60 * 60),
-    "1h": _env_int("KLINES_TTL_1H", 60 * 20),
-    "30m": _env_int("KLINES_TTL_30M", 60 * 15),
-    "15m": _env_int("KLINES_TTL_15M", 60 * 10),
-    "5m": _env_int("KLINES_TTL_5M", 60 * 4),
+    "1d": _env_int("KLINES_TTL_1D", 21600),
+    "4h": _env_int("KLINES_TTL_4H", 3600),
+    "1h": _env_int("KLINES_TTL_1H", 1200),
+    "30m": _env_int("KLINES_TTL_30M", 900),
+    "15m": _env_int("KLINES_TTL_15M", 600),
+    "5m": _env_int("KLINES_TTL_5M", 240),
     "3m": _env_int("KLINES_TTL_3M", 90),
     "1m": _env_int("KLINES_TTL_1M", 60),
 }
@@ -349,7 +353,7 @@ async def fetch_klines(
 ) -> Optional[list]:
     now = time.time()
     module = _BINANCE_REQUEST_MODULE.get()
-    ttl_sec = _KLINES_CACHE_TTL_BY_INTERVAL.get(interval, _KLINES_CACHE_TTL_SEC_DEFAULT)
+    ttl_sec = get_klines_ttl_sec(interval)
     cache_key = None if start_ms is not None else (symbol, interval)
     if cache_key is not None:
         async with _KLINES_CACHE_LOCK:
