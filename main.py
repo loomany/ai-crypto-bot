@@ -36,6 +36,7 @@ from pump_detector import (
     PUMPDUMP_5M_LIMIT,
     format_pump_message,
     get_candidate_symbols,
+    get_pump_fallback_direct,
     scan_pumps_chunk,
 )
 from signals import (
@@ -49,6 +50,7 @@ from signals import (
     PRE_SCORE_THRESHOLD,
     MIN_PRE_SCORE,
     FINAL_SCORE_THRESHOLD,
+    get_ai_fallback_direct,
 )
 from market_access import get_quick_with_fallback
 from trading_core import compute_atr, compute_ema
@@ -59,7 +61,7 @@ from symbol_cache import (
     get_spot_usdt_symbols,
     get_top_usdt_symbols_by_volume,
 )
-from market_hub import MARKET_HUB
+from market_hub import MARKET_HUB, MARKET_HUB_DEGRADED
 from health import (
     MODULES,
     get_klines_request_count,
@@ -1990,6 +1992,7 @@ def _format_market_hub(now: float, lang: str) -> str:
     hub_task_alive = bool(getattr(MARKET_HUB, "is_task_alive", lambda: False)())
     warmup_active = bool(getattr(MARKET_HUB, "_warmup_active", False))
     cycle_reason = getattr(MARKET_HUB, "last_cycle_reason", None)
+    mode = "DEGRADED" if MARKET_HUB_DEGRADED else "OK"
     if not hub_running:
         cycle_state = "idle"
     elif symbols_count == 0:
@@ -2016,6 +2019,13 @@ def _format_market_hub(now: float, lang: str) -> str:
         f"• market_hub_task_alive={str(hub_task_alive).lower()}",
         i18n.t(lang, "DIAG_ACTIVE_SYMBOLS", count=symbols_count),
     ]
+    details.append(f"• market_hub_mode={mode}")
+    details.append(f"• hub_restarts={getattr(MARKET_HUB, 'hub_restarts', 0)}")
+    details.append(
+        f"• hub_zero_refresh_streak={getattr(MARKET_HUB, 'market_hub_zero_refresh_streak', 0)}"
+    )
+    details.append(f"• ai_fallback_direct={get_ai_fallback_direct()}")
+    details.append(f"• pump_fallback_direct={get_pump_fallback_direct()}")
     details.append(f"• universe_size={universe_size}")
     details.append(f"• market_hub_symbols_size={symbols_count}")
     if cycle_reason:
