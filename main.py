@@ -32,6 +32,8 @@ from pump_detector import (
     PUMP_VOLUME_MUL,
     PUMPDUMP_1M_INTERVAL,
     PUMPDUMP_1M_LIMIT,
+    PUMPDUMP_5M_INTERVAL,
+    PUMPDUMP_5M_LIMIT,
     format_pump_message,
     get_candidate_symbols,
     scan_pumps_chunk,
@@ -4237,8 +4239,11 @@ async def pump_scan_once(bot: Bot) -> None:
                 f"req={req_count} klines={klines_count} "
                 f"klines_hits={cache_stats.get('hits')} klines_misses={cache_stats.get('misses')} "
                 f"klines_inflight={cache_stats.get('inflight_awaits')} "
-                f"klines_source=shared_cache klines_interval={PUMPDUMP_1M_INTERVAL} "
-                f"klines_limit={PUMPDUMP_1M_LIMIT} "
+                f"klines_source=binance_rest_shared_cache "
+                f"klines_interval_1m={PUMPDUMP_1M_INTERVAL} "
+                f"klines_interval_5m={PUMPDUMP_5M_INTERVAL} "
+                f"klines_limit_1m={PUMPDUMP_1M_LIMIT} "
+                f"klines_limit_5m={PUMPDUMP_5M_LIMIT} "
                 f"ticker_req={ticker_count} fails={fails_str} "
                 f"rotation={'on' if rotation_enabled else 'off'} "
                 f"rotation_n={rotation_n} rotation_cursor={rotation_cursor}/{rotation_total} "

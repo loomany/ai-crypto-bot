@@ -425,6 +425,16 @@ async def fetch_klines(
                 _KLINES_INFLIGHT.pop(inflight_key, None)
 
 
+async def get_klines(
+    symbol: str,
+    interval: str,
+    limit: int,
+    *,
+    start_ms: int | None = None,
+) -> Optional[list]:
+    return await fetch_klines(symbol, interval, limit, start_ms=start_ms)
+
+
 async def _fetch_klines_from_binance(
     symbol: str,
     interval: str,

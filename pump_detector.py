@@ -9,7 +9,7 @@ import aiohttp
 import i18n
 
 from binance_client import Candle
-from binance_rest import binance_request_context, fetch_klines, is_binance_degraded
+from binance_rest import binance_request_context, get_klines, is_binance_degraded
 from symbol_cache import (
     filter_tradeable_symbols,
     get_spot_usdt_symbols,
@@ -19,6 +19,8 @@ from symbol_cache import (
 
 PUMPDUMP_1M_INTERVAL = "1m"
 PUMPDUMP_1M_LIMIT = int(os.getenv("PUMPDUMP_1M_LIMIT", "120"))
+PUMPDUMP_5M_INTERVAL = "5m"
+PUMPDUMP_5M_LIMIT = int(os.getenv("PUMPDUMP_5M_LIMIT", "60"))
 PUMP_1M_THRESHOLD = float(os.getenv("PUMP_1M_THRESHOLD", "1.6"))
 PUMP_5M_THRESHOLD = float(os.getenv("PUMP_5M_THRESHOLD", "3.2"))
 DUMP_1M_THRESHOLD = float(os.getenv("DUMP_1M_THRESHOLD", "-1.6"))
@@ -87,12 +89,14 @@ async def get_candidate_symbols(
     return result
 
 
-async def get_klines_1m(
-    symbol: str, limit: int = PUMPDUMP_1M_LIMIT
+async def get_shared_klines(
+    symbol: str,
+    interval: str,
+    limit: int,
 ) -> list[list[str]] | list[Candle] | None:
     try:
         with binance_request_context("pumpdump"):
-            return await fetch_klines(symbol, PUMPDUMP_1M_INTERVAL, limit)
+            return await get_klines(symbol, interval, limit, start_ms=None)
     except Exception as exc:
         print(f"[BINANCE] ERROR {symbol}: {exc}")
         return None
@@ -145,28 +149,36 @@ def _remember_signal(signal: Dict[str, Any]) -> bool:
 
 def _calc_signal_with_reason(
     symbol: str,
-    klines: list[list[str]] | list[Candle],
+    klines_1m: list[list[str]] | list[Candle],
+    klines_5m: list[list[str]] | list[Candle],
 ) -> tuple[Dict[str, Any] | None, str]:
-    if not klines or len(klines) < 6:
-        return None, "fail_short_series"
+    if not klines_1m or len(klines_1m) < 2:
+        return None, "fail_short_1m_series"
+    if not klines_5m or len(klines_5m) < 2:
+        return None, "fail_short_5m_series"
 
-    if isinstance(klines[0], Candle):
-        closes = [float(k.close) for k in klines]
-        volumes = [float(k.volume) for k in klines]
+    if isinstance(klines_1m[0], Candle):
+        closes_1m = [float(k.close) for k in klines_1m]
     else:
-        closes = [float(k[4]) for k in klines]
-        volumes = [float(k[5]) for k in klines]
+        closes_1m = [float(k[4]) for k in klines_1m]
 
-    last_price = closes[-1]
-    price_1m = closes[-2]
-    price_5m = closes[-6]
+    if isinstance(klines_5m[0], Candle):
+        closes_5m = [float(k.close) for k in klines_5m]
+        volumes_5m = [float(k.volume) for k in klines_5m]
+    else:
+        closes_5m = [float(k[4]) for k in klines_5m]
+        volumes_5m = [float(k[5]) for k in klines_5m]
 
+    last_price = closes_1m[-1]
+    price_1m = closes_1m[-2]
     change_1m = (last_price / price_1m - 1) * 100
-    change_5m = (last_price / price_5m - 1) * 100
 
-    volume_5m = sum(volumes[-5:])
-    avg_volume_1m = sum(volumes[:-5]) / max(1, len(volumes) - 5)
-    avg_volume_5m = avg_volume_1m * 5
+    price_5m = closes_5m[-2]
+    last_price_5m = closes_5m[-1]
+    change_5m = (last_price_5m / price_5m - 1) * 100
+
+    volume_5m = volumes_5m[-1]
+    avg_volume_5m = sum(volumes_5m[:-1]) / max(1, len(volumes_5m) - 1)
     if avg_volume_5m <= 0:
         return None, "fail_avg_volume"
     volume_mul = volume_5m / avg_volume_5m
@@ -216,9 +228,10 @@ def _calc_signal_with_reason(
 
 def _calc_signal_from_klines(
     symbol: str,
-    klines: list[list[str]] | list[Candle],
+    klines_1m: list[list[str]] | list[Candle],
+    klines_5m: list[list[str]] | list[Candle],
 ) -> Dict[str, Any] | None:
-    sig, _ = _calc_signal_with_reason(symbol, klines)
+    sig, _ = _calc_signal_with_reason(symbol, klines_1m, klines_5m)
     return sig
 
 
@@ -278,14 +291,19 @@ async def scan_pumps_chunk(
         max_symbols = min(max_symbols, PUMP_DEGRADED_SYMBOL_LIMIT)
     end_idx = min(start_idx + max_symbols, len(symbols))
     start_ts = time.time()
+
+    async def _fetch_symbol_klines(symbol: str) -> tuple[str, Any, Any]:
+        klines_1m, klines_5m = await asyncio.gather(
+            get_shared_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT),
+            get_shared_klines(symbol, PUMPDUMP_5M_INTERVAL, PUMPDUMP_5M_LIMIT),
+        )
+        return symbol, klines_1m, klines_5m
+
     for i in range(start_idx, end_idx, batch_size):
         if time_budget_sec is not None and time.time() - start_ts >= time_budget_sec:
             break
         batch = symbols[i : i + batch_size]
-        tasks = [
-            asyncio.create_task(get_klines_1m(symbol, limit=PUMPDUMP_1M_LIMIT))
-            for symbol in batch
-        ]
+        tasks = [asyncio.create_task(_fetch_symbol_klines(symbol)) for symbol in batch]
         klines_list = await asyncio.gather(*tasks, return_exceptions=True)
 
         for symbol, klines in zip(batch, klines_list):
@@ -297,7 +315,8 @@ async def scan_pumps_chunk(
             if isinstance(klines, Exception):
                 fails["fail_klines_exception"] = fails.get("fail_klines_exception", 0) + 1
                 continue
-            sig, reason = _calc_signal_with_reason(symbol, klines)
+            _, klines_1m, klines_5m = klines
+            sig, reason = _calc_signal_with_reason(symbol, klines_1m, klines_5m)
             if sig:
                 results.append(sig)
             else:
@@ -332,7 +351,12 @@ async def scan_pumps(
                 break
             batch = ordered_symbols[i : i + batch_size]
             tasks = [
-                asyncio.create_task(get_klines_1m(symbol, limit=PUMPDUMP_1M_LIMIT))
+                asyncio.create_task(
+                    asyncio.gather(
+                        get_shared_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT),
+                        get_shared_klines(symbol, PUMPDUMP_5M_INTERVAL, PUMPDUMP_5M_LIMIT),
+                    )
+                )
                 for symbol in batch
             ]
             klines_list = await asyncio.gather(*tasks, return_exceptions=True)
@@ -341,7 +365,8 @@ async def scan_pumps(
                 checked += 1
                 if isinstance(klines, Exception):
                     continue
-                sig = _calc_signal_from_klines(symbol, klines)
+                klines_1m, klines_5m = klines
+                sig = _calc_signal_from_klines(symbol, klines_1m, klines_5m)
                 if sig:
                     results.append(sig)
 
@@ -392,31 +417,39 @@ async def generate_pump_alert(symbol: str) -> str | None:
     если обнаружен памп или дамп.
 
     Использует тот же пороговый анализ, что и scan_pumps(), но работает
-    через binance_rest.fetch_klines, чтобы использовать общий кеш свечей.
+    через binance_rest.get_klines, чтобы использовать общий кеш свечей.
     """
 
     with binance_request_context("pumpdump"):
-        klines = await fetch_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT)
-    if not klines or len(klines) < 6:
+        klines_1m, klines_5m = await asyncio.gather(
+            get_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT, start_ms=None),
+            get_klines(symbol, PUMPDUMP_5M_INTERVAL, PUMPDUMP_5M_LIMIT, start_ms=None),
+        )
+    if not klines_1m or not klines_5m or len(klines_1m) < 2 or len(klines_5m) < 2:
         return None
 
-    if isinstance(klines[0], Candle):
-        closes = [k.close for k in klines]
-        volumes = [k.volume for k in klines]
+    if isinstance(klines_1m[0], Candle):
+        closes_1m = [k.close for k in klines_1m]
     else:
-        closes = [float(k[4]) for k in klines]
-        volumes = [float(k[5]) for k in klines]
+        closes_1m = [float(k[4]) for k in klines_1m]
 
-    last_price = closes[-1]
-    price_1m = closes[-2]
-    price_5m = closes[-6]
+    if isinstance(klines_5m[0], Candle):
+        closes_5m = [k.close for k in klines_5m]
+        volumes_5m = [k.volume for k in klines_5m]
+    else:
+        closes_5m = [float(k[4]) for k in klines_5m]
+        volumes_5m = [float(k[5]) for k in klines_5m]
+
+    last_price = closes_1m[-1]
+    price_1m = closes_1m[-2]
+    price_5m = closes_5m[-2]
+    last_price_5m = closes_5m[-1]
 
     change_1m = (last_price / price_1m - 1) * 100
-    change_5m = (last_price / price_5m - 1) * 100
+    change_5m = (last_price_5m / price_5m - 1) * 100
 
-    volume_5m = sum(volumes[-5:])
-    avg_volume_1m = sum(volumes[:-5]) / max(1, len(volumes) - 5)
-    avg_volume_5m = avg_volume_1m * 5
+    volume_5m = volumes_5m[-1]
+    avg_volume_5m = sum(volumes_5m[:-1]) / max(1, len(volumes_5m) - 1)
     if avg_volume_5m <= 0:
         return None
     volume_mul = volume_5m / avg_volume_5m
