@@ -2018,12 +2018,20 @@ def _format_btc_gate_section(lang: str) -> str:
         btc_ctx, age_sec, ttl_sec = btc_cache
         allow_longs = "✅" if btc_ctx.get("allow_longs", False) else "❌"
         allow_shorts = "✅" if btc_ctx.get("allow_shorts", False) else "❌"
-        ctx_reason = btc_ctx.get("ctx_reason") or "-"
-        btc_mode = btc_ctx.get("mode") or "-"
+        ctx_reason = btc_ctx.get("ctx_reason") or "unknown"
+        btc_mode = btc_ctx.get("btc_mode") or "neutral"
+        btc_trend_1h = btc_ctx.get("trend_1h") or "unknown"
+        btc_trend_4h = btc_ctx.get("trend_4h") or "unknown"
+        ema_bias = btc_ctx.get("ema_bias") or "unknown"
+        atr_volatility = btc_ctx.get("atr_volatility", 0.0)
         details.extend(
             [
                 i18n.t(lang, "DIAG_BTC_SYMBOL", symbol=btc_symbol),
                 i18n.t(lang, "DIAG_BTC_MODE", mode=btc_mode),
+                i18n.t(lang, "DIAG_BTC_TREND_1H", trend=btc_trend_1h),
+                i18n.t(lang, "DIAG_BTC_TREND_4H", trend=btc_trend_4h),
+                i18n.t(lang, "DIAG_BTC_EMA_BIAS", bias=ema_bias),
+                i18n.t(lang, "DIAG_BTC_ATR_VOL", value=f"{atr_volatility:.2f}%"),
                 i18n.t(lang, "DIAG_BTC_AGE", age=age_sec, ttl=ttl_sec),
                 i18n.t(lang, "DIAG_BTC_ALLOW_LONGS", flag=allow_longs),
                 i18n.t(lang, "DIAG_BTC_ALLOW_SHORTS", flag=allow_shorts),
