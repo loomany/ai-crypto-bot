@@ -81,7 +81,7 @@ async def get_required_candles(symbol: str, *, timings: dict[str, float] | None 
 
     out = {}
     for key, value in zip(tasks.keys(), results):
-        if isinstance(value, Exception):
+        if isinstance(value, BaseException):
             out[key] = []
         else:
             out[key] = value
@@ -122,7 +122,7 @@ async def get_quick_candles(
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
     out: dict[str, List[Candle]] = {}
     for key, value in zip(tasks.keys(), results):
-        if isinstance(value, Exception):
+        if isinstance(value, BaseException):
             out[key] = []
         else:
             out[key] = value
