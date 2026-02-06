@@ -645,13 +645,14 @@ def _format_ai_stats_message(stats: Dict[str, Any], period_key: str, lang: str) 
     return "\n".join(lines)
 
 
-def window_since(window: str, now: datetime) -> datetime | None:
+def window_since(window: str, now_ts: int) -> int | None:
+    day_seconds = 24 * 60 * 60
     if window == "1d":
-        return now - timedelta(days=1)
+        return now_ts - day_seconds
     if window == "7d":
-        return now - timedelta(days=7)
+        return now_ts - (7 * day_seconds)
     if window == "30d":
-        return now - timedelta(days=30)
+        return now_ts - (30 * day_seconds)
     return None
 
 
@@ -796,9 +797,8 @@ def _get_history_page(
     page: int,
 ) -> tuple[int, int, list[dict], dict, dict[str, dict[str, int]]]:
     enforce_signal_ttl()
-    now = datetime.now(tz=timezone.utc)
-    since = window_since(time_window, now)
-    since_ts = int(since.timestamp()) if since is not None else None
+    now_ts = int(time.time())
+    since_ts = window_since(time_window, now_ts)
     total = count_signal_events(
         user_id=None,
         since_ts=since_ts,
