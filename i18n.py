@@ -200,7 +200,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "HISTORY_SCORE_BUCKET_LINE": (
             "{label}: ✅ {passed} / ❌ {failed} / ⏳ {neutral} / ⏰ {in_progress}  ({percent}%)"
         ),
-        "HISTORY_NO_SIGNALS": "Нет сигналов за период.",
+        "HISTORY_NO_SIGNALS": "Нет сигналов за период ({period}).",
+        "HISTORY_NO_SIGNALS_BUTTON": "Нет сигналов за период ({period}).",
         "STATUS_OPEN": "Открыт",
         "STATUS_NO_FILL": "Нет входа",
         "STATUS_AMBIGUOUS": "Спорно",
@@ -635,7 +636,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "HISTORY_SCORE_BUCKET_LINE": (
             "{label}: ✅ {passed} / ❌ {failed} / ⏳ {neutral} / ⏰ {in_progress}  ({percent}%)"
         ),
-        "HISTORY_NO_SIGNALS": "No signals for the period.",
+        "HISTORY_NO_SIGNALS": "No signals for the period ({period}).",
+        "HISTORY_NO_SIGNALS_BUTTON": "No signals for the period ({period}).",
         "STATUS_OPEN": "Open",
         "STATUS_NO_FILL": "No entry",
         "STATUS_AMBIGUOUS": "Ambiguous",
