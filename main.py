@@ -1052,18 +1052,19 @@ def _archive_inline_kb(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for event in events:
-        status_icon = _status_icon(str(event.get("status", "")))
+        event_status = str(event.get("status", ""))
+        status_icon = _status_icon(event_status)
         row = [
             InlineKeyboardButton(
                 text=(
-                    f"{status_icon} Score {int(event.get('score', 0))} — "
+                    f"{status_icon} Score {int(event.get('score', 0))} · "
                     f"{event.get('symbol')} {event.get('side')} | "
                     f"{_format_event_time(int(event.get('ts', 0)))}"
                 ),
                 callback_data=f"sig_open:{event.get('id')}",
             )
         ]
-        if is_admin_user:
+        if is_admin_user and event_status == "OPEN":
             row.append(
                 InlineKeyboardButton(
                     text="🔄",
@@ -1105,10 +1106,11 @@ def _archive_detail_kb(
     lang: str,
     back_callback: str,
     event_id: int,
+    event_status: str,
     is_admin_user: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    if is_admin_user:
+    if is_admin_user and event_status == "OPEN":
         rows.append(
             [
                 InlineKeyboardButton(
@@ -1190,6 +1192,7 @@ async def sig_open(callback: CallbackQuery):
             lang=lang,
             back_callback=back_callback,
             event_id=event_id,
+            event_status=str(event.get("status", "")),
             is_admin_user=is_admin(callback.from_user.id),
         ),
     )
