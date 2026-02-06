@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import time
 from contextlib import suppress
@@ -6,6 +7,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from binance_client import (
     Candle,
+    KLINES_1M_LIMIT,
     KLINES_15M_LIMIT,
     KLINES_1D_LIMIT,
     KLINES_1H_LIMIT,
@@ -18,6 +20,7 @@ from binance_rest import (
     get_klines_ttl_sec,
     is_binance_degraded,
 )
+from symbol_cache import get_top_usdt_symbols_by_volume
 
 DEFAULT_TFS: Tuple[str, ...] = ("1d", "4h", "1h", "15m", "5m")
 HUB_BATCH_SIZE = int(os.getenv("HUB_BATCH_SIZE", "6"))
@@ -28,6 +31,7 @@ TF_LIMITS = {
     "1h": KLINES_1H_LIMIT,
     "15m": KLINES_15M_LIMIT,
     "5m": KLINES_5M_LIMIT,
+    "1m": KLINES_1M_LIMIT,
 }
 
 WARMUP_MIN_SYMBOLS = int(os.getenv("MARKET_HUB_WARMUP_MIN_SYMBOLS", "100"))
@@ -35,6 +39,14 @@ WARMUP_TARGET_SYMBOLS = int(os.getenv("MARKET_HUB_WARMUP_TARGET_SYMBOLS", "250")
 WARMUP_AFTER_SEC = int(os.getenv("MARKET_HUB_WARMUP_AFTER_SEC", "120"))
 WARMUP_BURST_SIZE = int(os.getenv("MARKET_HUB_WARMUP_BURST_SIZE", "100"))
 WARMUP_MIN_BURST = int(os.getenv("MARKET_HUB_WARMUP_MIN_BURST", "50"))
+WARMUP_REFRESH_SEC = int(os.getenv("MARKET_HUB_WARMUP_REFRESH_SEC", "180"))
+WARMUP_TOP_SYMBOLS = int(os.getenv("MARKET_HUB_WARMUP_TOP_SYMBOLS", "200"))
+MARKET_HUB_STALL_SEC = int(os.getenv("MARKET_HUB_STALL_SEC", "120"))
+MARKET_HUB_WATCHDOG_INTERVAL_SEC = int(
+    os.getenv("MARKET_HUB_WATCHDOG_INTERVAL_SEC", "30")
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _chunked(items: List[str], size: int) -> List[List[str]]:
@@ -49,6 +61,8 @@ class MarketDataHub:
         batch_size: int = HUB_BATCH_SIZE,
     ) -> None:
         self._tfs = tfs
+        warmup_base = ("1m", "5m", "15m", "1h")
+        self._warmup_tfs = tuple(dict.fromkeys(warmup_base + self._tfs))
         self._batch_size = max(1, batch_size)
         self._candles: Dict[str, Dict[str, List[Candle]]] = {}
         self._updated_at: Dict[str, Dict[str, float]] = {}
@@ -72,6 +86,9 @@ class MarketDataHub:
         self._warmup_forced = False
         self._warmup_active = False
         self._warmup_offset = 0
+        self._warmup_symbols: List[str] = []
+        self._warmup_symbols_updated_at = 0.0
+        self._watchdog_task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
         if self._running and self._task and not self._task.done():
@@ -81,6 +98,8 @@ class MarketDataHub:
         self._running = True
         self._task = asyncio.create_task(self._run())
         self._task.add_done_callback(self._handle_task_done)
+        if not self._watchdog_task or self._watchdog_task.done():
+            self._watchdog_task = asyncio.create_task(self._watchdog_loop())
 
     async def stop(self) -> None:
         self._running = False
@@ -89,6 +108,11 @@ class MarketDataHub:
             with suppress(asyncio.CancelledError):
                 await self._task
         self._task = None
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._watchdog_task
+        self._watchdog_task = None
 
     def is_task_alive(self) -> bool:
         return bool(self._task) and not self._task.done()
@@ -160,6 +184,48 @@ class MarketDataHub:
             return symbols[start:end]
         return symbols[start:] + symbols[: end - len(symbols)]
 
+    async def _get_warmup_symbols(self, symbols: List[str]) -> List[str]:
+        now = time.time()
+        cached = self._warmup_symbols
+        if cached and now - self._warmup_symbols_updated_at < WARMUP_REFRESH_SEC:
+            if symbols:
+                return [symbol for symbol in cached if symbol in symbols]
+            return cached
+        warmup_symbols: List[str] = []
+        try:
+            warmup_symbols = await get_top_usdt_symbols_by_volume(WARMUP_TOP_SYMBOLS)
+        except Exception as exc:
+            logger.error("[market_hub] warmup symbols fetch failed: %s", exc)
+        if symbols:
+            warmup_symbols = [symbol for symbol in warmup_symbols if symbol in symbols]
+        if not warmup_symbols:
+            warmup_symbols = symbols
+        self._warmup_symbols = warmup_symbols
+        self._warmup_symbols_updated_at = now
+        return warmup_symbols
+
+    async def _watchdog_loop(self) -> None:
+        while self._running:
+            await asyncio.sleep(MARKET_HUB_WATCHDOG_INTERVAL_SEC)
+            if not self._running:
+                break
+            last_tick = self.last_cycle_ts
+            if last_tick and time.time() - last_tick > MARKET_HUB_STALL_SEC:
+                stalled_for = int(time.time() - last_tick)
+                logger.error(
+                    "[market_hub] stalled for %ss, restarting task", stalled_for
+                )
+                await self._restart_task(reason="stalled")
+
+    async def _restart_task(self, reason: str) -> None:
+        if self._task and not self._task.done():
+            self._task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._task
+        self._task = asyncio.create_task(self._run())
+        self._task.add_done_callback(self._handle_task_done)
+        self.last_error = f"market_hub restart: {reason}"
+
     def _handle_task_done(self, task: asyncio.Task) -> None:
         if not self._running:
             return
@@ -197,14 +263,19 @@ class MarketDataHub:
                     warmup_active = self._should_warmup(cache_size)
                     self._warmup_active = warmup_active
                     force_symbols: set[str] = set()
+                    tfs = self._tfs
                     if warmup_active:
                         cycle_reason = "warmup"
-                        force_symbols = set(self._select_warmup_symbols(sorted(symbols)))
+                        warmup_symbols = await self._get_warmup_symbols(symbols)
+                        force_symbols = set(self._select_warmup_symbols(warmup_symbols))
+                        tfs = self._warmup_tfs
                     elif self._should_force_warmup(time.time()):
                         cycle_reason = "forced_warmup"
-                        force_symbols = set(self._select_warmup_symbols(sorted(symbols)))
+                        warmup_symbols = await self._get_warmup_symbols(symbols)
+                        force_symbols = set(self._select_warmup_symbols(warmup_symbols))
+                        tfs = self._warmup_tfs
                         self._warmup_forced = True
-                    for tf in self._tfs:
+                    for tf in tfs:
                         for batch in _chunked(symbols, self._batch_size):
                             attempted, refreshed, unchanged, skipped, errors = await self._refresh_batch(
                                 tf, batch, force_symbols=force_symbols
@@ -226,6 +297,11 @@ class MarketDataHub:
                 cycle_reason = "error"
                 print(f"[market_hub] loop error: {self.last_error}")
             finally:
+                if cycle_reason == "no_symbols" and self._symbols:
+                    cycle_reason = "BUG_symbols_shadowed"
+                    logger.error(
+                        "[market_hub] BUG: symbols present but no_symbols reason triggered"
+                    )
                 self.last_cycle_attempted = cycle_attempted
                 self.last_cycle_refreshed = len(cycle_refreshed)
                 self.last_cycle_unchanged = cycle_unchanged

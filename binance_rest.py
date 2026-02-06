@@ -60,16 +60,26 @@ def get_klines_ttl_sec(interval: str) -> int:
     return _KLINES_CACHE_TTL_BY_INTERVAL.get(interval, _KLINES_CACHE_TTL_SEC_DEFAULT)
 
 
-_KLINES_CACHE_TTL_SEC_DEFAULT = 20
+_KLINES_CACHE_TTL_SEC_DEFAULT = _env_int("KLINES_TTL_DEFAULT", 45)
 _KLINES_CACHE_TTL_BY_INTERVAL = {
-    "1d": _env_int("KLINES_TTL_1D", 21600),
-    "4h": _env_int("KLINES_TTL_4H", 3600),
-    "1h": _env_int("KLINES_TTL_1H", 1200),
-    "30m": _env_int("KLINES_TTL_30M", 900),
-    "15m": _env_int("KLINES_TTL_15M", 600),
-    "5m": _env_int("KLINES_TTL_5M", 240),
-    "3m": _env_int("KLINES_TTL_3M", 90),
-    "1m": _env_int("KLINES_TTL_1M", 60),
+    "1d": _env_int("KLINES_TTL_1D", 28800),
+    "4h": _env_int("KLINES_TTL_4H", 5400),
+    "1h": _env_int("KLINES_TTL_1H", 1800),
+    "30m": _env_int("KLINES_TTL_30M", 1200),
+    "15m": _env_int("KLINES_TTL_15M", 900),
+    "5m": _env_int("KLINES_TTL_5M", 300),
+    "3m": _env_int("KLINES_TTL_3M", 150),
+    "1m": _env_int("KLINES_TTL_1M", 90),
+}
+_KLINES_CACHE_MIN_LIMIT_BY_INTERVAL = {
+    "1d": _env_int("KLINES_CACHE_MIN_1D", 60),
+    "4h": _env_int("KLINES_CACHE_MIN_4H", 120),
+    "1h": _env_int("KLINES_CACHE_MIN_1H", 120),
+    "30m": _env_int("KLINES_CACHE_MIN_30M", 120),
+    "15m": _env_int("KLINES_CACHE_MIN_15M", 120),
+    "5m": _env_int("KLINES_CACHE_MIN_5M", 120),
+    "3m": _env_int("KLINES_CACHE_MIN_3M", 120),
+    "1m": _env_int("KLINES_CACHE_MIN_1M", 120),
 }
 _KLINES_CACHE_LOCK = asyncio.Lock()
 _KLINES_INFLIGHT_LOCK = asyncio.Lock()
@@ -194,8 +204,8 @@ async def _enter_degraded(reason: str) -> None:
 # ---- optional concurrency gate (reduces socket spikes) ----
 # One more layer in addition to rate limiter/weight tracker.
 BINANCE_SEM = asyncio.Semaphore(_env_int("BINANCE_MAX_CONCURRENCY", 5))
-KLINES_SEM = asyncio.Semaphore(int(os.getenv("BINANCE_KLINES_CONCURRENCY", "6")))
-AGGTRADES_SEM = asyncio.Semaphore(int(os.getenv("BINANCE_AGGTRADES_CONCURRENCY", "8")))
+KLINES_SEM = asyncio.Semaphore(int(os.getenv("BINANCE_KLINES_CONCURRENCY", "8")))
+AGGTRADES_SEM = asyncio.Semaphore(int(os.getenv("BINANCE_AGGTRADES_CONCURRENCY", "10")))
 
 
 @contextmanager
@@ -355,6 +365,11 @@ async def fetch_klines(
     module = _BINANCE_REQUEST_MODULE.get()
     ttl_sec = get_klines_ttl_sec(interval)
     cache_key = None if start_ms is not None else (symbol, interval)
+    fetch_limit = limit
+    if cache_key is not None:
+        min_limit = _KLINES_CACHE_MIN_LIMIT_BY_INTERVAL.get(interval)
+        if min_limit:
+            fetch_limit = max(fetch_limit, min_limit)
     if cache_key is not None:
         async with _KLINES_CACHE_LOCK:
             cached = _KLINES_CACHE.get(cache_key)
@@ -372,10 +387,9 @@ async def fetch_klines(
         print(f"[binance_rest] degraded: skip klines fetch {symbol} {interval}")
         return None
 
-    _increment_stat(_KLINES_CACHE_MISSES, module)
     inflight_key = (symbol, interval, int(start_ms or 0))
     created = False
-    requested_limit = limit
+    requested_limit = fetch_limit
     async with _KLINES_INFLIGHT_LOCK:
         inflight = _KLINES_INFLIGHT.get(inflight_key)
         if inflight is None:
@@ -384,7 +398,7 @@ async def fetch_klines(
                 _fetch_klines_from_binance(
                     symbol,
                     interval,
-                    limit,
+                    requested_limit,
                     start_ms=start_ms,
                     cache_key=cache_key,
                     now=now,
@@ -406,6 +420,8 @@ async def fetch_klines(
                     )
                 )
                 _KLINES_INFLIGHT[inflight_key] = (task, requested_limit)
+    if created:
+        _increment_stat(_KLINES_CACHE_MISSES, module)
 
     if not created:
         _increment_stat(_KLINES_INFLIGHT_AWAITS, module)
