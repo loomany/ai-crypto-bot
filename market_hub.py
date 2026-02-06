@@ -31,8 +31,10 @@ TF_LIMITS = {
 }
 
 WARMUP_MIN_SYMBOLS = int(os.getenv("MARKET_HUB_WARMUP_MIN_SYMBOLS", "100"))
+WARMUP_TARGET_SYMBOLS = int(os.getenv("MARKET_HUB_WARMUP_TARGET_SYMBOLS", "250"))
 WARMUP_AFTER_SEC = int(os.getenv("MARKET_HUB_WARMUP_AFTER_SEC", "120"))
 WARMUP_BURST_SIZE = int(os.getenv("MARKET_HUB_WARMUP_BURST_SIZE", "100"))
+WARMUP_MIN_BURST = int(os.getenv("MARKET_HUB_WARMUP_MIN_BURST", "50"))
 
 
 def _chunked(items: List[str], size: int) -> List[List[str]]:
@@ -63,16 +65,20 @@ class MarketDataHub:
         self.last_cycle_ms = 0
         self.last_cycle_cache_size = 0
         self.last_cycle_ts = 0.0
+        self.last_cycle_reason: Optional[str] = None
         self._started_at = 0.0
         self._warmup_forced = False
+        self._warmup_active = False
+        self._warmup_offset = 0
 
     async def start(self) -> None:
-        if self._running:
+        if self._running and self._task and not self._task.done():
             return
         self._started_at = time.time()
         self._warmup_forced = False
         self._running = True
         self._task = asyncio.create_task(self._run())
+        self._task.add_done_callback(self._handle_task_done)
 
     async def stop(self) -> None:
         self._running = False
@@ -81,6 +87,9 @@ class MarketDataHub:
             with suppress(asyncio.CancelledError):
                 await self._task
         self._task = None
+
+    def is_task_alive(self) -> bool:
+        return bool(self._task) and not self._task.done()
 
     def register_symbols(self, symbols: Iterable[str]) -> None:
         for symbol in symbols:
@@ -116,54 +125,112 @@ class MarketDataHub:
             return False
         return self.last_cycle_cache_size < WARMUP_MIN_SYMBOLS
 
+    def _should_warmup(self, cache_size: int) -> bool:
+        if cache_size < WARMUP_MIN_SYMBOLS:
+            return True
+        if self._warmup_active and cache_size < WARMUP_TARGET_SYMBOLS:
+            return True
+        return False
+
+    def _select_warmup_symbols(self, symbols: List[str]) -> List[str]:
+        if not symbols:
+            return []
+        burst_size = max(WARMUP_MIN_BURST, WARMUP_BURST_SIZE)
+        burst_size = min(len(symbols), burst_size)
+        start = self._warmup_offset % len(symbols)
+        end = start + burst_size
+        self._warmup_offset = (self._warmup_offset + burst_size) % len(symbols)
+        if end <= len(symbols):
+            return symbols[start:end]
+        return symbols[start:] + symbols[: end - len(symbols)]
+
+    def _handle_task_done(self, task: asyncio.Task) -> None:
+        if not self._running:
+            return
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error:
+            self.last_error = f"market_hub task crashed: {type(error).__name__} {error}"
+            print(f"[market_hub] crashed: {self.last_error}")
+        self._task = asyncio.create_task(self._run())
+        self._task.add_done_callback(self._handle_task_done)
+
     async def _run(self) -> None:
         while self._running:
-            cycle_start = time.perf_counter()
-            symbols = list(self._symbols)
-            if not symbols:
-                self.last_cycle_attempted = 0
-                self.last_cycle_refreshed = 0
-                self.last_cycle_unchanged = 0
-                self.last_cycle_skipped_no_klines = 0
-                self.last_cycle_errors = 0
-                self.last_cycle_ms = int((time.perf_counter() - cycle_start) * 1000)
-                self.last_cycle_cache_size = 0
-                self.last_cycle_ts = time.time()
-                await asyncio.sleep(0.5)
-                continue
+            cycle_start = time.monotonic()
             cycle_refreshed: set[str] = set()
             cycle_skipped = 0
             cycle_errors = 0
             cycle_attempted = 0
             cycle_unchanged = 0
-            force_symbols: set[str] = set()
-            if self._should_force_warmup(time.time()):
-                force_symbols = set(sorted(symbols)[:WARMUP_BURST_SIZE])
-                self._warmup_forced = True
-            for tf in self._tfs:
-                for batch in _chunked(symbols, self._batch_size):
-                    attempted, refreshed, unchanged, skipped, errors = await self._refresh_batch(
-                        tf, batch, force_symbols=force_symbols
+            cycle_reason: Optional[str] = None
+            sleep_delay = 0.2
+            try:
+                symbols = list(self._symbols)
+                if not symbols:
+                    cycle_reason = "no_symbols"
+                    self._warmup_active = False
+                    sleep_delay = 0.5
+                else:
+                    cache_size = sum(
+                        1
+                        for symbol_candles in self._candles.values()
+                        if any(symbol_candles.values())
                     )
-                    cycle_attempted += attempted
-                    cycle_unchanged += unchanged
-                    cycle_refreshed.update(refreshed)
-                    cycle_skipped += skipped
-                    cycle_errors += errors
-                    await asyncio.sleep(0)
-            self.last_cycle_attempted = cycle_attempted
-            self.last_cycle_refreshed = len(cycle_refreshed)
-            self.last_cycle_unchanged = cycle_unchanged
-            self.last_cycle_skipped_no_klines = cycle_skipped
-            self.last_cycle_errors = cycle_errors
-            self.last_cycle_ms = int((time.perf_counter() - cycle_start) * 1000)
-            self.last_cycle_cache_size = sum(
-                1
-                for symbol_candles in self._candles.values()
-                if any(symbol_candles.values())
-            )
-            self.last_cycle_ts = time.time()
-            await asyncio.sleep(0.2)
+                    warmup_active = self._should_warmup(cache_size)
+                    self._warmup_active = warmup_active
+                    force_symbols: set[str] = set()
+                    if warmup_active:
+                        cycle_reason = "warmup"
+                        force_symbols = set(self._select_warmup_symbols(sorted(symbols)))
+                    elif self._should_force_warmup(time.time()):
+                        cycle_reason = "forced_warmup"
+                        force_symbols = set(self._select_warmup_symbols(sorted(symbols)))
+                        self._warmup_forced = True
+                    for tf in self._tfs:
+                        for batch in _chunked(symbols, self._batch_size):
+                            attempted, refreshed, unchanged, skipped, errors = await self._refresh_batch(
+                                tf, batch, force_symbols=force_symbols
+                            )
+                            cycle_attempted += attempted
+                            cycle_unchanged += unchanged
+                            cycle_refreshed.update(refreshed)
+                            cycle_skipped += skipped
+                            cycle_errors += errors
+                            await asyncio.sleep(0)
+                    self.last_cycle_cache_size = sum(
+                        1
+                        for symbol_candles in self._candles.values()
+                        if any(symbol_candles.values())
+                    )
+            except Exception as exc:
+                cycle_errors += 1
+                self.last_error = f"market_hub loop error: {type(exc).__name__} {exc}"
+                cycle_reason = "error"
+                print(f"[market_hub] loop error: {self.last_error}")
+            finally:
+                self.last_cycle_attempted = cycle_attempted
+                self.last_cycle_refreshed = len(cycle_refreshed)
+                self.last_cycle_unchanged = cycle_unchanged
+                self.last_cycle_skipped_no_klines = cycle_skipped
+                self.last_cycle_errors = cycle_errors
+                self.last_cycle_reason = cycle_reason
+                elapsed_ms = int((time.monotonic() - cycle_start) * 1000)
+                if cycle_attempted > 0:
+                    self.last_cycle_ms = max(1, elapsed_ms)
+                else:
+                    self.last_cycle_ms = elapsed_ms
+                if cycle_reason == "no_symbols":
+                    self.last_cycle_cache_size = 0
+                elif self.last_cycle_cache_size == 0 and self._candles:
+                    self.last_cycle_cache_size = sum(
+                        1
+                        for symbol_candles in self._candles.values()
+                        if any(symbol_candles.values())
+                    )
+                self.last_cycle_ts = time.time()
+            await asyncio.sleep(sleep_delay)
 
     async def _refresh_batch(
         self,
