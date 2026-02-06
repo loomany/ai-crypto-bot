@@ -1984,12 +1984,15 @@ def _format_market_hub(now: float, lang: str) -> str:
     errors = getattr(MARKET_HUB, "last_cycle_errors", 0)
     dt_ms = getattr(MARKET_HUB, "last_cycle_ms", 0)
     cache_size = getattr(MARKET_HUB, "last_cycle_cache_size", 0)
-    if refreshed > 0:
-        cycle_state = "ok"
-    elif skipped > 0 or errors > 0 or attempted > 0 or symbols_count > 0:
+    hub_running = bool(getattr(MARKET_HUB, "_running", False))
+    if not hub_running:
+        cycle_state = "idle"
+    elif symbols_count == 0:
         cycle_state = "empty"
     else:
-        cycle_state = "idle"
+        cycle_state = "ok"
+    last_cycle_ts = getattr(MARKET_HUB, "last_cycle_ts", 0.0)
+    last_tick_age = int(now - last_cycle_ts) if last_cycle_ts else None
     status_label = _build_status_label(
         ok=bool(MARKET_HUB.last_ok_at) and not MARKET_HUB.last_error,
         warn=bool(MARKET_HUB.last_error) or not MARKET_HUB.last_ok_at,
@@ -2000,6 +2003,7 @@ def _format_market_hub(now: float, lang: str) -> str:
     )
     details = [
         i18n.t(lang, "DIAG_LAST_TICK", tick=last_tick),
+        f"• Last tick age: {last_tick_age}s" if last_tick_age is not None else "• Last tick age: n/a",
         f"• Последний цикл: {cycle_state} | attempted={attempted} refreshed={refreshed} "
         f"unchanged={unchanged} errors={errors} dt={dt_ms}ms",
         f"• Cache: symbols_with_data={cache_size}",

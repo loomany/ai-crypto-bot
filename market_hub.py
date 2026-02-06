@@ -13,7 +13,11 @@ from binance_client import (
     KLINES_5M_LIMIT,
     fetch_klines,
 )
-from binance_rest import binance_request_context, is_binance_degraded
+from binance_rest import (
+    binance_request_context,
+    get_klines_ttl_sec,
+    is_binance_degraded,
+)
 
 DEFAULT_TFS: Tuple[str, ...] = ("1d", "4h", "1h", "15m", "5m")
 HUB_BATCH_SIZE = int(os.getenv("HUB_BATCH_SIZE", "6"))
@@ -26,21 +30,9 @@ TF_LIMITS = {
     "5m": KLINES_5M_LIMIT,
 }
 
-TF_SECONDS = {
-    "1d": 60 * 60 * 24,
-    "4h": 60 * 60 * 4,
-    "1h": 60 * 60,
-    "15m": 60 * 15,
-    "5m": 60 * 5,
-}
-
-TF_STALE_SECONDS = {
-    "1d": 60 * 60 * 30,
-    "4h": 60 * 60 * 6,
-    "1h": 60 * 60 * 2,
-    "15m": 60 * 30,
-    "5m": 60 * 10,
-}
+WARMUP_MIN_SYMBOLS = int(os.getenv("MARKET_HUB_WARMUP_MIN_SYMBOLS", "100"))
+WARMUP_AFTER_SEC = int(os.getenv("MARKET_HUB_WARMUP_AFTER_SEC", "120"))
+WARMUP_BURST_SIZE = int(os.getenv("MARKET_HUB_WARMUP_BURST_SIZE", "100"))
 
 
 def _chunked(items: List[str], size: int) -> List[List[str]]:
@@ -70,10 +62,15 @@ class MarketDataHub:
         self.last_cycle_errors = 0
         self.last_cycle_ms = 0
         self.last_cycle_cache_size = 0
+        self.last_cycle_ts = 0.0
+        self._started_at = 0.0
+        self._warmup_forced = False
 
     async def start(self) -> None:
         if self._running:
             return
+        self._started_at = time.time()
+        self._warmup_forced = False
         self._running = True
         self._task = asyncio.create_task(self._run())
 
@@ -106,11 +103,18 @@ class MarketDataHub:
         candles = self._candles.get(symbol, {}).get(tf)
         if not candles:
             return True
-        last = candles[-1]
-        now_ms = int(time.time() * 1000)
-        close_time = int(getattr(last, "close_time", 0))
-        max_age_sec = TF_STALE_SECONDS.get(tf, TF_SECONDS.get(tf, 60) * 2)
-        return now_ms - close_time > max_age_sec * 1000
+        last_update = self._updated_at.get(symbol, {}).get(tf)
+        if not last_update:
+            return True
+        ttl_sec = get_klines_ttl_sec(tf)
+        return (time.time() - last_update) > ttl_sec
+
+    def _should_force_warmup(self, now: float) -> bool:
+        if self._warmup_forced or not self._started_at:
+            return False
+        if now - self._started_at < WARMUP_AFTER_SEC:
+            return False
+        return self.last_cycle_cache_size < WARMUP_MIN_SYMBOLS
 
     async def _run(self) -> None:
         while self._running:
@@ -124,6 +128,7 @@ class MarketDataHub:
                 self.last_cycle_errors = 0
                 self.last_cycle_ms = int((time.perf_counter() - cycle_start) * 1000)
                 self.last_cycle_cache_size = 0
+                self.last_cycle_ts = time.time()
                 await asyncio.sleep(0.5)
                 continue
             cycle_refreshed: set[str] = set()
@@ -131,10 +136,14 @@ class MarketDataHub:
             cycle_errors = 0
             cycle_attempted = 0
             cycle_unchanged = 0
+            force_symbols: set[str] = set()
+            if self._should_force_warmup(time.time()):
+                force_symbols = set(sorted(symbols)[:WARMUP_BURST_SIZE])
+                self._warmup_forced = True
             for tf in self._tfs:
                 for batch in _chunked(symbols, self._batch_size):
                     attempted, refreshed, unchanged, skipped, errors = await self._refresh_batch(
-                        tf, batch
+                        tf, batch, force_symbols=force_symbols
                     )
                     cycle_attempted += attempted
                     cycle_unchanged += unchanged
@@ -153,10 +162,15 @@ class MarketDataHub:
                 for symbol_candles in self._candles.values()
                 if any(symbol_candles.values())
             )
+            self.last_cycle_ts = time.time()
             await asyncio.sleep(0.2)
 
     async def _refresh_batch(
-        self, tf: str, symbols: List[str]
+        self,
+        tf: str,
+        symbols: List[str],
+        *,
+        force_symbols: Optional[set[str]] = None,
     ) -> tuple[int, set[str], int, int, int]:
         updated_symbols: set[str] = set()
         skipped_no_klines = 0
@@ -165,7 +179,11 @@ class MarketDataHub:
         unchanged = 0
         if is_binance_degraded():
             return attempted, updated_symbols, unchanged, skipped_no_klines, errors_count
-        symbols_to_fetch = [symbol for symbol in symbols if self.is_stale(symbol, tf)]
+        symbols_to_fetch = [
+            symbol
+            for symbol in symbols
+            if (force_symbols and symbol in force_symbols) or self.is_stale(symbol, tf)
+        ]
         if not symbols_to_fetch:
             unchanged = len(symbols)
             return attempted, updated_symbols, unchanged, skipped_no_klines, errors_count

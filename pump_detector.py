@@ -18,9 +18,13 @@ from symbol_cache import (
 )
 
 PUMPDUMP_1M_INTERVAL = "1m"
-PUMPDUMP_1M_LIMIT = int(os.getenv("PUMPDUMP_1M_LIMIT", "120"))
+PUMPDUMP_1M_LIMIT = int(
+    os.getenv("PUMP_LIMIT_1M", os.getenv("PUMPDUMP_1M_LIMIT", "120"))
+)
 PUMPDUMP_5M_INTERVAL = "5m"
-PUMPDUMP_5M_LIMIT = int(os.getenv("PUMPDUMP_5M_LIMIT", "60"))
+PUMPDUMP_5M_LIMIT = int(
+    os.getenv("PUMP_LIMIT_5M", os.getenv("PUMPDUMP_5M_LIMIT", "120"))
+)
 PUMP_1M_THRESHOLD = float(os.getenv("PUMP_1M_THRESHOLD", "1.6"))
 PUMP_5M_THRESHOLD = float(os.getenv("PUMP_5M_THRESHOLD", "3.2"))
 DUMP_1M_THRESHOLD = float(os.getenv("DUMP_1M_THRESHOLD", "-1.6"))

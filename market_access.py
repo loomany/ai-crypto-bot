@@ -19,7 +19,8 @@ async def get_bundle_with_fallback(
     timings: dict[str, float] | None = None,
 ) -> Optional[Dict[str, List[Candle]]]:
     # 1) пытаемся из хаба
-    for _ in range(wait_tries):
+    attempts = max(1, wait_tries)
+    for attempt in range(attempts):
         start = time.perf_counter()
         bundle = MARKET_HUB.get_bundle(symbol, tfs)
         if bundle and all(bundle.get(tf) for tf in tfs):
@@ -30,7 +31,8 @@ async def get_bundle_with_fallback(
                 if timings is not None:
                     timings["hub_bundle_dt"] = time.perf_counter() - start
                 return bundle
-        await asyncio.sleep(wait_sleep)
+        if attempt < attempts - 1:
+            await asyncio.sleep(wait_sleep)
         if timings is not None:
             timings["hub_bundle_dt"] = time.perf_counter() - start
 
