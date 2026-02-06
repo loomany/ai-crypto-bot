@@ -524,6 +524,12 @@ WATCHLIST_MAX = int(os.getenv("WATCHLIST_MAX", "30"))
 WATCHLIST_TTL_MIN = int(os.getenv("WATCHLIST_TTL_MIN", "30"))
 WATCHLIST_COOLDOWN_MIN = int(os.getenv("WATCHLIST_COOLDOWN_MIN", "45"))
 WATCHLIST_SCAN_EVERY_SEC = int(os.getenv("WATCHLIST_SCAN_EVERY_SEC", "60"))
+WATCHLIST_SCAN_TIMEOUT_SEC = float(
+    os.getenv(
+        "WATCHLIST_SCAN_TIMEOUT_SEC",
+        str(max(65, WATCHLIST_SCAN_EVERY_SEC + 10)),
+    )
+)
 MAX_WATCHLIST_CONCURRENCY = int(os.getenv("MAX_WATCHLIST_CONCURRENCY", "8"))
 WATCHLIST_SLOW_REPORT_THRESHOLD_SEC = float(
     os.getenv("WATCHLIST_SLOW_REPORT_THRESHOLD_SEC", "40")
@@ -4562,7 +4568,7 @@ def _build_watchlist_timeout_report(
 async def watchlist_worker_loop() -> None:
     while True:
         cycle_start = time.perf_counter()
-        timeout_s = max(15, min(55, WATCHLIST_SCAN_EVERY_SEC))
+        timeout_s = max(15, WATCHLIST_SCAN_TIMEOUT_SEC)
         print("[ai_signals] watchlist cycle start")
         mark_tick("ai_signals", extra="watchlist heartbeat")
         t0 = time.perf_counter()
