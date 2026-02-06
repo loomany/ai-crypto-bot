@@ -63,6 +63,11 @@ class MarketDataHub:
         self._task: Optional[asyncio.Task] = None
         self.last_ok_at = 0.0
         self.last_error: Optional[str] = None
+        self.last_cycle_updated = 0
+        self.last_cycle_skipped_no_klines = 0
+        self.last_cycle_errors = 0
+        self.last_cycle_ms = 0
+        self.last_cycle_cache_size = 0
 
     async def start(self) -> None:
         if self._running:
@@ -107,22 +112,48 @@ class MarketDataHub:
 
     async def _run(self) -> None:
         while self._running:
+            cycle_start = time.perf_counter()
             symbols = list(self._symbols)
             if not symbols:
+                self.last_cycle_updated = 0
+                self.last_cycle_skipped_no_klines = 0
+                self.last_cycle_errors = 0
+                self.last_cycle_ms = int((time.perf_counter() - cycle_start) * 1000)
+                self.last_cycle_cache_size = 0
                 await asyncio.sleep(0.5)
                 continue
+            cycle_updated: set[str] = set()
+            cycle_skipped = 0
+            cycle_errors = 0
             for tf in self._tfs:
                 for batch in _chunked(symbols, self._batch_size):
-                    await self._refresh_batch(tf, batch)
+                    updated, skipped, errors = await self._refresh_batch(tf, batch)
+                    cycle_updated.update(updated)
+                    cycle_skipped += skipped
+                    cycle_errors += errors
                     await asyncio.sleep(0)
+            self.last_cycle_updated = len(cycle_updated)
+            self.last_cycle_skipped_no_klines = cycle_skipped
+            self.last_cycle_errors = cycle_errors
+            self.last_cycle_ms = int((time.perf_counter() - cycle_start) * 1000)
+            self.last_cycle_cache_size = sum(
+                1
+                for symbol_candles in self._candles.values()
+                if any(symbol_candles.values())
+            )
             await asyncio.sleep(0.2)
 
-    async def _refresh_batch(self, tf: str, symbols: List[str]) -> None:
+    async def _refresh_batch(
+        self, tf: str, symbols: List[str]
+    ) -> tuple[set[str], int, int]:
+        updated_symbols: set[str] = set()
+        skipped_no_klines = 0
+        errors_count = 0
         if is_binance_degraded():
-            return
+            return updated_symbols, skipped_no_klines, errors_count
         symbols_to_fetch = [symbol for symbol in symbols if self.is_stale(symbol, tf)]
         if not symbols_to_fetch:
-            return
+            return updated_symbols, skipped_no_klines, errors_count
 
         limit = TF_LIMITS.get(tf, KLINES_1H_LIMIT)
 
@@ -140,15 +171,19 @@ class MarketDataHub:
         now = time.time()
         for symbol, data, error in results:
             if error:
+                errors_count += 1
                 self.last_error = f"{symbol} {tf}: {type(error).__name__} {error}"
                 continue
             if data is None:
+                skipped_no_klines += 1
                 continue
             self._candles.setdefault(symbol, {})[tf] = data
             self._updated_at.setdefault(symbol, {})[tf] = now
+            updated_symbols.add(symbol)
             any_ok = True
         if any_ok:
             self.last_ok_at = now
+        return updated_symbols, skipped_no_klines, errors_count
 
 
 MARKET_HUB = MarketDataHub()
