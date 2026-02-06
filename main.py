@@ -136,6 +136,7 @@ from keyboards import (
 from settings import SIGNAL_TTL_SECONDS
 
 logger = logging.getLogger(__name__)
+DEFAULT_LANG = "ru"
 
 
 # ===== ЗАГРУЖАЕМ НАСТРОЙКИ =====
@@ -4263,6 +4264,7 @@ async def ai_scan_once() -> None:
 async def watchlist_scan_once() -> None:
     start = time.time()
     BUDGET = 35
+    lang = DEFAULT_LANG
     if bot is None:
         mark_tick("ai_signals", extra="bot not ready")
         return
@@ -4331,7 +4333,13 @@ async def watchlist_scan_once() -> None:
     if module_state and isinstance(stats, dict):
         module_state.last_stats = stats
         module_state.fails_top = stats.get("fails", {})
-        module_state.near_miss = _format_near_miss(stats.get("near_miss", {}), lang)
+        prev_near_miss = module_state.near_miss
+        try:
+            module_state.near_miss = _format_near_miss(stats.get("near_miss", {}), lang)
+        except Exception as exc:
+            module_state.near_miss = prev_near_miss
+            module_state.last_error = str(exc)
+            logger.exception("AI signals error")
     deep_scans_done = stats.get("deep_scans_done", 0) if isinstance(stats, dict) else 0
     sent_count = 0
     for signal in _select_signals_for_cycle(signals):
