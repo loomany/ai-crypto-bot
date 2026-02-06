@@ -72,7 +72,8 @@ def init_db() -> None:
                 is_test INTEGER NOT NULL DEFAULT 0,
                 tg_message_id INTEGER,
                 reason_json TEXT,
-                breakdown_json TEXT
+                breakdown_json TEXT,
+                result_notified INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -110,6 +111,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signal_events ADD COLUMN closed_at INTEGER")
         if "close_reason" not in cols:
             conn.execute("ALTER TABLE signal_events ADD COLUMN close_reason TEXT")
+        if "result_notified" not in cols:
+            conn.execute(
+                "ALTER TABLE signal_events ADD COLUMN result_notified INTEGER NOT NULL DEFAULT 0"
+            )
         conn.commit()
     finally:
         conn.close()
@@ -1102,6 +1107,27 @@ def update_signal_event_status_by_id(
                 status,
                 result,
                 int(last_checked_at) if last_checked_at is not None else None,
+                int(time.time()),
+                int(event_id),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_signal_result_notified(event_id: int, *, notified: bool = True) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE signal_events
+            SET result_notified = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                1 if notified else 0,
                 int(time.time()),
                 int(event_id),
             ),

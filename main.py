@@ -104,6 +104,7 @@ from db import (
     get_signal_by_id,
     update_signal_event_refresh,
     update_signal_event_status_by_id,
+    mark_signal_result_notified,
     get_last_pumpdump_signal,
     set_last_pumpdump_signal,
     purge_test_signals,
@@ -850,6 +851,16 @@ def enforce_signal_ttl() -> int:
             result=status_value,
             last_checked_at=now,
         )
+        updated_event = dict(event)
+        updated_event["status"] = status_value
+        updated_event["result"] = status_value
+        updated_event["last_checked_at"] = now
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            loop.create_task(notify_signal_result_short(updated_event))
         updated += 1
     return updated
 
@@ -880,6 +891,110 @@ def _normalize_signal_status(status: str) -> str:
     if normalized == "EXPIRED":
         return "EXP"
     return normalized
+
+
+def _is_final_signal_status(status: str) -> bool:
+    normalized = _normalize_signal_status(status)
+    return normalized in {"TP1", "TP2", "BE", "SL", "EXP", "NF"}
+
+
+def _format_short_result_message(event: dict) -> str | None:
+    status_raw = str(event.get("result") or event.get("status") or "OPEN")
+    status = _normalize_signal_status(status_raw)
+    symbol = str(event.get("symbol", "")).upper()
+    side = str(event.get("side", "")).upper()
+    score = int(event.get("score", 0))
+    header = ""
+    subtitle = ""
+    detail_lines: list[str] = []
+
+    if status == "TP1":
+        header = "✅ TP1"
+        subtitle = "✅ Сигнал закрылся в плюс"
+        detail_lines = [
+            f"{symbol} {side}",
+            "Результат: TP1 🎯",
+            f"Score: {score}",
+        ]
+    elif status == "TP2":
+        header = "✅ TP2"
+        subtitle = "🚀 Сигнал выполнен полностью"
+        detail_lines = [
+            f"{symbol} {side}",
+            "Результат: TP2 🎯",
+            f"Score: {score}",
+        ]
+    elif status == "BE":
+        header = "⚪ BE"
+        subtitle = "⚪ Сигнал ушёл в безубыток"
+        detail_lines = [
+            f"{symbol} {side}",
+            "Результат: BE",
+            "Риск снят",
+        ]
+    elif status == "SL":
+        header = "❌ SL"
+        subtitle = "❌ Сигнал закрылся по стопу"
+        detail_lines = [
+            f"{symbol} {side}",
+            "Результат: SL",
+            f"Score: {score}",
+        ]
+    elif status == "NF":
+        header = "⏳ NF"
+        subtitle = "⏳ Сигнал не активировался"
+        detail_lines = [
+            f"{symbol} {side}",
+            "Результат: NF",
+            "Цена не дошла до входа",
+        ]
+    elif status == "EXP":
+        header = "⏳ EXP"
+        subtitle = "⏳ Сценарий устарел"
+        detail_lines = [
+            f"{symbol} {side}",
+            "Результат: EXP",
+            "Истёк лимит 12 часов",
+        ]
+    else:
+        return None
+
+    return "\n".join([header, subtitle, "", *detail_lines])
+
+
+async def notify_signal_result_short(signal: dict) -> bool:
+    if bot is None:
+        return False
+    status_raw = str(signal.get("result") or signal.get("status") or "")
+    if not _is_final_signal_status(status_raw):
+        return False
+    if bool(signal.get("result_notified")):
+        return False
+
+    user_id = int(signal.get("user_id", 0))
+    if user_id <= 0:
+        return False
+    if is_user_locked(user_id):
+        return False
+    if not is_sub_active(user_id):
+        return False
+    if not is_notify_enabled(user_id, "ai_signals"):
+        return False
+
+    message_text = _format_short_result_message(signal)
+    if not message_text:
+        return False
+
+    try:
+        await bot.send_message(user_id, message_text)
+    except Exception as exc:
+        print(f"[ai_signals] Failed to send result notification to {user_id}: {exc}")
+        return False
+
+    event_id = int(signal.get("id", 0))
+    if event_id:
+        mark_signal_result_notified(event_id)
+    return True
 
 
 def _format_outcome_block(event: dict) -> list[str]:
@@ -1056,6 +1171,9 @@ async def refresh_signal(event_id: int) -> dict | None:
     event = get_signal_event(user_id=None, event_id=event_id)
     if event is None:
         return None
+    previous_status = _normalize_signal_status(
+        str(event.get("result") or event.get("status") or "OPEN")
+    )
     now = int(time.time())
     last_checked = int(event["last_checked_at"] or 0)
     refresh_cooldown = int(os.getenv("SIGNAL_REFRESH_COOLDOWN_SEC", "12"))
@@ -1166,6 +1284,8 @@ async def refresh_signal(event_id: int) -> dict | None:
         updated["close_reason"] = close_reason
     if closed_at:
         updated["closed_at"] = closed_at
+    if _is_final_signal_status(status_value) and not _is_final_signal_status(previous_status):
+        await notify_signal_result_short(updated)
     return updated
 
 
