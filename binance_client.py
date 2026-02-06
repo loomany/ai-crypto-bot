@@ -63,6 +63,8 @@ async def get_required_candles(symbol: str, *, timings: dict[str, float] | None 
         start = time.perf_counter()
         try:
             return await fetch_klines(symbol, interval, limit)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             return []
         finally:
@@ -81,7 +83,9 @@ async def get_required_candles(symbol: str, *, timings: dict[str, float] | None 
 
     out = {}
     for key, value in zip(tasks.keys(), results):
-        if isinstance(value, BaseException):
+        if isinstance(value, BaseException) or isinstance(value, asyncio.CancelledError):
+            out[key] = []
+        elif not isinstance(value, list):
             out[key] = []
         else:
             out[key] = value
@@ -101,6 +105,8 @@ async def get_quick_candles(
         start = time.perf_counter()
         try:
             return await fetch_klines(symbol, interval, limit)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             return []
         finally:
@@ -122,7 +128,9 @@ async def get_quick_candles(
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
     out: dict[str, List[Candle]] = {}
     for key, value in zip(tasks.keys(), results):
-        if isinstance(value, BaseException):
+        if isinstance(value, BaseException) or isinstance(value, asyncio.CancelledError):
+            out[key] = []
+        elif not isinstance(value, list):
             out[key] = []
         else:
             out[key] = value
