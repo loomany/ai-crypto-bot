@@ -21,8 +21,8 @@ from binance_rest import (
     binance_watchdog,
     close_shared_session,
     get_shared_session,
-    get_klines_cache_stats,
-    reset_klines_cache_stats,
+    get_binance_metrics_snapshot,
+    reset_binance_metrics,
     is_binance_degraded,
     fetch_klines,
 )
@@ -54,14 +54,10 @@ from symbol_cache import (
 )
 from health import (
     MODULES,
-    get_klines_request_count,
-    get_request_count,
     mark_tick,
     mark_ok,
     mark_warn,
     mark_error,
-    reset_klines_request_count,
-    reset_request_count,
     safe_worker_loop,
     watchdog,
     update_module_progress,
@@ -498,7 +494,17 @@ FREE_MIN_SCORE = 70
 COOLDOWN_FREE_SEC = int(os.getenv("AI_SIGNALS_COOLDOWN_SEC", "3600"))
 MAX_SIGNALS_PER_CYCLE = 3
 MAX_BTC_PER_CYCLE = 1
-AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "40"))
+AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "30"))
+AI_CHUNK_MIN = int(os.getenv("AI_CHUNK_MIN", "10"))
+AI_CHUNK_MAX = int(os.getenv("AI_CHUNK_MAX", "50"))
+AI_ADAPT_ENABLED = os.getenv("AI_ADAPT_ENABLED", "1").lower() in ("1", "true", "yes", "y")
+AI_ADAPT_FAIL_NO_KLINES_HIGH = float(os.getenv("AI_ADAPT_FAIL_NO_KLINES_HIGH", "0.40"))
+AI_ADAPT_FAIL_TIMEOUT_HIGH = float(os.getenv("AI_ADAPT_FAIL_TIMEOUT_HIGH", "0.30"))
+AI_ADAPT_STEP_DOWN = int(os.getenv("AI_ADAPT_STEP_DOWN", "10"))
+AI_ADAPT_STEP_UP = int(os.getenv("AI_ADAPT_STEP_UP", "5"))
+AI_ADAPT_STABLE_CYCLES_FOR_UP = int(os.getenv("AI_ADAPT_STABLE_CYCLES_FOR_UP", "3"))
+_AI_CHUNK_SIZE_CURRENT = max(AI_CHUNK_MIN, min(AI_CHUNK_MAX, AI_CHUNK_SIZE))
+_AI_STABLE_CYCLES = 0
 AI_PRIORITY_N = int(os.getenv("AI_PRIORITY_N", "15"))
 AI_UNIVERSE_TOP_N = int(os.getenv("AI_UNIVERSE_TOP_N", "250"))
 AI_DEEP_TOP_K = int(os.getenv("AI_DEEP_TOP_K", os.getenv("AI_MAX_DEEP_PER_CYCLE", "3")))
@@ -523,6 +529,15 @@ def _get_ai_excluded_symbols() -> set[str]:
 
 def _format_symbol_list(symbols: set[str]) -> str:
     return ", ".join(sorted(symbols)) if symbols else "-"
+
+
+def _get_pump_excluded_symbols() -> set[str]:
+    raw = os.getenv("PUMP_EXCLUDE_SYMBOLS", "")
+    return {item.strip().upper() for item in raw.split(",") if item.strip()}
+
+
+def _get_ai_chunk_size() -> int:
+    return _AI_CHUNK_SIZE_CURRENT
 
 
 # ===== ХЭНДЛЕРЫ =====
@@ -2062,11 +2077,33 @@ def _format_ai_section(st, now: float, lang: str) -> str:
     details.append(
         i18n.t(lang, "DIAG_AI_EXCLUDED", symbols=_format_symbol_list(excluded_symbols))
     )
+    state = st.state or {}
+    adapt_enabled = state.get("ai_adapt_enabled")
+    chunk_current = state.get("ai_chunk_current")
+    chunk_min = state.get("ai_chunk_min")
+    chunk_max = state.get("ai_chunk_max")
+    if adapt_enabled is not None:
+        details.append(
+            f"• Adaptive chunk: {'enabled' if adapt_enabled else 'disabled'}"
+        )
+    if chunk_current is not None and chunk_min is not None and chunk_max is not None:
+        details.append(
+            f"• Chunk size (current): {chunk_current} | min: {chunk_min} | max: {chunk_max}"
+        )
+    no_klines_rate = state.get("ai_no_klines_rate")
+    timeout_rate = state.get("ai_timeout_rate")
+    stable_cycles = state.get("ai_stable_cycles")
+    if no_klines_rate is not None and timeout_rate is not None:
+        stable_label = stable_cycles if stable_cycles is not None else 0
+        details.append(
+            "• Cycle fail rates: "
+            f"no_klines={no_klines_rate:.0%} "
+            f"timeout={timeout_rate:.0%} "
+            f"stable_cycles={stable_label}"
+        )
     cyc = extra.get("cycle")
     if cyc:
         details.append(i18n.t(lang, "DIAG_CYCLE_TIME", cycle=cyc))
-
-    state = st.state or {}
     timeout_count = state.get("fail_symbol_timeout_count")
     if isinstance(timeout_count, int):
         details.append(f"• Symbol timeouts: {timeout_count}")
@@ -2241,6 +2278,10 @@ def _format_pump_section(st, now: float, lang: str) -> str:
     current = extra.get("current") or (st.current_symbol or None)
     if current:
         details.append(i18n.t(lang, "DIAG_CURRENT_COIN", symbol=current))
+    excluded_symbols = _get_pump_excluded_symbols()
+    details.append(
+        f"• Excluded symbols: {_format_symbol_list(excluded_symbols)}"
+    )
     cyc = extra.get("cycle")
     if cyc:
         details.append(i18n.t(lang, "DIAG_CYCLE_TIME", cycle=cyc))
@@ -3877,9 +3918,7 @@ async def pump_scan_once(bot: Bot) -> None:
                 print("[pumpdump] no notify subscribers -> skip")
             return
 
-        reset_request_count("pumpdump")
-        reset_klines_request_count("pumpdump")
-        reset_klines_cache_stats("pumpdump")
+        reset_binance_metrics("pumpdump")
         reset_ticker_request_count("pumpdump")
 
         session = await get_shared_session()
@@ -3936,8 +3975,14 @@ async def pump_scan_once(bot: Bot) -> None:
             if sym not in seen:
                 seen.add(sym)
                 candidates.append(sym)
+        excluded_symbols = _get_pump_excluded_symbols()
+        if excluded_symbols:
+            candidates = [sym for sym in candidates if sym.upper() not in excluded_symbols]
         rotation_added = max(0, len(candidates) - len(symbols))
         total = len(candidates)
+        if not candidates:
+            mark_error("pumpdump", "no symbols to scan after exclusion")
+            return
         try:
             cursor = int(get_state("pumpdump_cursor", "0") or "0")
         except Exception as exc:
@@ -4030,10 +4075,15 @@ async def pump_scan_once(bot: Bot) -> None:
 
         cycle_sec = time.time() - cycle_start
         current_symbol = MODULES.get("pumpdump").current_symbol if "pumpdump" in MODULES else None
-        req_count = get_request_count("pumpdump")
-        klines_count = get_klines_request_count("pumpdump")
-        cache_stats = get_klines_cache_stats("pumpdump")
+        metrics = get_binance_metrics_snapshot("pumpdump")
+        cache_stats = {
+            "hits": metrics.get("cache_hit"),
+            "misses": metrics.get("cache_miss"),
+            "inflight_awaits": metrics.get("inflight_awaits"),
+        }
         ticker_count = get_ticker_request_count("pumpdump")
+        req_count = metrics.get("requests_total")
+        klines_count = metrics.get("candles_received")
         fails = stats.get("fails", {}) if isinstance(stats, dict) else {}
         fails_top = sorted(fails.items(), key=lambda x: x[1], reverse=True)[:3]
         fails_str = ",".join([f"{k}={v}" for k, v in fails_top]) if fails_top else "-"
@@ -4071,13 +4121,12 @@ async def ai_scan_once() -> None:
     start = time.time()
     BUDGET = 35
     print("[AI] scan_once start")
+    global _AI_CHUNK_SIZE_CURRENT, _AI_STABLE_CYCLES
     try:
         module_state = MODULES.get("ai_signals")
         if module_state:
             module_state.state["last_cycle_ts"] = time.time()
-        reset_request_count("ai_signals")
-        reset_klines_request_count("ai_signals")
-        reset_klines_cache_stats("ai_signals")
+        reset_binance_metrics("ai_signals")
         reset_ticker_request_count("ai_signals")
         mark_tick("ai_signals", extra="сканирую рынок...")
 
@@ -4125,7 +4174,8 @@ async def ai_scan_once() -> None:
         if cursor >= len(pool):
             cursor = 0
 
-        rotating_size = max(0, AI_CHUNK_SIZE - len(priority))
+        chunk_size = _get_ai_chunk_size()
+        rotating_size = max(0, chunk_size - len(priority))
         rotating = pool[cursor : cursor + rotating_size]
 
         chunk = priority + rotating
@@ -4164,6 +4214,54 @@ async def ai_scan_once() -> None:
             module_state.state["fail_symbol_timeout_count"] = stats.get("fails", {}).get(
                 "fail_symbol_timeout", 0
             )
+            attempted_symbols = stats.get("checked", len(chunk))
+            fails = stats.get("fails", {}) if isinstance(stats.get("fails", {}), dict) else {}
+            fail_no_klines_count = int(fails.get("fail_no_klines", 0))
+            fail_timeout_count = int(fails.get("fail_symbol_timeout", 0))
+            success_symbols = max(
+                0, int(attempted_symbols) - fail_no_klines_count - fail_timeout_count
+            )
+            no_klines_rate = (
+                fail_no_klines_count / attempted_symbols if attempted_symbols else 0.0
+            )
+            timeout_rate = (
+                fail_timeout_count / attempted_symbols if attempted_symbols else 0.0
+            )
+            module_state.state.update(
+                {
+                    "attempted_symbols": attempted_symbols,
+                    "fail_no_klines_count": fail_no_klines_count,
+                    "fail_symbol_timeout_count": fail_timeout_count,
+                    "success_symbols": success_symbols,
+                    "ai_no_klines_rate": no_klines_rate,
+                    "ai_timeout_rate": timeout_rate,
+                }
+            )
+            if AI_ADAPT_ENABLED and attempted_symbols:
+                if (
+                    no_klines_rate >= AI_ADAPT_FAIL_NO_KLINES_HIGH
+                    or timeout_rate >= AI_ADAPT_FAIL_TIMEOUT_HIGH
+                ):
+                    _AI_CHUNK_SIZE_CURRENT = max(
+                        AI_CHUNK_MIN, _AI_CHUNK_SIZE_CURRENT - AI_ADAPT_STEP_DOWN
+                    )
+                    _AI_STABLE_CYCLES = 0
+                else:
+                    _AI_STABLE_CYCLES += 1
+                    if _AI_STABLE_CYCLES >= AI_ADAPT_STABLE_CYCLES_FOR_UP:
+                        _AI_CHUNK_SIZE_CURRENT = min(
+                            AI_CHUNK_MAX, _AI_CHUNK_SIZE_CURRENT + AI_ADAPT_STEP_UP
+                        )
+                        _AI_STABLE_CYCLES = 0
+            module_state.state.update(
+                {
+                    "ai_adapt_enabled": AI_ADAPT_ENABLED,
+                    "ai_chunk_current": _AI_CHUNK_SIZE_CURRENT,
+                    "ai_chunk_min": AI_CHUNK_MIN,
+                    "ai_chunk_max": AI_CHUNK_MAX,
+                    "ai_stable_cycles": _AI_STABLE_CYCLES,
+                }
+            )
             prev_near_miss = module_state.near_miss
             try:
                 module_state.near_miss = _format_near_miss(stats.get("near_miss", {}), DEFAULT_LANG)
@@ -4186,10 +4284,15 @@ async def ai_scan_once() -> None:
             sent_count += 1
 
         current_symbol = MODULES.get("ai_signals").current_symbol if "ai_signals" in MODULES else None
-        req_count = get_request_count("ai_signals")
-        klines_count = get_klines_request_count("ai_signals")
-        cache_stats = get_klines_cache_stats("ai_signals")
+        metrics = get_binance_metrics_snapshot("ai_signals")
+        cache_stats = {
+            "hits": metrics.get("cache_hit"),
+            "misses": metrics.get("cache_miss"),
+            "inflight_awaits": metrics.get("inflight_awaits"),
+        }
         ticker_count = get_ticker_request_count("ai_signals")
+        req_count = metrics.get("requests_total")
+        klines_count = metrics.get("candles_received")
         print(
             "[AI] "
             f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
@@ -4226,7 +4329,10 @@ async def main():
     pump_task = asyncio.create_task(
         _delayed_task(6, safe_worker_loop("pumpdump", lambda: pump_scan_once(bot)))
     )
-    print(f"[ai_signals] AI_CHUNK_SIZE={AI_CHUNK_SIZE}")
+    print(
+        f"[ai_signals] AI_CHUNK_SIZE={_AI_CHUNK_SIZE_CURRENT} "
+        f"AI_ADAPT_ENABLED={'1' if AI_ADAPT_ENABLED else '0'}"
+    )
     signals_task = asyncio.create_task(
         _delayed_task(12, safe_worker_loop("ai_signals", ai_scan_once))
     )
