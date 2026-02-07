@@ -18,12 +18,10 @@ from dotenv import load_dotenv
 
 from binance_rest import (
     binance_request_context,
-    binance_watchdog,
     close_shared_session,
     get_shared_session,
     get_binance_metrics_snapshot,
     reset_binance_metrics,
-    is_binance_degraded,
     fetch_klines,
 )
 from pump_detector import (
@@ -1275,8 +1273,6 @@ async def refresh_signal(event_id: int) -> dict | None:
     refresh_cooldown = int(os.getenv("SIGNAL_REFRESH_COOLDOWN_SEC", "12"))
     if last_checked and now - last_checked < refresh_cooldown:
         return {"error": "cooldown", "retry_after": refresh_cooldown - (now - last_checked)}
-    if is_binance_degraded():
-        return {"error": "degraded"}
 
     symbol = str(event.get("symbol", ""))
     created_at = int(event.get("ts", 0))
@@ -1656,9 +1652,6 @@ async def sig_refresh(callback: CallbackQuery):
         if isinstance(refreshed, dict) and refreshed.get("error") == "cooldown":
             retry_after = int(refreshed.get("retry_after", 0))
             await callback.answer(f"Подождите {retry_after} сек.", show_alert=True)
-            return
-        if isinstance(refreshed, dict) and refreshed.get("error") == "degraded":
-            await callback.answer("Binance временно недоступен", show_alert=True)
             return
 
         lang = get_user_lang(callback.from_user.id) if callback.from_user else None
@@ -3775,9 +3768,6 @@ async def _get_ai_universe() -> List[str]:
         print(f"[ai_signals] top-n universe failed: {exc}")
     if not symbols:
         symbols = await get_all_usdt_symbols()
-    if is_binance_degraded() and symbols:
-        degraded_limit = int(os.getenv("BINANCE_DEGRADED_AI_LIMIT", "80"))
-        symbols = symbols[:degraded_limit]
     filtered, removed = filter_tradeable_symbols(symbols)
     excluded = _get_ai_excluded_symbols()
     if excluded:
@@ -4369,7 +4359,6 @@ async def main():
     )
     audit_task = asyncio.create_task(_delayed_task(18, signal_audit_worker_loop()))
     watchdog_task = asyncio.create_task(watchdog())
-    binance_watchdog_task = asyncio.create_task(binance_watchdog())
     try:
         await dp.start_polling(bot)
     finally:
@@ -4385,9 +4374,6 @@ async def main():
         watchdog_task.cancel()
         with suppress(asyncio.CancelledError):
             await watchdog_task
-        binance_watchdog_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await binance_watchdog_task
         await close_shared_session()
 
 

@@ -9,7 +9,7 @@ import aiohttp
 import i18n
 
 from ai_types import Candle
-from binance_rest import binance_request_context, get_klines, is_binance_degraded
+from binance_rest import binance_request_context, get_klines
 from symbol_cache import (
     filter_tradeable_symbols,
     get_spot_usdt_symbols,
@@ -43,7 +43,6 @@ MIN_VOLUME_5M_USDT = MIN_VOLUME_5M_USDT_PUMPDUMP
 PRIORITY_LIMIT = 250
 BATCH_SIZE = 20
 PUMP_CHUNK_SIZE = int(os.getenv("PUMP_CHUNK_SIZE", "60"))
-PUMP_DEGRADED_SYMBOL_LIMIT = int(os.getenv("PUMP_DEGRADED_SYMBOL_LIMIT", "40"))
 PUMPDUMP_TOP_GAINERS_N = int(os.getenv("PUMPDUMP_TOP_GAINERS_N", "0"))
 PUMPDUMP_TOP_LOSERS_N = int(os.getenv("PUMPDUMP_TOP_LOSERS_N", "0"))
 PUMP_RATE_LIMIT_ENABLED = os.getenv("PUMP_RATE_LIMIT_ENABLED", "1") != "0"
@@ -301,8 +300,6 @@ async def build_pump_symbol_list(
     *,
     priority_limit: int = PRIORITY_LIMIT,
 ) -> list[str]:
-    if is_binance_degraded():
-        priority_limit = min(priority_limit, PUMP_DEGRADED_SYMBOL_LIMIT)
     symbols = await get_usdt_symbols(session)
     symbols = [sym for sym in symbols if SYMBOL_REGEX.match(sym)]
     symbols, _ = filter_tradeable_symbols(symbols)
@@ -327,8 +324,6 @@ async def build_pump_symbol_list(
             seen.add(sym)
             priority.append(sym)
     rest = [sym for sym in symbols if sym not in set(priority)]
-    if is_binance_degraded():
-        return (priority + rest)[:PUMP_DEGRADED_SYMBOL_LIMIT]
     return priority + rest
 
 
@@ -348,8 +343,6 @@ async def scan_pumps_chunk(
     if not symbols:
         return results, {"checked": 0, "found": 0, "fails": fails}, start_idx
 
-    if is_binance_degraded():
-        max_symbols = min(max_symbols, PUMP_DEGRADED_SYMBOL_LIMIT)
     end_idx = min(start_idx + max_symbols, len(symbols))
     start_ts = time.time()
     rate_limit_enabled = PUMP_RATE_LIMIT_ENABLED and PUMP_MAX_SYMBOLS_PER_SEC > 0
