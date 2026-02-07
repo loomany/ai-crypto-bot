@@ -632,6 +632,7 @@ async def scan_market(
     deep_scan_limit: int | None = None,
     priority_scores: Dict[str, float] | None = None,
     max_concurrency: int | None = None,
+    excluded_symbols: set[str] | None = None,
     diag_state: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]] | Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
@@ -641,6 +642,7 @@ async def scan_market(
         batch_size = int(os.getenv("AI_SCAN_BATCH_SIZE", "8"))
     if min_score is None:
         min_score = FINAL_SCORE_THRESHOLD
+    excluded = {item.strip().upper() for item in (excluded_symbols or set()) if item.strip()}
 
     if symbols is None:
         fetch_start = time.perf_counter()
@@ -648,6 +650,8 @@ async def scan_market(
         fetch_dt = time.perf_counter() - fetch_start
         if diag_state is not None:
             diag_state["fetch_symbols_dt"] = fetch_dt
+    if excluded:
+        symbols = [symbol for symbol in symbols if symbol.upper() not in excluded]
 
     checked = 0
     klines_ok = 0
@@ -778,6 +782,10 @@ async def scan_market(
         if time_budget is not None and time.time() - start_time > time_budget:
             break
         batch = symbols[i : i + batch_size]
+        if excluded:
+            batch = [symbol for symbol in batch if symbol.upper() not in excluded]
+        if not batch:
+            continue
         checked += len(batch)
         quick_tasks = [asyncio.create_task(_run_prescore_with_timeout(symbol)) for symbol in batch]
         quick_list = await asyncio.gather(*quick_tasks, return_exceptions=True)
@@ -837,6 +845,10 @@ async def scan_market(
         )
 
     candidate_symbols = [symbol for symbol, _ in ranked[: max_deep_scans]]
+    if excluded:
+        candidate_symbols = [
+            symbol for symbol in candidate_symbols if symbol.upper() not in excluded
+        ]
     deep_scans_done = len(candidate_symbols)
     if not candidate_symbols:
         pre_score_stats["pass_rate"] = pre_score_stats["passed"] / max(
@@ -858,6 +870,10 @@ async def scan_market(
     orderflow_candidates = {
         symbol for symbol, _ in ranked[: min(AGGTRADES_TOP_K, len(candidate_symbols))]
     }
+    if excluded:
+        orderflow_candidates = {
+            symbol for symbol in orderflow_candidates if symbol.upper() not in excluded
+        }
 
     async def _run_deep(symbol: str) -> tuple[str, Optional[Dict[str, Any]], bool, bool]:
         symbol_start = time.perf_counter()
