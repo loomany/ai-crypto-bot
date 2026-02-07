@@ -502,6 +502,27 @@ AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "40"))
 AI_PRIORITY_N = int(os.getenv("AI_PRIORITY_N", "15"))
 AI_UNIVERSE_TOP_N = int(os.getenv("AI_UNIVERSE_TOP_N", "250"))
 AI_DEEP_TOP_K = int(os.getenv("AI_DEEP_TOP_K", os.getenv("AI_MAX_DEEP_PER_CYCLE", "3")))
+AI_EXCLUDE_SYMBOLS_DEFAULT = "BTCUSDT"
+
+
+def _get_ai_excluded_symbols() -> set[str]:
+    raw = os.getenv("AI_EXCLUDE_SYMBOLS")
+    if raw is None:
+        raw = AI_EXCLUDE_SYMBOLS_DEFAULT
+    symbols = {item.strip().upper() for item in raw.split(",") if item.strip()}
+    exclude_btc = os.getenv("EXCLUDE_BTC_FROM_AI_UNIVERSE", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
+    if exclude_btc:
+        symbols.add("BTCUSDT")
+    return symbols
+
+
+def _format_symbol_list(symbols: set[str]) -> str:
+    return ", ".join(sorted(symbols)) if symbols else "-"
 
 
 # ===== ХЭНДЛЕРЫ =====
@@ -2037,6 +2058,10 @@ def _format_ai_section(st, now: float, lang: str) -> str:
     elif cur:
         details.append(i18n.t(lang, "DIAG_MARKET_POSITION", current=cur))
     details.append(i18n.t(lang, "DIAG_MARKET_CURRENT", symbol=current_symbol))
+    excluded_symbols = _get_ai_excluded_symbols()
+    details.append(
+        i18n.t(lang, "DIAG_AI_EXCLUDED", symbols=_format_symbol_list(excluded_symbols))
+    )
     cyc = extra.get("cycle")
     if cyc:
         details.append(i18n.t(lang, "DIAG_CYCLE_TIME", cycle=cyc))
@@ -3686,14 +3711,9 @@ async def _get_ai_universe() -> List[str]:
         degraded_limit = int(os.getenv("BINANCE_DEGRADED_AI_LIMIT", "80"))
         symbols = symbols[:degraded_limit]
     filtered, removed = filter_tradeable_symbols(symbols)
-    exclude_btc = os.getenv("EXCLUDE_BTC_FROM_AI_UNIVERSE", "0").lower() in (
-        "1",
-        "true",
-        "yes",
-        "y",
-    )
-    if exclude_btc:
-        filtered = [symbol for symbol in filtered if symbol != "BTCUSDT"]
+    excluded = _get_ai_excluded_symbols()
+    if excluded:
+        filtered = [symbol for symbol in filtered if symbol.upper() not in excluded]
     if removed:
         print(
             f"[ai_signals] universe filtered: total={len(symbols)} removed={removed} final={len(filtered)}"
@@ -4066,6 +4086,12 @@ async def ai_scan_once() -> None:
         if not symbols:
             mark_error("ai_signals", "no symbols to scan")
             return
+        excluded = _get_ai_excluded_symbols()
+        if excluded:
+            symbols = [symbol for symbol in symbols if symbol.upper() not in excluded]
+        if not symbols:
+            mark_error("ai_signals", "no symbols to scan after exclusion")
+            return
         total = len(symbols)
         debug_symbol = os.getenv("DEBUG_SYMBOL", "USUALUSDT").upper()
         in_universe = debug_symbol in symbols
@@ -4127,6 +4153,7 @@ async def ai_scan_once() -> None:
                 return_stats=True,
                 time_budget=BUDGET,
                 deep_scan_limit=AI_DEEP_TOP_K,
+                excluded_symbols=excluded,
                 diag_state=module_state.state if module_state else None,
             )
         module_state = MODULES.get("ai_signals")
