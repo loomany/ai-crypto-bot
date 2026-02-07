@@ -23,7 +23,14 @@ _SHARED_SESSION: aiohttp.ClientSession | None = None
 _SHARED_CONNECTOR: aiohttp.TCPConnector | None = None
 _SHARED_LOCK = asyncio.Lock()
 
-BINANCE_BASE_URL = "https://api.binance.com/api/v3"
+BINANCE_BASE_URL = os.getenv("BINANCE_BASE_URL", "https://api.binance.com/api/v3")
+BINANCE_FALLBACK_BASE_URL = os.getenv(
+    "BINANCE_FALLBACK_BASE_URL",
+    "https://api.binance.vision/api/v3",
+)
+_BINANCE_BASE_URLS = [BINANCE_BASE_URL]
+if BINANCE_FALLBACK_BASE_URL and BINANCE_FALLBACK_BASE_URL not in _BINANCE_BASE_URLS:
+    _BINANCE_BASE_URLS.append(BINANCE_FALLBACK_BASE_URL)
 # cache by (symbol, interval) to reuse across different LIMIT requests
 # value: (ts, data_list)
 _KLINES_CACHE: dict[tuple[str, str], tuple[float, list]] = {}
@@ -485,7 +492,6 @@ async def _fetch_klines_from_binance(
     now: float,
 ) -> Optional[list]:
     print(f"[binance_rest] MISS klines {symbol} {interval} {limit}")
-    url = f"{BINANCE_BASE_URL}/klines"
     params = {
         "symbol": symbol,
         "interval": interval,
@@ -494,8 +500,13 @@ async def _fetch_klines_from_binance(
     if start_ms is not None:
         params["startTime"] = start_ms
     _track_klines_request()
+    data = None
     async with KLINES_SEM:
-        data = await fetch_json(url, params, stage="klines")
+        for base_url in _BINANCE_BASE_URLS:
+            url = f"{base_url}/klines"
+            data = await fetch_json(url, params, stage="klines")
+            if isinstance(data, list):
+                break
     if not isinstance(data, list):
         return None
     module = _BINANCE_REQUEST_MODULE.get()
@@ -542,18 +553,23 @@ async def fetch_agg_trades(
             return cached[1]
 
     print(f"[binance_rest] aggTrades {symbol} {market} (cache_hit=False)")
-    if market == "spot":
-        url = f"{BINANCE_BASE_URL}/aggTrades"
-    else:
-        url = "https://fapi.binance.com/fapi/v1/aggTrades"
     params = {
         "symbol": symbol,
         "startTime": start_ms,
         "endTime": end_ms,
         "limit": limit,
     }
+    data = None
     async with AGGTRADES_SEM:
-        data = await fetch_json(url, params, stage="agg_trades")
+        if market == "spot":
+            for base_url in _BINANCE_BASE_URLS:
+                url = f"{base_url}/aggTrades"
+                data = await fetch_json(url, params, stage="agg_trades")
+                if isinstance(data, list):
+                    break
+        else:
+            url = "https://fapi.binance.com/fapi/v1/aggTrades"
+            data = await fetch_json(url, params, stage="agg_trades")
     if not isinstance(data, list):
         return None
     async with _AGGTRADES_CACHE_LOCK:
