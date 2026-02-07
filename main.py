@@ -497,13 +497,21 @@ MAX_BTC_PER_CYCLE = 1
 AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "30"))
 AI_CHUNK_MIN = int(os.getenv("AI_CHUNK_MIN", "10"))
 AI_CHUNK_MAX = int(os.getenv("AI_CHUNK_MAX", "50"))
+AI_SAFE_MODE = os.getenv("AI_SAFE_MODE", "1").lower() in ("1", "true", "yes", "y")
+AI_SAFE_CHUNK_MAX = int(os.getenv("AI_SAFE_CHUNK_MAX", "35"))
+AI_CHUNK_MAX_EFFECTIVE = (
+    min(AI_CHUNK_MAX, AI_SAFE_CHUNK_MAX) if AI_SAFE_MODE else AI_CHUNK_MAX
+)
+AI_CYCLE_SLEEP_SEC = float(os.getenv("AI_CYCLE_SLEEP_SEC", "2"))
 AI_ADAPT_ENABLED = os.getenv("AI_ADAPT_ENABLED", "1").lower() in ("1", "true", "yes", "y")
 AI_ADAPT_FAIL_NO_KLINES_HIGH = float(os.getenv("AI_ADAPT_FAIL_NO_KLINES_HIGH", "0.40"))
 AI_ADAPT_FAIL_TIMEOUT_HIGH = float(os.getenv("AI_ADAPT_FAIL_TIMEOUT_HIGH", "0.30"))
 AI_ADAPT_STEP_DOWN = int(os.getenv("AI_ADAPT_STEP_DOWN", "10"))
 AI_ADAPT_STEP_UP = int(os.getenv("AI_ADAPT_STEP_UP", "5"))
 AI_ADAPT_STABLE_CYCLES_FOR_UP = int(os.getenv("AI_ADAPT_STABLE_CYCLES_FOR_UP", "3"))
-_AI_CHUNK_SIZE_CURRENT = max(AI_CHUNK_MIN, min(AI_CHUNK_MAX, AI_CHUNK_SIZE))
+_AI_CHUNK_SIZE_CURRENT = max(
+    AI_CHUNK_MIN, min(AI_CHUNK_MAX_EFFECTIVE, AI_CHUNK_SIZE)
+)
 _AI_STABLE_CYCLES = 0
 AI_PRIORITY_N = int(os.getenv("AI_PRIORITY_N", "15"))
 AI_UNIVERSE_TOP_N = int(os.getenv("AI_UNIVERSE_TOP_N", "250"))
@@ -2082,6 +2090,12 @@ def _format_ai_section(st, now: float, lang: str) -> str:
     chunk_current = state.get("ai_chunk_current")
     chunk_min = state.get("ai_chunk_min")
     chunk_max = state.get("ai_chunk_max")
+    safe_mode = state.get("ai_safe_mode")
+    if safe_mode is None:
+        safe_mode = AI_SAFE_MODE
+    chunk_max_effective = chunk_max if chunk_max is not None else AI_CHUNK_MAX_EFFECTIVE
+    chunk_max_base = state.get("ai_chunk_max_base") or AI_CHUNK_MAX
+    chunk_max_safe_cap = state.get("ai_chunk_max_safe_cap") or AI_SAFE_CHUNK_MAX
     if adapt_enabled is not None:
         details.append(
             f"• Adaptive chunk: {'enabled' if adapt_enabled else 'disabled'}"
@@ -2090,6 +2104,11 @@ def _format_ai_section(st, now: float, lang: str) -> str:
         details.append(
             f"• Chunk size (current): {chunk_current} | min: {chunk_min} | max: {chunk_max}"
         )
+    details.append(f"• Safe mode: {'on' if safe_mode else 'off'}")
+    details.append(
+        "• Chunk max (effective): "
+        f"{chunk_max_effective} (base={chunk_max_base}, safe_cap={chunk_max_safe_cap})"
+    )
     no_klines_rate = state.get("ai_no_klines_rate")
     timeout_rate = state.get("ai_timeout_rate")
     stable_cycles = state.get("ai_stable_cycles")
@@ -2104,6 +2123,7 @@ def _format_ai_section(st, now: float, lang: str) -> str:
     cyc = extra.get("cycle")
     if cyc:
         details.append(i18n.t(lang, "DIAG_CYCLE_TIME", cycle=cyc))
+    details.append(f"• Cycle sleep: {max(0.0, AI_CYCLE_SLEEP_SEC):g}s")
     timeout_count = state.get("fail_symbol_timeout_count")
     if isinstance(timeout_count, int):
         details.append(f"• Symbol timeouts: {timeout_count}")
@@ -4250,7 +4270,8 @@ async def ai_scan_once() -> None:
                     _AI_STABLE_CYCLES += 1
                     if _AI_STABLE_CYCLES >= AI_ADAPT_STABLE_CYCLES_FOR_UP:
                         _AI_CHUNK_SIZE_CURRENT = min(
-                            AI_CHUNK_MAX, _AI_CHUNK_SIZE_CURRENT + AI_ADAPT_STEP_UP
+                            AI_CHUNK_MAX_EFFECTIVE,
+                            _AI_CHUNK_SIZE_CURRENT + AI_ADAPT_STEP_UP,
                         )
                         _AI_STABLE_CYCLES = 0
             module_state.state.update(
@@ -4258,7 +4279,10 @@ async def ai_scan_once() -> None:
                     "ai_adapt_enabled": AI_ADAPT_ENABLED,
                     "ai_chunk_current": _AI_CHUNK_SIZE_CURRENT,
                     "ai_chunk_min": AI_CHUNK_MIN,
-                    "ai_chunk_max": AI_CHUNK_MAX,
+                    "ai_chunk_max": AI_CHUNK_MAX_EFFECTIVE,
+                    "ai_chunk_max_base": AI_CHUNK_MAX,
+                    "ai_chunk_max_safe_cap": AI_SAFE_CHUNK_MAX,
+                    "ai_safe_mode": AI_SAFE_MODE,
                     "ai_stable_cycles": _AI_STABLE_CYCLES,
                 }
             )
