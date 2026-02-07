@@ -41,19 +41,6 @@ def init_db() -> None:
         )
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS watchlist (
-                symbol TEXT PRIMARY KEY,
-                score INTEGER NOT NULL,
-                reason TEXT NOT NULL,
-                ttl_until INTEGER NOT NULL,
-                cooldown_until INTEGER NOT NULL,
-                last_seen INTEGER NOT NULL,
-                added_at INTEGER NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
             CREATE TABLE IF NOT EXISTS signal_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts INTEGER NOT NULL,
@@ -362,154 +349,6 @@ def kv_set_int(key: str, value: int) -> None:
         conn.close()
 
 
-def upsert_watchlist_candidate(
-    symbol: str,
-    score: int,
-    reason: str,
-    ttl_until: int,
-    *,
-    last_seen: Optional[int] = None,
-    cooldown_until: Optional[int] = None,
-) -> bool:
-    now = int(time.time()) if last_seen is None else last_seen
-    conn = get_conn()
-    try:
-        cur = conn.execute(
-            "SELECT cooldown_until, added_at FROM watchlist WHERE symbol = ?",
-            (symbol,),
-        )
-        row = cur.fetchone()
-        if row is None:
-            cooldown = int(cooldown_until or 0)
-            conn.execute(
-                """
-                INSERT INTO watchlist (
-                    symbol, score, reason, ttl_until, cooldown_until, last_seen, added_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (symbol, score, reason, ttl_until, cooldown, now, now),
-            )
-            conn.commit()
-            return True
-
-        existing_cooldown = int(row["cooldown_until"])
-        added_at = int(row["added_at"])
-        conn.execute(
-            """
-            UPDATE watchlist
-            SET score = ?, reason = ?, ttl_until = ?, cooldown_until = ?, last_seen = ?, added_at = ?
-            WHERE symbol = ?
-            """,
-            (
-                score,
-                reason,
-                ttl_until,
-                existing_cooldown if cooldown_until is None else int(cooldown_until),
-                now,
-                added_at,
-                symbol,
-            ),
-        )
-        conn.commit()
-        return False
-    finally:
-        conn.close()
-
-
-def list_watchlist_for_scan(now: int, limit: int) -> List[sqlite3.Row]:
-    conn = get_conn()
-    try:
-        cur = conn.execute(
-            """
-            SELECT * FROM watchlist
-            WHERE ttl_until > ? AND cooldown_until <= ?
-            ORDER BY score DESC, last_seen DESC
-            LIMIT ?
-            """,
-            (now, now, limit),
-        )
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
-def update_watchlist_after_signal(
-    symbol: str,
-    *,
-    ttl_until: int,
-    cooldown_until: int,
-    last_seen: Optional[int] = None,
-) -> None:
-    now = int(time.time()) if last_seen is None else last_seen
-    conn = get_conn()
-    try:
-        conn.execute(
-            """
-            UPDATE watchlist
-            SET ttl_until = ?, cooldown_until = ?, last_seen = ?
-            WHERE symbol = ?
-            """,
-            (ttl_until, cooldown_until, now, symbol),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def prune_watchlist(now: int, max_size: int) -> int:
-    pruned = 0
-    conn = get_conn()
-    try:
-        cur = conn.execute("DELETE FROM watchlist WHERE ttl_until <= ?", (now,))
-        pruned += cur.rowcount if cur.rowcount is not None else 0
-        cur = conn.execute("SELECT COUNT(*) AS cnt FROM watchlist")
-        total = int(cur.fetchone()["cnt"])
-        if total > max_size:
-            to_remove = total - max_size
-            cur = conn.execute(
-                """
-                SELECT symbol FROM watchlist
-                ORDER BY score ASC, ttl_until ASC
-                LIMIT ?
-                """,
-                (to_remove,),
-            )
-            symbols = [row["symbol"] for row in cur.fetchall()]
-            if symbols:
-                conn.executemany(
-                    "DELETE FROM watchlist WHERE symbol = ?",
-                    [(symbol,) for symbol in symbols],
-                )
-                pruned += len(symbols)
-        conn.commit()
-    finally:
-        conn.close()
-    return pruned
-
-
-def get_watchlist_counts(now: int) -> Tuple[int, int]:
-    conn = get_conn()
-    try:
-        cur = conn.execute("SELECT COUNT(*) AS cnt FROM watchlist")
-        total = int(cur.fetchone()["cnt"])
-        cur = conn.execute("SELECT COUNT(*) AS cnt FROM watchlist WHERE ttl_until > ?", (now,))
-        active = int(cur.fetchone()["cnt"])
-        return active, total
-    finally:
-        conn.close()
-
-
-def delete_watchlist_symbols(symbols: Iterable[str]) -> None:
-    symbols_list = list(symbols)
-    if not symbols_list:
-        return
-    conn = get_conn()
-    try:
-        conn.executemany("DELETE FROM watchlist WHERE symbol = ?", [(s,) for s in symbols_list])
-        conn.commit()
-    finally:
-        conn.close()
-
 def _append_blocked_symbols_filter(clauses: list[str], params: list[object]) -> None:
     blocked = sorted(get_blocked_symbols())
     if not blocked:
@@ -522,11 +361,9 @@ def _append_blocked_symbols_filter(clauses: list[str], params: list[object]) -> 
 def purge_symbol(symbol: str) -> dict[str, int]:
     normalized = symbol.strip().upper()
     if not normalized:
-        return {"watchlist_deleted": 0, "events_deleted": 0, "signal_audit_deleted": 0}
+        return {"events_deleted": 0, "signal_audit_deleted": 0}
     conn = get_conn()
     try:
-        cur = conn.execute("DELETE FROM watchlist WHERE symbol = ?", (normalized,))
-        watchlist_deleted = cur.rowcount or 0
         cur = conn.execute("DELETE FROM signal_events WHERE symbol = ?", (normalized,))
         events_deleted = cur.rowcount or 0
         cur = conn.execute(
@@ -537,36 +374,27 @@ def purge_symbol(symbol: str) -> dict[str, int]:
             cur = conn.execute("DELETE FROM signal_audit WHERE symbol = ?", (normalized,))
             signal_audit_deleted = cur.rowcount or 0
         conn.commit()
-        return {
-            "watchlist_deleted": watchlist_deleted,
-            "events_deleted": events_deleted,
-            "signal_audit_deleted": signal_audit_deleted,
-        }
+        return {"events_deleted": events_deleted, "signal_audit_deleted": signal_audit_deleted}
     finally:
         conn.close()
 
 
 def delete_symbol_everywhere(symbol: str) -> dict[str, int]:
     stats = purge_symbol(symbol)
-    return {
-        "watchlist_deleted": stats["watchlist_deleted"],
-        "events_deleted": stats["events_deleted"],
-    }
+    return {"events_deleted": stats["events_deleted"]}
 
 
 def delete_symbols_everywhere(symbols: Iterable[str]) -> dict[str, int]:
     normalized = {symbol.strip().upper() for symbol in symbols if symbol and symbol.strip()}
     if not normalized:
         return {
-            "watchlist_deleted": 0,
             "events_deleted": 0,
             "signal_audit_deleted": 0,
             "symbols": 0,
         }
-    totals = {"watchlist_deleted": 0, "events_deleted": 0, "signal_audit_deleted": 0}
+    totals = {"events_deleted": 0, "signal_audit_deleted": 0}
     for symbol in normalized:
         stats = purge_symbol(symbol)
-        totals["watchlist_deleted"] += stats["watchlist_deleted"]
         totals["events_deleted"] += stats["events_deleted"]
         totals["signal_audit_deleted"] += stats["signal_audit_deleted"]
     totals["symbols"] = len(normalized)

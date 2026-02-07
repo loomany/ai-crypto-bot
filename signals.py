@@ -10,7 +10,6 @@ from ai_types import Candle
 from binance_rest import get_klines, is_binance_degraded
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
-from market_context import get_market_context
 from market_regime import get_market_regime
 from indicators_cache import get_cached_atr, get_cached_ema, get_cached_rsi
 from utils_klines import normalize_klines
@@ -50,7 +49,6 @@ KLINES_CONCURRENCY = int(
     os.getenv("MAX_KLINES_CONCURRENCY", os.getenv("KLINES_CONCURRENCY", "10"))
 )
 PER_SYMBOL_TIMEOUT_SEC = float(os.getenv("PER_SYMBOL_TIMEOUT_SEC", "2.5"))
-MAX_WATCHLIST_CONCURRENCY = int(os.getenv("MAX_WATCHLIST_CONCURRENCY", "8"))
 SLOW_REPORT_SYMBOLS = int(os.getenv("SLOW_REPORT_SYMBOLS", "5"))
 REQUIRE_15M_CONFIRM_ON_EXPANDED = os.getenv("REQUIRE_15M_CONFIRM_ON_EXPANDED", "true").lower() in (
     "1",
@@ -60,7 +58,6 @@ REQUIRE_15M_CONFIRM_ON_EXPANDED = os.getenv("REQUIRE_15M_CONFIRM_ON_EXPANDED", "
 )
 MAX_FAIL_DEBUG_LOGS_PER_CYCLE = int(os.getenv("MAX_FAIL_DEBUG_LOGS_PER_CYCLE", "8"))
 AI_STAGE_A_TOP_K = int(os.getenv("AI_STAGE_A_TOP_K", "10"))
-BTC_CONTEXT_TTL_SEC = int(os.getenv("BTC_CONTEXT_TTL_SEC", "90"))
 AI_DIRECT_LIMITS = {
     "1d": 60,
     "4h": 120,
@@ -70,196 +67,14 @@ AI_DIRECT_LIMITS = {
 }
 MIN_KLINES_REQUIRED = 20
 
-_BTC_CONTEXT_CACHE: Dict[str, Any] | None = None
-_BTC_CONTEXT_TS: float = 0.0
-_BTC_CONTEXT_LAST_REFRESH_TS: float = 0.0
-_BTC_CONTEXT_LAST_ERROR: str | None = None
-_BTC_CONTEXT_REASON_WARNED: bool = False
 AI_FALLBACK_DIRECT = 0
 
 logger = logging.getLogger(__name__)
 
 
-def get_cached_btc_context() -> tuple[Dict[str, Any], int, int] | None:
-    if _BTC_CONTEXT_CACHE is None:
-        return None
-    age_sec = int(max(0, time.time() - _BTC_CONTEXT_TS))
-    return dict(_BTC_CONTEXT_CACHE), age_sec, BTC_CONTEXT_TTL_SEC
-
-
-def get_btc_context_last_error() -> str | None:
-    return _BTC_CONTEXT_LAST_ERROR
-
-
-def get_btc_context_last_refresh_ts() -> float:
-    return _BTC_CONTEXT_LAST_REFRESH_TS
-
-
 def get_ai_fallback_direct() -> int:
     return AI_FALLBACK_DIRECT
 
-
-async def get_btc_context(*, force_refresh: bool = False) -> Dict[str, Any]:
-    """
-    Анализирует BTCUSDT и возвращает контекст рынка:
-      - тренды 1d / 1h
-      - RSI 15m
-      - отношение объёма последней 15m свечи к среднему за N свечей
-      - флаги allow_longs / allow_shorts
-    """
-
-    global _BTC_CONTEXT_CACHE, _BTC_CONTEXT_TS, _BTC_CONTEXT_LAST_ERROR, _BTC_CONTEXT_LAST_REFRESH_TS
-
-    now = time.time()
-    if not force_refresh and _BTC_CONTEXT_CACHE and (now - _BTC_CONTEXT_TS) < BTC_CONTEXT_TTL_SEC:
-        return dict(_BTC_CONTEXT_CACHE)
-
-    try:
-        candles = await _fetch_direct_bundle(BTC_SYMBOL, ("1d", "4h", "1h", "15m"))
-    except Exception as exc:
-        _BTC_CONTEXT_LAST_ERROR = str(exc)
-        raise
-    candles_1d = candles.get("1d", []) if candles else []
-    candles_1h = candles.get("4h", []) or candles.get("1h", []) if candles else []
-    candles_15m = candles.get("15m", []) if candles else []
-
-    if not candles_1d or not candles_1h or not candles_15m:
-        fallback = {
-            "trend_1d": "range",
-            "trend_1h": "range",
-            "trend_4h": "range",
-            "rsi_15m": 50.0,
-            "volume_ratio_15m": 0.0,
-            "ema_bias": "unknown",
-            "atr_volatility": 0.0,
-            "btc_mode": "neutral",
-            "allow_longs": True,
-            "allow_shorts": True,
-            "ctx_reason": "fallback_neutral",
-        }
-        _BTC_CONTEXT_CACHE = fallback
-        _BTC_CONTEXT_TS = now
-        _BTC_CONTEXT_LAST_REFRESH_TS = now
-        _BTC_CONTEXT_LAST_ERROR = None
-        return dict(fallback)
-
-    candles_4h = candles.get("4h", []) if candles else []
-    candles_1h = candles.get("1h", []) if candles else []
-    candles_gate = candles_4h or candles_1h
-
-    daily_structure = detect_trend_and_structure(candles_1d)
-    gate_structure = detect_trend_and_structure(candles_gate)
-    h1_structure = detect_trend_and_structure(candles_1h) if candles_1h else gate_structure
-    h4_structure = detect_trend_and_structure(candles_4h) if candles_4h else gate_structure
-
-    btc_trend_1d = daily_structure["trend"]
-    btc_trend_1h = h1_structure["trend"]
-    btc_trend_4h = h4_structure["trend"]
-
-    rsi_15m_value = get_cached_rsi(BTC_SYMBOL, "15m", candles_15m)
-
-    vols = [c.volume for c in candles_15m[-21:-1]]
-    last_vol = candles_15m[-1].volume if candles_15m else 0.0
-    avg_vol = mean(vols) if vols else 0.0
-    volume_ratio_15m = last_vol / avg_vol if avg_vol > 0 else 0.0
-
-    allow_longs = (
-        btc_trend_1d in ("up", "range")
-        and gate_structure["trend"] == "up"
-        and 40 <= rsi_15m_value <= 65
-        and volume_ratio_15m >= 1.2
-    )
-
-    allow_shorts = (
-        btc_trend_1d in ("down", "range")
-        and gate_structure["trend"] == "down"
-        and 35 <= rsi_15m_value <= 70
-        and volume_ratio_15m >= 1.2
-    )
-
-    closes_1h = [c.close for c in (candles_1h or candles_gate)]
-    ema200 = get_cached_ema(BTC_SYMBOL, "1h", candles_1h or candles_gate, 200)
-    ema_bias = "unknown"
-    if ema200 and closes_1h:
-        last_close = closes_1h[-1]
-        if last_close > ema200:
-            ema_bias = "above_ema200"
-        elif last_close < ema200:
-            ema_bias = "below_ema200"
-        else:
-            ema_bias = "near_ema200"
-
-    atr_value = get_cached_atr(BTC_SYMBOL, "1h", candles_1h or candles_gate, 14)
-    atr_volatility = (atr_value / closes_1h[-1] * 100.0) if (atr_value and closes_1h) else 0.0
-    high_volatility = atr_volatility >= 2.2
-
-    ctx_reason = None
-    if not allow_longs and allow_shorts:
-        if high_volatility:
-            ctx_reason = "high_volatility_lock"
-        elif btc_trend_4h == "down":
-            ctx_reason = "trend_down_4h"
-        elif ema_bias == "below_ema200":
-            ctx_reason = "below_ema200"
-        elif btc_trend_1d not in ("up", "range"):
-            ctx_reason = "trend_down_1d"
-        elif not (40 <= rsi_15m_value <= 65):
-            ctx_reason = "rsi_15m_out_of_range"
-        elif volume_ratio_15m < 1.2:
-            ctx_reason = "volume_ratio_low"
-    elif not allow_shorts and allow_longs:
-        if high_volatility:
-            ctx_reason = "high_volatility_lock"
-        elif btc_trend_4h == "up":
-            ctx_reason = "trend_up_4h"
-        elif ema_bias == "above_ema200":
-            ctx_reason = "above_ema200"
-        elif btc_trend_1d not in ("down", "range"):
-            ctx_reason = "trend_up_1d"
-        elif not (35 <= rsi_15m_value <= 70):
-            ctx_reason = "rsi_15m_out_of_range"
-        elif volume_ratio_15m < 1.2:
-            ctx_reason = "volume_ratio_low"
-    if not allow_longs and not allow_shorts:
-        allow_longs = True
-        allow_shorts = True
-        ctx_reason = "fallback_neutral"
-
-    if allow_longs and allow_shorts and not ctx_reason:
-        ctx_reason = "neutral"
-
-    btc_mode = "neutral"
-    if high_volatility:
-        btc_mode = "high_volatility_lock"
-    elif allow_shorts and not allow_longs:
-        btc_mode = "bearish_bias"
-    elif allow_longs and not allow_shorts:
-        btc_mode = "bullish_bias"
-
-    context = {
-        "trend_1d": btc_trend_1d,
-        "trend_1h": btc_trend_1h,
-        "trend_4h": btc_trend_4h,
-        "rsi_15m": rsi_15m_value,
-        "volume_ratio_15m": volume_ratio_15m,
-        "ema_bias": ema_bias,
-        "atr_volatility": atr_volatility,
-        "btc_mode": btc_mode,
-        "allow_longs": allow_longs,
-        "allow_shorts": allow_shorts,
-    }
-    if not ctx_reason:
-        ctx_reason = "unknown"
-        global _BTC_CONTEXT_REASON_WARNED
-        if not _BTC_CONTEXT_REASON_WARNED:
-            logger.warning("BTC gate context reason missing; defaulting to 'unknown'.")
-            _BTC_CONTEXT_REASON_WARNED = True
-    context["ctx_reason"] = ctx_reason
-    _BTC_CONTEXT_CACHE = context
-    _BTC_CONTEXT_TS = now
-    _BTC_CONTEXT_LAST_REFRESH_TS = now
-    _BTC_CONTEXT_LAST_ERROR = None
-    return dict(context)
 
 
 def _volume_ratio(volumes: Sequence[float]) -> Tuple[float, float]:
@@ -432,7 +247,6 @@ async def get_alt_watch_symbol(limit: int = 80, batch_size: int = 10) -> Optiona
 async def _prepare_signal(
     symbol: str,
     candles: Dict[str, List[Candle]],
-    btc_ctx: Dict[str, Any],
     *,
     free_mode: bool = False,
     min_score: float = 80,
@@ -555,14 +369,6 @@ async def _prepare_signal(
         rsi_div = detect_rsi_divergence(closes_15m, rsi_15m, "bearish") or detect_rsi_divergence(
             closes_5m, rsi_5m, "bearish"
         )
-
-    if candidate_side == "LONG" and not btc_ctx.get("allow_longs", False):
-        _inc_fail("fail_btc_gate_long")
-        return None
-
-    if candidate_side == "SHORT" and not btc_ctx.get("allow_shorts", False):
-        _inc_fail("fail_btc_gate_short")
-        return None
 
     atr_15m = (
         get_cached_atr(symbol, "15m", candles_15m[-60:], 14) if len(candles_15m) >= 15 else None
@@ -742,19 +548,8 @@ async def _prepare_signal(
         print(f"[ai_signals] Invalid side for {symbol}: entry={entry_ref} sl={sl} tp1={tp1}")
         return None
 
-    # --- Market Context Layer gate (BTC-led) ---
-    if side == "LONG" and not btc_ctx.get("allow_longs", True):
-        _inc_fail("fail_market_mode_long_blocked")
-        return None
-    if side == "SHORT" and not btc_ctx.get("allow_shorts", True):
-        _inc_fail("fail_market_mode_short_blocked")
-        return None
-
-    required_min = float(btc_ctx.get("min_score_long", min_score)) if side == "LONG" else float(
-        btc_ctx.get("min_score_short", min_score)
-    )
-    if abs(raw_score) < required_min:
-        delta = required_min - abs(raw_score)
+    if abs(raw_score) < float(min_score):
+        delta = float(min_score) - abs(raw_score)
         if 0 < delta <= 5:
             _inc_near_miss("score")
         _inc_fail("fail_score")
@@ -815,10 +610,6 @@ async def _prepare_signal(
             "volume_ratio": volume_ratio,
             "volume_avg": volume_avg,
             "rr": rr,
-            "market_mode": btc_ctx.get("mode", "NORMAL"),
-            "market_bias": btc_ctx.get("bias", "NEUTRAL"),
-            "btc_change_6h_pct": btc_ctx.get("change_6h_pct", 0.0),
-            "btc_atr_1h_pct": btc_ctx.get("atr_1h_pct", 0.0),
         },
         "breakdown": breakdown,
         "score_breakdown": breakdown,
@@ -834,7 +625,6 @@ async def scan_market(
     batch_size: Optional[int] = None,
     *,
     symbols: List[str] | None = None,
-    use_btc_gate: bool = True,
     free_mode: bool = False,
     min_score: float | None = None,
     return_stats: bool = False,
@@ -859,19 +649,6 @@ async def scan_market(
         if diag_state is not None:
             diag_state["fetch_symbols_dt"] = fetch_dt
 
-    btc_ctx = await get_btc_context() if use_btc_gate else {
-        "allow_longs": True,
-        "allow_shorts": True,
-    }
-    market_ctx = await get_market_context() if use_btc_gate else {
-        "mode": "NORMAL",
-        "bias": "NEUTRAL",
-        "allow_longs": True,
-        "allow_shorts": True,
-        "min_score_long": float(min_score),
-        "min_score_short": float(min_score),
-    }
-    btc_ctx = {**btc_ctx, **market_ctx}
     checked = 0
     klines_ok = 0
     fails: Dict[str, int] = {}
@@ -951,22 +728,6 @@ async def scan_market(
         if len(samples) >= 5:
             return
         samples.append((symbol, round(score, 2)))
-
-    if use_btc_gate:
-        if not btc_ctx["allow_longs"] and not btc_ctx["allow_shorts"]:
-            if return_stats:
-                return [], {
-                    "checked": checked,
-                    "klines_ok": klines_ok,
-                    "signals_found": 0,
-                    "fails": fails,
-                    "near_miss": near_miss,
-                    "pre_score": pre_score_stats,
-                    "slowest_symbols": _build_slowest(),
-                }
-            return []
-    else:
-        btc_ctx = {**btc_ctx, "allow_longs": True, "allow_shorts": True}
 
     signals: List[Dict[str, Any]] = []
 
@@ -1112,7 +873,6 @@ async def scan_market(
             signal = await _prepare_signal(
                 symbol,
                 klines,
-                btc_ctx,
                 free_mode=free_mode,
                 min_score=min_score,
                 stats=fails if return_stats else None,
@@ -1143,7 +903,7 @@ async def scan_market(
 
     remaining = None if time_budget is None else max(0.0, time_budget - (time.time() - start_time))
     if remaining is not None and remaining <= 0:
-        logger.warning("[ai_signals] watchlist budget exceeded before deep scan")
+        logger.warning("[ai_signals] scan budget exceeded before deep scan")
         if diag_state is not None:
             diag_state["deep_skipped_budget"] = True
         if return_stats:
@@ -1174,8 +934,8 @@ async def scan_market(
         for task in tasks:
             task.cancel()
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        fails["fail_watchlist_budget"] = fails.get("fail_watchlist_budget", 0) + 1
-        logger.warning("[ai_signals] watchlist budget exceeded during deep scan")
+        fails["fail_scan_budget"] = fails.get("fail_scan_budget", 0) + 1
+        logger.warning("[ai_signals] scan budget exceeded during deep scan")
     deep_dt = time.perf_counter() - deep_start
     if diag_state is not None:
         diag_state["deep_dt"] = deep_dt
