@@ -76,6 +76,7 @@ MODULES: Dict[str, ModuleStatus] = {
 
 SCAN_INTERVAL = 60  # seconds, strict
 AI_CYCLE_SLEEP_SEC = float(os.getenv("AI_CYCLE_SLEEP_SEC", "2"))
+PUMP_CYCLE_SLEEP_SEC = float(os.getenv("PUMP_CYCLE_SLEEP_SEC", "3"))
 
 
 def mark_tick(key: str, extra: str = ""):
@@ -237,6 +238,10 @@ async def safe_worker_loop(module_name: str, scan_once_coro):
             mark_tick(module_name, extra=f"cycle={int(elapsed)}s")
         if module_name == "ai_signals":
             cycle_sleep = max(0.0, AI_CYCLE_SLEEP_SEC)
+            if cycle_sleep:
+                await asyncio.sleep(cycle_sleep)
+        if module_name == "pumpdump":
+            cycle_sleep = max(0.0, PUMP_CYCLE_SLEEP_SEC)
             if cycle_sleep:
                 await asyncio.sleep(cycle_sleep)
         await asyncio.sleep(max(0, SCAN_INTERVAL - elapsed))
