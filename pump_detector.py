@@ -46,6 +46,8 @@ PUMP_CHUNK_SIZE = int(os.getenv("PUMP_CHUNK_SIZE", "60"))
 PUMP_DEGRADED_SYMBOL_LIMIT = int(os.getenv("PUMP_DEGRADED_SYMBOL_LIMIT", "40"))
 PUMPDUMP_TOP_GAINERS_N = int(os.getenv("PUMPDUMP_TOP_GAINERS_N", "0"))
 PUMPDUMP_TOP_LOSERS_N = int(os.getenv("PUMPDUMP_TOP_LOSERS_N", "0"))
+PUMP_RATE_LIMIT_ENABLED = os.getenv("PUMP_RATE_LIMIT_ENABLED", "1") != "0"
+PUMP_MAX_SYMBOLS_PER_SEC = float(os.getenv("PUMP_MAX_SYMBOLS_PER_SEC", "5"))
 MAX_CYCLE_SEC = 30
 SYMBOL_REGEX = re.compile(r"^[A-Z0-9]{2,20}USDT$")
 _last_signals: dict[str, Dict[str, Any]] = {}
@@ -350,6 +352,8 @@ async def scan_pumps_chunk(
         max_symbols = min(max_symbols, PUMP_DEGRADED_SYMBOL_LIMIT)
     end_idx = min(start_idx + max_symbols, len(symbols))
     start_ts = time.time()
+    rate_limit_enabled = PUMP_RATE_LIMIT_ENABLED and PUMP_MAX_SYMBOLS_PER_SEC > 0
+    target_dt = 1.0 / PUMP_MAX_SYMBOLS_PER_SEC if rate_limit_enabled else 0.0
 
     async def _fetch_symbol_klines(symbol: str) -> tuple[str, Any, Any]:
         klines_5m = await _fetch_5m_klines(symbol)
@@ -365,30 +369,42 @@ async def scan_pumps_chunk(
         for symbol, klines in zip(batch, klines_list):
             if time_budget_sec is not None and time.time() - start_ts >= time_budget_sec:
                 break
-            if progress_cb:
-                progress_cb(symbol)
-            checked += 1
-            if isinstance(klines, BaseException) or isinstance(klines, asyncio.CancelledError):
-                fails["fail_klines_exception"] = fails.get("fail_klines_exception", 0) + 1
-                continue
-            _, klines_5m, _ = klines
-            if not isinstance(klines_5m, list):
-                klines_5m = []
-            trigger_ok, trigger_reason = _passes_5m_trigger(klines_5m)
-            if not trigger_ok:
-                fails[trigger_reason] = fails.get(trigger_reason, 0) + 1
-                continue
+            symbol_start = time.perf_counter()
+            try:
+                if progress_cb:
+                    progress_cb(symbol)
+                checked += 1
+                if isinstance(klines, BaseException) or isinstance(klines, asyncio.CancelledError):
+                    fails["fail_klines_exception"] = fails.get("fail_klines_exception", 0) + 1
+                    continue
+                _, klines_5m, _ = klines
+                if not isinstance(klines_5m, list):
+                    klines_5m = []
+                trigger_ok, trigger_reason = _passes_5m_trigger(klines_5m)
+                if not trigger_ok:
+                    fails[trigger_reason] = fails.get(trigger_reason, 0) + 1
+                    continue
 
-            klines_1m = await get_shared_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT)
-            if klines_1m:
-                _inc_pump_fallback_direct()
-            if not isinstance(klines_1m, list):
-                klines_1m = []
-            sig, reason = _calc_signal_with_reason(symbol, klines_1m, klines_5m)
-            if sig:
-                results.append(sig)
-            else:
-                fails[reason] = fails.get(reason, 0) + 1
+                klines_1m = await get_shared_klines(
+                    symbol,
+                    PUMPDUMP_1M_INTERVAL,
+                    PUMPDUMP_1M_LIMIT,
+                )
+                if klines_1m:
+                    _inc_pump_fallback_direct()
+                if not isinstance(klines_1m, list):
+                    klines_1m = []
+                sig, reason = _calc_signal_with_reason(symbol, klines_1m, klines_5m)
+                if sig:
+                    results.append(sig)
+                else:
+                    fails[reason] = fails.get(reason, 0) + 1
+            finally:
+                if rate_limit_enabled:
+                    elapsed = time.perf_counter() - symbol_start
+                    sleep_for = target_dt - elapsed
+                    if sleep_for > 0:
+                        await asyncio.sleep(sleep_for)
 
     stats = {"checked": checked, "found": len(results), "fails": fails}
     next_idx = end_idx if end_idx < len(symbols) else 0
@@ -410,6 +426,8 @@ async def scan_pumps(
     results: list[Dict[str, Any]] = []
     checked = 0
     start_ts = time.time()
+    rate_limit_enabled = PUMP_RATE_LIMIT_ENABLED and PUMP_MAX_SYMBOLS_PER_SEC > 0
+    target_dt = 1.0 / PUMP_MAX_SYMBOLS_PER_SEC if rate_limit_enabled else 0.0
 
     async with aiohttp.ClientSession() as session:
         ordered_symbols = await build_pump_symbol_list(session, priority_limit=priority_limit)
@@ -422,23 +440,35 @@ async def scan_pumps(
             klines_list = await asyncio.gather(*tasks, return_exceptions=True)
 
             for symbol, klines in zip(batch, klines_list):
-                checked += 1
-                if isinstance(klines, BaseException) or isinstance(klines, asyncio.CancelledError):
-                    continue
-                klines_5m = klines
-                if not isinstance(klines_5m, list):
-                    klines_5m = []
-                trigger_ok, _ = _passes_5m_trigger(klines_5m)
-                if not trigger_ok:
-                    continue
-                klines_1m = await get_shared_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT)
-                if klines_1m:
-                    _inc_pump_fallback_direct()
-                if not isinstance(klines_1m, list):
-                    klines_1m = []
-                sig = _calc_signal_from_klines(symbol, klines_1m, klines_5m)
-                if sig:
-                    results.append(sig)
+                symbol_start = time.perf_counter()
+                try:
+                    checked += 1
+                    if isinstance(klines, BaseException) or isinstance(klines, asyncio.CancelledError):
+                        continue
+                    klines_5m = klines
+                    if not isinstance(klines_5m, list):
+                        klines_5m = []
+                    trigger_ok, _ = _passes_5m_trigger(klines_5m)
+                    if not trigger_ok:
+                        continue
+                    klines_1m = await get_shared_klines(
+                        symbol,
+                        PUMPDUMP_1M_INTERVAL,
+                        PUMPDUMP_1M_LIMIT,
+                    )
+                    if klines_1m:
+                        _inc_pump_fallback_direct()
+                    if not isinstance(klines_1m, list):
+                        klines_1m = []
+                    sig = _calc_signal_from_klines(symbol, klines_1m, klines_5m)
+                    if sig:
+                        results.append(sig)
+                finally:
+                    if rate_limit_enabled:
+                        elapsed = time.perf_counter() - symbol_start
+                        sleep_for = target_dt - elapsed
+                        if sleep_for > 0:
+                            await asyncio.sleep(sleep_for)
 
     stats = {"checked": checked, "found": len(results)}
     if return_stats:

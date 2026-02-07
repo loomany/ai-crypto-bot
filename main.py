@@ -29,6 +29,8 @@ from binance_rest import (
 from pump_detector import (
     MIN_VOLUME_5M_USDT,
     PUMP_CHUNK_SIZE,
+    PUMP_MAX_SYMBOLS_PER_SEC,
+    PUMP_RATE_LIMIT_ENABLED,
     PUMP_VOLUME_MUL,
     PUMPDUMP_1M_INTERVAL,
     PUMPDUMP_1M_LIMIT,
@@ -62,6 +64,7 @@ from health import (
     watchdog,
     update_module_progress,
     update_current_symbol,
+    PUMP_CYCLE_SLEEP_SEC,
 )
 
 from db import (
@@ -2302,6 +2305,10 @@ def _format_pump_section(st, now: float, lang: str) -> str:
     details.append(
         f"• Excluded symbols: {_format_symbol_list(excluded_symbols)}"
     )
+    details.append(f"• Cycle sleep: {max(0.0, PUMP_CYCLE_SLEEP_SEC):g}s")
+    rate_limit_on = PUMP_RATE_LIMIT_ENABLED and PUMP_MAX_SYMBOLS_PER_SEC > 0
+    details.append(f"• Rate limit: {'on' if rate_limit_on else 'off'}")
+    details.append(f"• Max symbols/sec: {PUMP_MAX_SYMBOLS_PER_SEC:g}")
     cyc = extra.get("cycle")
     if cyc:
         details.append(i18n.t(lang, "DIAG_CYCLE_TIME", cycle=cyc))
