@@ -48,7 +48,12 @@ AGGTRADES_TOP_K = int(os.getenv("AGGTRADES_TOP_K", "2"))
 KLINES_CONCURRENCY = int(
     os.getenv("MAX_KLINES_CONCURRENCY", os.getenv("KLINES_CONCURRENCY", "10"))
 )
-PER_SYMBOL_TIMEOUT_SEC = float(os.getenv("PER_SYMBOL_TIMEOUT_SEC", "2.5"))
+AI_PER_SYMBOL_TIMEOUT_SEC = float(
+    os.getenv("AI_PER_SYMBOL_TIMEOUT_SEC", os.getenv("PER_SYMBOL_TIMEOUT_SEC", "6.0"))
+)
+AI_DIRECT_BUNDLE_TIMEOUT_SEC = float(
+    os.getenv("AI_DIRECT_BUNDLE_TIMEOUT_SEC", "6.0")
+)
 SLOW_REPORT_SYMBOLS = int(os.getenv("SLOW_REPORT_SYMBOLS", "5"))
 REQUIRE_15M_CONFIRM_ON_EXPANDED = os.getenv("REQUIRE_15M_CONFIRM_ON_EXPANDED", "true").lower() in (
     "1",
@@ -126,7 +131,14 @@ async def _fetch_direct_bundle(
     if limit_overrides:
         limits.update(limit_overrides)
     tasks = [asyncio.create_task(get_klines(symbol, tf, limits[tf])) for tf in tfs]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    bundle_task = asyncio.gather(*tasks, return_exceptions=True)
+    if AI_DIRECT_BUNDLE_TIMEOUT_SEC > 0:
+        results = await asyncio.wait_for(
+            bundle_task,
+            timeout=AI_DIRECT_BUNDLE_TIMEOUT_SEC,
+        )
+    else:
+        results = await bundle_task
     bundle: Dict[str, List[Candle]] = {}
     for tf, result in zip(tfs, results):
         if isinstance(result, BaseException) or not isinstance(result, list):
@@ -767,13 +779,13 @@ async def scan_market(
     ) -> tuple[str, Optional[Dict[str, List[Candle]]], Optional[float]]:
         try:
             coro = _with_symbol_semaphore(_run_prescore, symbol)
-            if PER_SYMBOL_TIMEOUT_SEC > 0:
-                return await asyncio.wait_for(coro, timeout=PER_SYMBOL_TIMEOUT_SEC)
+            if AI_PER_SYMBOL_TIMEOUT_SEC > 0:
+                return await asyncio.wait_for(coro, timeout=AI_PER_SYMBOL_TIMEOUT_SEC)
             return await coro
         except asyncio.TimeoutError:
             fails["fail_symbol_timeout"] = fails.get("fail_symbol_timeout", 0) + 1
             timings = _ensure_symbol_timings(symbol)
-            timings["timeout"] = PER_SYMBOL_TIMEOUT_SEC
+            timings["timeout"] = AI_PER_SYMBOL_TIMEOUT_SEC
             _refresh_slowest()
             return symbol, None, None
 
@@ -907,13 +919,13 @@ async def scan_market(
     ) -> tuple[str, Optional[Dict[str, Any]], bool, bool]:
         try:
             coro = _with_symbol_semaphore(_run_deep, symbol)
-            if PER_SYMBOL_TIMEOUT_SEC > 0:
-                return await asyncio.wait_for(coro, timeout=PER_SYMBOL_TIMEOUT_SEC)
+            if AI_PER_SYMBOL_TIMEOUT_SEC > 0:
+                return await asyncio.wait_for(coro, timeout=AI_PER_SYMBOL_TIMEOUT_SEC)
             return await coro
         except asyncio.TimeoutError:
             fails["fail_symbol_timeout"] = fails.get("fail_symbol_timeout", 0) + 1
             timings = _ensure_symbol_timings(symbol)
-            timings["timeout"] = PER_SYMBOL_TIMEOUT_SEC
+            timings["timeout"] = AI_PER_SYMBOL_TIMEOUT_SEC
             _refresh_slowest()
             return symbol, None, False, True
 

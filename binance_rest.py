@@ -4,6 +4,7 @@ import random
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import aiohttp
@@ -27,8 +28,6 @@ BINANCE_BASE_URL = "https://api.binance.com/api/v3"
 # value: (ts, data_list)
 _KLINES_CACHE: dict[tuple[str, str], tuple[float, list]] = {}
 _KLINES_INFLIGHT: dict[tuple[str, str, int], tuple[asyncio.Task, int]] = {}
-_KLINES_CACHE_HITS: dict[str, int] = {}
-_KLINES_CACHE_MISSES: dict[str, int] = {}
 _KLINES_INFLIGHT_AWAITS: dict[str, int] = {}
 _AGGTRADES_CACHE: dict[tuple[str, str, int, int], tuple[float, list]] = {}
 _BINANCE_TIMEOUT = aiohttp.ClientTimeout(
@@ -45,6 +44,29 @@ _WATCHDOG_START_TS = time.time()
 _SESSION_RESTARTS = 0
 _BINANCE_DEGRADED_UNTIL = 0.0
 _DEGRADED_STREAK = 0
+
+
+@dataclass
+class BinanceMetrics:
+    requests_total: dict[str, int] = field(default_factory=dict)
+    klines_requests: dict[str, int] = field(default_factory=dict)
+    candles_received: dict[str, int] = field(default_factory=dict)
+    cache_hit: dict[str, int] = field(default_factory=dict)
+    cache_miss: dict[str, int] = field(default_factory=dict)
+
+    def reset(self, module: str) -> None:
+        self.requests_total[module] = 0
+        self.klines_requests[module] = 0
+        self.candles_received[module] = 0
+        self.cache_hit[module] = 0
+        self.cache_miss[module] = 0
+
+    def increment(self, bucket: dict[str, int], module: Optional[str], count: int = 1) -> None:
+        if module:
+            bucket[module] = bucket.get(module, 0) + count
+
+
+_BINANCE_METRICS = BinanceMetrics()
 
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name)
@@ -224,30 +246,52 @@ def get_request_module() -> Optional[str]:
 def _track_request() -> None:
     module = _BINANCE_REQUEST_MODULE.get()
     if module:
+        _BINANCE_METRICS.increment(_BINANCE_METRICS.requests_total, module)
         increment_request_count(module)
 
 
 def _track_klines_request() -> None:
     module = _BINANCE_REQUEST_MODULE.get()
     if module:
+        _BINANCE_METRICS.increment(_BINANCE_METRICS.klines_requests, module)
         increment_klines_request_count(module)
 
 
-def _increment_stat(bucket: dict[str, int], module: Optional[str]) -> None:
+def _increment_stat(bucket: dict[str, int], module: Optional[str], count: int = 1) -> None:
     if module:
-        bucket[module] = bucket.get(module, 0) + 1
+        bucket[module] = bucket.get(module, 0) + count
 
 
 def reset_klines_cache_stats(module: str) -> None:
-    _KLINES_CACHE_HITS[module] = 0
-    _KLINES_CACHE_MISSES[module] = 0
+    _BINANCE_METRICS.cache_hit[module] = 0
+    _BINANCE_METRICS.cache_miss[module] = 0
     _KLINES_INFLIGHT_AWAITS[module] = 0
 
 
 def get_klines_cache_stats(module: str) -> dict[str, int]:
     return {
-        "hits": _KLINES_CACHE_HITS.get(module, 0),
-        "misses": _KLINES_CACHE_MISSES.get(module, 0),
+        "hits": _BINANCE_METRICS.cache_hit.get(module, 0),
+        "misses": _BINANCE_METRICS.cache_miss.get(module, 0),
+        "inflight_awaits": _KLINES_INFLIGHT_AWAITS.get(module, 0),
+    }
+
+
+def get_binance_metrics() -> BinanceMetrics:
+    return _BINANCE_METRICS
+
+
+def reset_binance_metrics(module: str) -> None:
+    _BINANCE_METRICS.reset(module)
+    _KLINES_INFLIGHT_AWAITS[module] = 0
+
+
+def get_binance_metrics_snapshot(module: str) -> dict[str, int]:
+    return {
+        "requests_total": _BINANCE_METRICS.requests_total.get(module, 0),
+        "klines_requests": _BINANCE_METRICS.klines_requests.get(module, 0),
+        "candles_received": _BINANCE_METRICS.candles_received.get(module, 0),
+        "cache_hit": _BINANCE_METRICS.cache_hit.get(module, 0),
+        "cache_miss": _BINANCE_METRICS.cache_miss.get(module, 0),
         "inflight_awaits": _KLINES_INFLIGHT_AWAITS.get(module, 0),
     }
 
@@ -377,7 +421,12 @@ async def fetch_klines(
                 cached_ts, cached_data = cached
                 if now - cached_ts < ttl_sec and isinstance(cached_data, list):
                     if len(cached_data) >= limit:
-                        _increment_stat(_KLINES_CACHE_HITS, module)
+                        _BINANCE_METRICS.increment(_BINANCE_METRICS.cache_hit, module)
+                        _BINANCE_METRICS.increment(
+                            _BINANCE_METRICS.candles_received,
+                            module,
+                            count=len(cached_data[-limit:]),
+                        )
                         print(
                             f"[binance_rest] klines {symbol} {interval} {limit} (cache_hit=True)"
                         )
@@ -421,7 +470,7 @@ async def fetch_klines(
                 )
                 _KLINES_INFLIGHT[inflight_key] = (task, requested_limit)
     if created:
-        _increment_stat(_KLINES_CACHE_MISSES, module)
+        _BINANCE_METRICS.increment(_BINANCE_METRICS.cache_miss, module)
 
     if not created:
         _increment_stat(_KLINES_INFLIGHT_AWAITS, module)
@@ -478,6 +527,16 @@ async def _fetch_klines_from_binance(
         data = await fetch_json(url, params, stage="klines")
     if not isinstance(data, list):
         return None
+    module = _BINANCE_REQUEST_MODULE.get()
+    _BINANCE_METRICS.increment(_BINANCE_METRICS.candles_received, module, count=len(data))
+    if module:
+        metrics = _BINANCE_METRICS
+        if (
+            metrics.candles_received.get(module, 0) > 0
+            and metrics.klines_requests.get(module, 0) == 0
+            and metrics.cache_hit.get(module, 0) == 0
+        ):
+            print("[binance_rest] warning: metrics inconsistent (candles without requests)")
     if cache_key is not None:
         async with _KLINES_CACHE_LOCK:
             prev = _KLINES_CACHE.get(cache_key)
