@@ -78,49 +78,7 @@ async def get_market_regime() -> Dict[str, Any]:
     avg_vol = mean(vols_15m) if vols_15m else 0.0
     volume_ratio_15m = last_vol / avg_vol if avg_vol > 0 else 0.0
 
-    allow_longs = (
-        trend_1d in ("up", "range")
-        and trend_1h == "up"
-        and 40 <= rsi_15m_value <= 65
-        and volume_ratio_15m >= 1.2
-    )
-
-    allow_shorts = (
-        trend_1d in ("down", "range")
-        and trend_1h == "down"
-        and 35 <= rsi_15m_value <= 70
-        and volume_ratio_15m >= 1.2
-    )
-
-    gate_reasons: List[str] = []
-    if not candles_1h or not candles_15m:
-        gate_reasons.append("Недостаточно данных для гейта по 1H/15m.")
-    else:
-        if not allow_longs:
-            long_reasons: List[str] = []
-            if trend_1d not in ("up", "range"):
-                long_reasons.append(f"1D={trend_1d}")
-            if trend_1h != "up":
-                long_reasons.append(f"1H={trend_1h}")
-            if not (40 <= rsi_15m_value <= 65):
-                long_reasons.append(f"RSI15={rsi_15m_value:.1f}")
-            if volume_ratio_15m < 1.2:
-                long_reasons.append(f"объём15m x{volume_ratio_15m:.2f}")
-            gate_reasons.append("longs blocked: " + "; ".join(long_reasons))
-        if not allow_shorts:
-            short_reasons: List[str] = []
-            if trend_1d not in ("down", "range"):
-                short_reasons.append(f"1D={trend_1d}")
-            if trend_1h != "down":
-                short_reasons.append(f"1H={trend_1h}")
-            if not (35 <= rsi_15m_value <= 70):
-                short_reasons.append(f"RSI15={rsi_15m_value:.1f}")
-            if volume_ratio_15m < 1.2:
-                short_reasons.append(f"объём15m x{volume_ratio_15m:.2f}")
-            gate_reasons.append("shorts blocked: " + "; ".join(short_reasons))
-
-    gate_reason = " / ".join(gate_reasons) if gate_reasons else "Гейт открыт для лонгов и шортов."
-    reason = " ".join([" ".join(desc_parts), gate_reason]).strip()
+    reason = " ".join(desc_parts).strip()
 
     return {
         "regime": regime,
@@ -132,8 +90,6 @@ async def get_market_regime() -> Dict[str, Any]:
         "ema_fast": ema_fast,
         "ema_slow": ema_slow,
         "rsi_15m": rsi_15m_value,
-        "allow_longs": allow_longs,
-        "allow_shorts": allow_shorts,
     }
 
 

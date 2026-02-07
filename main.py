@@ -40,26 +40,18 @@ from pump_detector import (
 )
 from signals import (
     scan_market,
-    get_cached_btc_context,
-    get_btc_context,
-    get_btc_context_last_error,
-    get_btc_context_last_refresh_ts,
     AI_MAX_DEEP_PER_CYCLE,
     AI_STAGE_A_TOP_K,
     PRE_SCORE_THRESHOLD,
     MIN_PRE_SCORE,
     FINAL_SCORE_THRESHOLD,
 )
-from trading_core import compute_atr, compute_ema
-from utils_klines import normalize_klines
 from symbol_cache import (
     filter_tradeable_symbols,
     get_all_usdt_symbols,
     get_blocked_symbols,
-    get_spot_usdt_symbols,
     get_top_usdt_symbols_by_volume,
 )
-from market_hub import MARKET_HUB, MARKET_HUB_DEGRADED
 from health import (
     MODULES,
     get_klines_request_count,
@@ -92,12 +84,6 @@ from db import (
     set_state,
     kv_get_int,
     kv_set_int,
-    upsert_watchlist_candidate,
-    list_watchlist_for_scan,
-    update_watchlist_after_signal,
-    prune_watchlist,
-    get_watchlist_counts,
-    delete_watchlist_symbols,
     purge_symbol,
     insert_signal_event,
     list_signal_events,
@@ -189,14 +175,6 @@ def _env_bool(name: str, default: str = "0") -> bool:
     return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
 
 
-def get_use_btc_gate() -> bool:
-    return _env_bool("USE_BTC_GATE", "0")
-
-
-def get_use_market_hub() -> bool:
-    return _env_bool("USE_MARKET_HUB", "0")
-
-
 def is_admin(user_id: int) -> bool:
     return ADMIN_USER_ID != 0 and user_id == ADMIN_USER_ID
 
@@ -271,17 +249,15 @@ def init_app_db():
     init_signal_audit_tables()
     blocked_symbols = sorted(get_blocked_symbols())
     if blocked_symbols:
-        totals = {"watchlist_deleted": 0, "events_deleted": 0, "signal_audit_deleted": 0}
+        totals = {"events_deleted": 0, "signal_audit_deleted": 0}
         for symbol in blocked_symbols:
             stats = purge_symbol(symbol)
             print(f"[purge] {symbol} deleted from stats: {stats}")
-            totals["watchlist_deleted"] += stats["watchlist_deleted"]
             totals["events_deleted"] += stats["events_deleted"]
             totals["signal_audit_deleted"] += stats["signal_audit_deleted"]
         print(
             "[blocklist] purge startup: "
             f"symbols={len(blocked_symbols)} "
-            f"watchlist={totals['watchlist_deleted']} "
             f"events={totals['events_deleted']} "
             f"audit={totals['signal_audit_deleted']}"
         )
@@ -525,22 +501,7 @@ MAX_BTC_PER_CYCLE = 1
 AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "40"))
 AI_PRIORITY_N = int(os.getenv("AI_PRIORITY_N", "15"))
 AI_UNIVERSE_TOP_N = int(os.getenv("AI_UNIVERSE_TOP_N", "250"))
-WATCHLIST_MAX = int(os.getenv("WATCHLIST_MAX", "30"))
-WATCHLIST_TTL_MIN = int(os.getenv("WATCHLIST_TTL_MIN", "30"))
-WATCHLIST_COOLDOWN_MIN = int(os.getenv("WATCHLIST_COOLDOWN_MIN", "45"))
-WATCHLIST_SCAN_EVERY_SEC = int(os.getenv("WATCHLIST_SCAN_EVERY_SEC", "60"))
-WATCHLIST_SCAN_TIMEOUT_SEC = float(
-    os.getenv(
-        "WATCHLIST_SCAN_TIMEOUT_SEC",
-        str(max(65, WATCHLIST_SCAN_EVERY_SEC + 10)),
-    )
-)
-MAX_WATCHLIST_CONCURRENCY = int(os.getenv("MAX_WATCHLIST_CONCURRENCY", "8"))
-WATCHLIST_SLOW_REPORT_THRESHOLD_SEC = float(
-    os.getenv("WATCHLIST_SLOW_REPORT_THRESHOLD_SEC", "40")
-)
 AI_DEEP_TOP_K = int(os.getenv("AI_DEEP_TOP_K", os.getenv("AI_MAX_DEEP_PER_CYCLE", "3")))
-CANDIDATE_SCORE_MIN = int(os.getenv("CANDIDATE_SCORE_MIN", "40"))
 
 
 # ===== ХЭНДЛЕРЫ =====
@@ -1973,82 +1934,6 @@ def _format_slowest_symbols(items: list[dict[str, Any]]) -> str:
     return "; ".join(parts)
 
 
-def _format_market_hub(now: float, lang: str) -> str:
-    if not get_use_market_hub():
-        status_label = _build_status_label(
-            ok=False,
-            warn=True,
-            error=False,
-            ok_text=i18n.t(lang, "DIAG_STATUS_WORKING"),
-            warn_text=i18n.t(lang, "DIAG_STATUS_DISABLED"),
-            error_text=i18n.t(lang, "DIAG_STATUS_ERROR"),
-        )
-        details = [
-            "• MarketHub: DISABLED",
-            "• Mode: DIRECT",
-        ]
-        return _format_section(i18n.t(lang, "DIAG_MARKET_HUB_TITLE"), status_label, details, lang)
-    if MARKET_HUB.last_ok_at:
-        ok_ago = int(now - MARKET_HUB.last_ok_at)
-        last_tick = _human_ago(ok_ago, lang)
-    else:
-        last_tick = i18n.t(lang, "SYSTEM_STATUS_LAST_CYCLE_NO_DATA")
-
-    err = MARKET_HUB.last_error
-    universe_size = getattr(MARKET_HUB, "_universe_size", 0)
-    symbols_count = len(getattr(MARKET_HUB, "_symbols", []) or [])
-    attempted = getattr(MARKET_HUB, "last_cycle_attempted", 0)
-    refreshed = getattr(MARKET_HUB, "last_cycle_refreshed", 0)
-    unchanged = getattr(MARKET_HUB, "last_cycle_unchanged", 0)
-    skipped = getattr(MARKET_HUB, "last_cycle_skipped_no_klines", 0)
-    errors = getattr(MARKET_HUB, "last_cycle_errors", 0)
-    dt_ms = getattr(MARKET_HUB, "last_cycle_ms", 0)
-    cache_size = getattr(MARKET_HUB, "last_cycle_cache_size", 0)
-    hub_running = bool(getattr(MARKET_HUB, "_running", False))
-    hub_task_alive = bool(getattr(MARKET_HUB, "is_task_alive", lambda: False)())
-    warmup_active = bool(getattr(MARKET_HUB, "_warmup_active", False))
-    cycle_reason = getattr(MARKET_HUB, "last_cycle_reason", None)
-    mode = "DEGRADED" if MARKET_HUB_DEGRADED else "OK"
-    if not hub_running:
-        cycle_state = "idle"
-    elif symbols_count == 0:
-        cycle_state = "empty"
-    else:
-        cycle_state = "ok"
-    last_cycle_ts = getattr(MARKET_HUB, "last_cycle_ts", 0.0)
-    last_tick_age = int(now - last_cycle_ts) if last_cycle_ts else None
-    status_label = _build_status_label(
-        ok=bool(MARKET_HUB.last_ok_at) and not MARKET_HUB.last_error,
-        warn=bool(MARKET_HUB.last_error) or not MARKET_HUB.last_ok_at,
-        error=False,
-        ok_text=i18n.t(lang, "DIAG_STATUS_WORKING"),
-        warn_text=i18n.t(lang, "DIAG_STATUS_ISSUES"),
-        error_text=i18n.t(lang, "DIAG_STATUS_ERROR"),
-    )
-    details = [
-        i18n.t(lang, "DIAG_LAST_TICK", tick=last_tick),
-        f"• Last tick age: {last_tick_age}s" if last_tick_age is not None else "• Last tick age: n/a",
-        f"• Последний цикл: {cycle_state} | attempted={attempted} refreshed={refreshed} "
-        f"unchanged={unchanged} errors={errors} dt={dt_ms}ms",
-        f"• Cache: symbols_with_data={cache_size}",
-        f"• warmup_active={str(warmup_active).lower()}",
-        f"• market_hub_task_alive={str(hub_task_alive).lower()}",
-        i18n.t(lang, "DIAG_ACTIVE_SYMBOLS", count=symbols_count),
-    ]
-    details.append(f"• market_hub_mode={mode}")
-    details.append(f"• hub_restarts={getattr(MARKET_HUB, 'hub_restarts', 0)}")
-    details.append(
-        f"• hub_zero_refresh_streak={getattr(MARKET_HUB, 'market_hub_zero_refresh_streak', 0)}"
-    )
-    details.append(f"• universe_size={universe_size}")
-    details.append(f"• market_hub_symbols_size={symbols_count}")
-    if cycle_reason:
-        details.append(f"• cycle_reason={cycle_reason}")
-    if err:
-        details.append(i18n.t(lang, "DIAG_ERRORS", error=f"⚠️ {err}"))
-    return _format_section(i18n.t(lang, "DIAG_MARKET_HUB_TITLE"), status_label, details, lang)
-
-
 def _format_db_status(lang: str) -> str:
     path = get_db_path()
     exists = os.path.exists(path)
@@ -2110,52 +1995,6 @@ def _format_overall_status(now: float, lang: str) -> str:
     return _format_section(i18n.t(lang, "DIAG_SECTION_OVERALL"), status_label, details, lang)
 
 
-def _format_btc_gate_section(lang: str) -> str:
-    use_btc_gate = get_use_btc_gate()
-    status_label = _build_status_label(
-        ok=use_btc_gate,
-        warn=not use_btc_gate,
-        error=False,
-        ok_text=i18n.t(lang, "DIAG_STATUS_ENABLED"),
-        warn_text=i18n.t(lang, "DIAG_STATUS_DISABLED"),
-        error_text=i18n.t(lang, "DIAG_STATUS_DISABLED"),
-    )
-    details = []
-    btc_cache = get_cached_btc_context()
-    btc_error = get_btc_context_last_error()
-    btc_symbol = "BTCUSDT"
-    if not use_btc_gate:
-        details.append(i18n.t(lang, "DIAG_BTC_CONTEXT_DISABLED"))
-    elif btc_cache is None:
-        reason = f"⚠️ {btc_error}" if btc_error else i18n.t(lang, "DIAG_STATUS_PENDING")
-        details.append(i18n.t(lang, "DIAG_BTC_CONTEXT_PENDING", reason=reason))
-    else:
-        btc_ctx, age_sec, ttl_sec = btc_cache
-        allow_longs = "✅" if btc_ctx.get("allow_longs", False) else "❌"
-        allow_shorts = "✅" if btc_ctx.get("allow_shorts", False) else "❌"
-        ctx_reason = btc_ctx.get("ctx_reason") or "unknown"
-        btc_mode = btc_ctx.get("btc_mode") or "neutral"
-        btc_trend_1h = btc_ctx.get("trend_1h") or "unknown"
-        btc_trend_4h = btc_ctx.get("trend_4h") or "unknown"
-        ema_bias = btc_ctx.get("ema_bias") or "unknown"
-        atr_volatility = btc_ctx.get("atr_volatility", 0.0)
-        details.extend(
-            [
-                i18n.t(lang, "DIAG_BTC_SYMBOL", symbol=btc_symbol),
-                i18n.t(lang, "DIAG_BTC_MODE", mode=btc_mode),
-                i18n.t(lang, "DIAG_BTC_TREND_1H", trend=btc_trend_1h),
-                i18n.t(lang, "DIAG_BTC_TREND_4H", trend=btc_trend_4h),
-                i18n.t(lang, "DIAG_BTC_EMA_BIAS", bias=ema_bias),
-                i18n.t(lang, "DIAG_BTC_ATR_VOL", value=f"{atr_volatility:.2f}%"),
-                i18n.t(lang, "DIAG_BTC_AGE", age=age_sec, ttl=ttl_sec),
-                i18n.t(lang, "DIAG_BTC_ALLOW_LONGS", flag=allow_longs),
-                i18n.t(lang, "DIAG_BTC_ALLOW_SHORTS", flag=allow_shorts),
-                i18n.t(lang, "DIAG_BTC_REASON", reason=ctx_reason),
-            ]
-        )
-    return _format_section(i18n.t(lang, "DIAG_SECTION_BTC_GATE"), status_label, details, lang)
-
-
 def _format_ai_section(st, now: float, lang: str) -> str:
     extra = _parse_extra_kv(st.extra or "")
     status_label = _build_status_label(
@@ -2203,21 +2042,12 @@ def _format_ai_section(st, now: float, lang: str) -> str:
         details.append(i18n.t(lang, "DIAG_CYCLE_TIME", cycle=cyc))
 
     state = st.state or {}
-    watchlist_dt = state.get("last_watchlist_dt")
-    if isinstance(watchlist_dt, (int, float)):
-        details.append(f"• Watchlist cycle dt: {watchlist_dt:.2f}s")
-    timeout_at = state.get("last_watchlist_timeout_at")
-    if isinstance(timeout_at, (int, float)) and timeout_at > 0:
-        details.append(f"• Watchlist timeout: {_human_ago(int(now - timeout_at), lang)}")
     timeout_count = state.get("fail_symbol_timeout_count")
     if isinstance(timeout_count, int):
         details.append(f"• Symbol timeouts: {timeout_count}")
     slowest_symbols = state.get("top_slowest_symbols")
     if slowest_symbols:
         details.append(f"• Top slowest: {_format_slowest_symbols(slowest_symbols)}")
-    last_timeout_breakdown = state.get("last_timeout_breakdown")
-    if last_timeout_breakdown:
-        details.append(f"• Last timeout breakdown: {last_timeout_breakdown}")
 
     details.append(i18n.t(lang, "DIAG_AI_CONFIG_TITLE"))
     details.extend(
@@ -2480,9 +2310,7 @@ async def test_admin(message: Message):
     blocks = []
     blocks.append(i18n.t(lang, "DIAG_TITLE"))
     blocks.append(_format_overall_status(now, lang))
-    blocks.append(_format_btc_gate_section(lang))
     blocks.append(_format_db_status(lang))
-    blocks.append(_format_market_hub(now, lang))
     ai_module = MODULES.get("ai_signals")
     if ai_module:
         blocks.append(_format_ai_section(ai_module, now, lang))
@@ -2647,7 +2475,6 @@ async def purge_symbol_cmd(message: Message):
             "PURGE_SYMBOL_DONE",
             symbol=symbol,
             events=stats["events_deleted"],
-            watchlist=stats["watchlist_deleted"],
             audit=stats["signal_audit_deleted"],
         )
     )
@@ -3590,10 +3417,6 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
         rr=rr,
         price_precision=4,
         score_breakdown=breakdown,
-        market_mode=reason.get("market_mode"),
-        market_bias=reason.get("market_bias"),
-        btc_change_6h_pct=float(reason.get("btc_change_6h_pct", 0.0)),
-        btc_atr_1h_pct=float(reason.get("btc_atr_1h_pct", 0.0)),
         lifetime_hours=SIGNAL_TTL_SECONDS // 3600,
     )
     prefix = signal.get("title_prefix")
@@ -3708,32 +3531,6 @@ async def send_signal_to_all(
         skipped_no_subs += 1
         print("[ai_signals] deliver: subs=0 queued=0 dedup=0")
         return stats if return_stats else 0
-
-    refresh_on_send = _env_bool("BTC_REFRESH_ON_SEND", "0")
-    module_state = MODULES.get("ai_signals")
-    use_btc_gate = bool(module_state and module_state.state.get("use_btc_gate", False))
-    if refresh_on_send and use_btc_gate:
-        btc_ctx = None
-        cached = get_cached_btc_context()
-        age_sec = None
-        ttl_sec = None
-        if cached:
-            btc_ctx, age_sec, ttl_sec = cached
-        needs_refresh = age_sec is None or ttl_sec is None or age_sec >= ttl_sec
-        if needs_refresh:
-            try:
-                btc_ctx = await get_btc_context(force_refresh=True)
-                age_sec = 0
-            except Exception as exc:
-                print(f"[ai_signals] BTC refresh on send failed: {exc}")
-        if btc_ctx:
-            side = "LONG" if signal_dict.get("direction") == "long" else "SHORT"
-            if side == "LONG" and not btc_ctx.get("allow_longs", False):
-                print("[ai_signals] BTC gate blocked LONG signal on refresh.")
-                return 0
-            if side == "SHORT" and not btc_ctx.get("allow_shorts", False):
-                print("[ai_signals] BTC gate blocked SHORT signal on refresh.")
-                return 0
 
     entry_low, entry_high = signal_dict["entry_zone"]
     direction = signal_dict.get("direction", "long")
@@ -3902,67 +3699,6 @@ async def _get_ai_universe() -> List[str]:
             f"[ai_signals] universe filtered: total={len(symbols)} removed={removed} final={len(filtered)}"
         )
     return filtered
-
-
-async def _compute_candidate_score(symbol: str) -> tuple[int, str]:
-    try:
-        candles_1h, candles_15m = await asyncio.gather(
-            fetch_klines(symbol, "1h", 120),
-            fetch_klines(symbol, "15m", 160),
-            return_exceptions=True,
-        )
-    except Exception:
-        return 0, ""
-    if isinstance(candles_1h, BaseException) or isinstance(candles_15m, BaseException):
-        return 0, ""
-    candles_1h = normalize_klines(candles_1h) if isinstance(candles_1h, list) else []
-    candles_15m = normalize_klines(candles_15m) if isinstance(candles_15m, list) else []
-    if not candles_1h or not candles_15m:
-        return 0, ""
-    if len(candles_1h) < 2 or len(candles_15m) < 2:
-        return 0, ""
-
-    score = 0
-    reason_scores: dict[str, int] = {}
-
-    vols = [float(c.volume) for c in candles_15m[-21:]]
-    if len(vols) > 1:
-        avg_vol = sum(vols[:-1]) / max(len(vols) - 1, 1)
-        last_vol = vols[-1]
-        volume_ratio = last_vol / avg_vol if avg_vol > 0 else 0.0
-        if volume_ratio >= 1.6:
-            reason_scores["volume_spike"] = 30
-        elif volume_ratio >= 1.3:
-            reason_scores["volume_spike"] = 20
-
-    atr_now = compute_atr(candles_1h, 14)
-    atr_prev = compute_atr(candles_1h[:-1], 14) if len(candles_1h) > 15 else None
-    if atr_now and atr_prev and atr_prev > 0 and atr_now >= atr_prev * 1.10:
-        reason_scores["atr"] = 20
-
-    closes_1h = [float(c.close) for c in candles_1h]
-    ema50 = compute_ema(closes_1h, 50)
-    last_close = closes_1h[-1]
-    if ema50 and last_close > 0:
-        distance_pct = abs(last_close - ema50) / last_close * 100
-        if distance_pct <= 1.0:
-            reason_scores["near_poi"] = 30
-        elif distance_pct <= 2.0:
-            reason_scores["near_poi"] = 20
-
-    last_candle = candles_1h[-1]
-    if float(last_candle.open) > 0:
-        change_pct = abs((float(last_candle.close) - float(last_candle.open)) / float(last_candle.open) * 100)
-        if change_pct >= 3.0:
-            reason_scores["pump"] = 30
-        elif change_pct >= 2.0:
-            reason_scores["pump"] = 20
-
-    score = sum(reason_scores.values())
-    if not reason_scores:
-        return 0, ""
-    reason = max(reason_scores.items(), key=lambda item: item[1])[0]
-    return min(score, 100), reason
 
 
 async def _deliver_pumpdump_signal_stats(
@@ -4316,10 +4052,8 @@ async def ai_scan_once() -> None:
     BUDGET = 35
     print("[AI] scan_once start")
     try:
-        use_btc_gate = get_use_btc_gate()
         module_state = MODULES.get("ai_signals")
         if module_state:
-            module_state.state["use_btc_gate"] = use_btc_gate
             module_state.state["last_cycle_ts"] = time.time()
         reset_request_count("ai_signals")
         reset_klines_request_count("ai_signals")
@@ -4329,10 +4063,6 @@ async def ai_scan_once() -> None:
 
         with binance_request_context("ai_signals"):
             symbols = await _get_ai_universe()
-        if symbols and get_use_market_hub():
-            MARKET_HUB.set_symbols(symbols)
-            if module_state:
-                module_state.state["universe_symbols"] = symbols
         if not symbols:
             mark_error("ai_signals", "no symbols to scan")
             return
@@ -4362,7 +4092,6 @@ async def ai_scan_once() -> None:
                 ai_scan_once.cursor = 0
         cursor = ai_scan_once.cursor
         # Ensure symbols are sorted by volume desc (24h quoteVolume) BEFORE this block.
-        # If MarketHub already provides sorted list -> OK; else sort here.
         priority = symbols[:max(0, min(AI_PRIORITY_N, len(symbols)))]
         priority_set = set(priority)
         pool = [s for s in symbols if s not in priority_set]
@@ -4390,57 +4119,60 @@ async def ai_scan_once() -> None:
         )
         if chunk:
             update_current_symbol("ai_signals", chunk[0])
-
-        now = int(time.time())
-        added = 0
-        low_score_reasons: dict[str, int] = {}
         with binance_request_context("ai_signals"):
-            for symbol in chunk:
-                if time.time() - start > BUDGET:
-                    print("[AI] budget exceeded, stopping early")
-                    break
-                update_current_symbol("ai_signals", symbol)
-                score, reason = await _compute_candidate_score(symbol)
-                if score < CANDIDATE_SCORE_MIN:
-                    reason_key = reason or "no_score"
-                    low_score_reasons[reason_key] = low_score_reasons.get(reason_key, 0) + 1
-                    continue
-                ttl_until = now + WATCHLIST_TTL_MIN * 60
-                inserted = upsert_watchlist_candidate(
-                    symbol,
-                    score,
-                    reason,
-                    ttl_until,
-                    last_seen=now,
-                )
-                if inserted:
-                    added += 1
+            signals, stats = await scan_market(
+                symbols=chunk,
+                free_mode=True,
+                min_score=FREE_MIN_SCORE,
+                return_stats=True,
+                time_budget=BUDGET,
+                deep_scan_limit=AI_DEEP_TOP_K,
+                diag_state=module_state.state if module_state else None,
+            )
+        module_state = MODULES.get("ai_signals")
+        if module_state and isinstance(stats, dict):
+            module_state.last_stats = stats
+            module_state.fails_top = stats.get("fails", {})
+            module_state.state["top_slowest_symbols"] = stats.get("slowest_symbols", [])
+            module_state.state["fail_symbol_timeout_count"] = stats.get("fails", {}).get(
+                "fail_symbol_timeout", 0
+            )
+            prev_near_miss = module_state.near_miss
+            try:
+                module_state.near_miss = _format_near_miss(stats.get("near_miss", {}), DEFAULT_LANG)
+            except Exception as exc:
+                module_state.near_miss = prev_near_miss
+                module_state.last_error = str(exc)
+                logger.exception("AI signals error")
+        deep_scans_done = stats.get("deep_scans_done", 0) if isinstance(stats, dict) else 0
+        sent_count = 0
+        for signal in _select_signals_for_cycle(signals):
+            if time.time() - start > BUDGET:
+                print("[AI] budget exceeded, stopping early")
+                break
+            score = signal.get("score", 0)
+            if score < FREE_MIN_SCORE:
+                continue
+            update_current_symbol("ai_signals", signal.get("symbol", ""))
+            print(f"[ai_signals] DIRECT SEND {signal['symbol']} {signal['direction']} score={score}")
+            await send_signal_to_all(signal)
+            sent_count += 1
 
-        pruned = prune_watchlist(now, WATCHLIST_MAX)
-        active_watchlist, total_watchlist = get_watchlist_counts(now)
         current_symbol = MODULES.get("ai_signals").current_symbol if "ai_signals" in MODULES else None
         req_count = get_request_count("ai_signals")
         klines_count = get_klines_request_count("ai_signals")
         cache_stats = get_klines_cache_stats("ai_signals")
         ticker_count = get_ticker_request_count("ai_signals")
-        if low_score_reasons:
-            top_reasons = sorted(
-                low_score_reasons.items(),
-                key=lambda item: item[1],
-                reverse=True,
-            )[:5]
-            reasons_str = ", ".join([f"{key}={count}" for key, count in top_reasons])
-            print(f"[AI] below min score reasons: {reasons_str}")
         print(
             "[AI] "
             f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
-            f"watchlist={active_watchlist}/{total_watchlist} added={added} pruned={pruned}"
+            f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done}"
         )
         mark_ok(
             "ai_signals",
             extra=(
                 f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
-                f"watchlist={active_watchlist}/{total_watchlist} added={added} pruned={pruned} "
+                f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done} "
                 f"current={current_symbol or '-'} cycle={int(time.time() - start)}s "
                 f"req={req_count} klines={klines_count} "
                 f"klines_hits={cache_stats.get('hits')} klines_misses={cache_stats.get('misses')} "
@@ -4452,232 +4184,6 @@ async def ai_scan_once() -> None:
         print("[AI] scan_once end")
 
 
-async def watchlist_scan_once() -> None:
-    start = time.time()
-    BUDGET = 35
-    lang = DEFAULT_LANG
-    if bot is None:
-        mark_tick("ai_signals", extra="bot not ready")
-        return
-    module_state = MODULES.get("ai_signals")
-    use_btc_gate = get_use_btc_gate()
-    if module_state:
-        module_state.state["use_btc_gate"] = use_btc_gate
-        module_state.state["last_cycle_ts"] = time.time()
-    now = int(time.time())
-    rows = list_watchlist_for_scan(now, WATCHLIST_MAX)
-    symbols = [row["symbol"] for row in rows]
-    priority_scores = {row["symbol"]: float(row["score"]) for row in rows}
-    blocked_symbols = get_blocked_symbols()
-    fetch_symbols_start = time.perf_counter()
-    spot_symbols = await get_spot_usdt_symbols()
-    fetch_symbols_dt = time.perf_counter() - fetch_symbols_start
-    if module_state:
-        module_state.state["fetch_symbols_dt"] = fetch_symbols_dt
-    allowed_symbols = set(spot_symbols) if spot_symbols else set(symbols)
-    blocked_in_watchlist = [symbol for symbol in symbols if symbol in blocked_symbols]
-    missing_in_binance = (
-        [symbol for symbol in symbols if symbol not in allowed_symbols] if spot_symbols else []
-    )
-    to_purge = set(blocked_in_watchlist + missing_in_binance)
-    if to_purge:
-        delete_watchlist_symbols(to_purge)
-    symbols = [
-        symbol
-        for symbol in symbols
-        if symbol in allowed_symbols and symbol not in blocked_symbols
-    ]
-    priority_scores = {
-        symbol: score
-        for symbol, score in priority_scores.items()
-        if symbol in allowed_symbols and symbol not in blocked_symbols
-    }
-    exclude_btc = os.getenv("EXCLUDE_BTC_FROM_AI_UNIVERSE", "0").lower() in (
-        "1",
-        "true",
-        "yes",
-        "y",
-    )
-    if exclude_btc:
-        symbols = [symbol for symbol in symbols if symbol != "BTCUSDT"]
-        priority_scores = {
-            symbol: score for symbol, score in priority_scores.items() if symbol != "BTCUSDT"
-        }
-    if not symbols:
-        active_watchlist, total_watchlist = get_watchlist_counts(now)
-        mark_ok(
-            "ai_signals",
-            extra=f"watchlist={active_watchlist}/{total_watchlist} symbols=0",
-        )
-        return
-
-    update_current_symbol("ai_signals", symbols[0])
-    with binance_request_context("ai_signals"):
-        signals, stats = await scan_market(
-            symbols=symbols,
-            use_btc_gate=use_btc_gate,
-            free_mode=True,
-            min_score=FREE_MIN_SCORE,
-            return_stats=True,
-            time_budget=BUDGET,
-            deep_scan_limit=AI_DEEP_TOP_K,
-            priority_scores=priority_scores,
-            max_concurrency=MAX_WATCHLIST_CONCURRENCY,
-            diag_state=module_state.state if module_state else None,
-        )
-    print("[ai_signals] watchlist stats:", stats)
-    module_state = MODULES.get("ai_signals")
-    if module_state and isinstance(stats, dict):
-        module_state.last_stats = stats
-        module_state.fails_top = stats.get("fails", {})
-        module_state.state["top_slowest_symbols"] = stats.get("slowest_symbols", [])
-        module_state.state["fail_symbol_timeout_count"] = stats.get("fails", {}).get(
-            "fail_symbol_timeout", 0
-        )
-        prev_near_miss = module_state.near_miss
-        try:
-            module_state.near_miss = _format_near_miss(stats.get("near_miss", {}), lang)
-        except Exception as exc:
-            module_state.near_miss = prev_near_miss
-            module_state.last_error = str(exc)
-            logger.exception("AI signals error")
-    deep_scans_done = stats.get("deep_scans_done", 0) if isinstance(stats, dict) else 0
-    sent_count = 0
-    state = module_state.state if module_state else {}
-
-    def _merge_symbol_step(symbol: str, step: str, dt: float) -> None:
-        if not symbol or dt <= 0:
-            return
-        items = state.get("top_slowest_symbols") or []
-        for item in items:
-            if item.get("symbol") == symbol:
-                steps = item.setdefault("steps", {})
-                steps[step] = dt
-                item["total_dt"] = item.get("total_dt", 0.0) + dt
-                break
-        else:
-            items.append({"symbol": symbol, "total_dt": dt, "steps": {step: dt}})
-        items.sort(key=lambda item: item.get("total_dt", 0.0), reverse=True)
-        state["top_slowest_symbols"] = items[:5]
-
-    for signal in _select_signals_for_cycle(signals):
-        if time.time() - start > BUDGET:
-            print("[AI] watchlist budget exceeded, stopping early")
-            break
-        score = signal.get("score", 0)
-        if score < FREE_MIN_SCORE:
-            continue
-        update_current_symbol("ai_signals", signal.get("symbol", ""))
-        print(
-            f"[ai_signals] WATCHLIST SEND {signal['symbol']} {signal['direction']} score={score}"
-        )
-        send_start = time.perf_counter()
-        await send_signal_to_all(signal)
-        _merge_symbol_step(signal.get("symbol", ""), "send_dt", time.perf_counter() - send_start)
-        sent_count += 1
-        ttl_until = now + WATCHLIST_TTL_MIN * 60
-        cooldown_until = now + WATCHLIST_COOLDOWN_MIN * 60
-        db_start = time.perf_counter()
-        update_watchlist_after_signal(
-            signal["symbol"],
-            ttl_until=ttl_until,
-            cooldown_until=cooldown_until,
-            last_seen=now,
-        )
-        _merge_symbol_step(signal.get("symbol", ""), "db_dt", time.perf_counter() - db_start)
-
-    pruned = prune_watchlist(now, WATCHLIST_MAX)
-    active_watchlist, total_watchlist = get_watchlist_counts(now)
-    mark_ok(
-        "ai_signals",
-        extra=(
-            f"watchlist={active_watchlist}/{total_watchlist} "
-            f"scanned={len(symbols)} sent={sent_count} pruned={pruned} "
-            f"deep_scans={deep_scans_done} "
-            f"cycle={int(time.time() - start)}s"
-        ),
-    )
-
-
-def _build_watchlist_timeout_report(
-    *,
-    state: Dict[str, Any],
-    cycle_dt: float,
-    timeout_s: float,
-    timed_out: bool,
-) -> str:
-    fetch_symbols_dt = state.get("fetch_symbols_dt")
-    fetch_str = f"{fetch_symbols_dt:.2f}s" if isinstance(fetch_symbols_dt, (int, float)) else "-"
-    prescore_dt = state.get("prescore_dt")
-    prescore_str = f"{prescore_dt:.2f}s" if isinstance(prescore_dt, (int, float)) else "-"
-    deep_dt = state.get("deep_dt")
-    deep_str = f"{deep_dt:.2f}s" if isinstance(deep_dt, (int, float)) else "-"
-    slowest = _format_slowest_symbols(state.get("top_slowest_symbols") or [])
-    timeout_count = state.get("fail_symbol_timeout_count", 0)
-    checked = state.get("symbols_checked", 0)
-    prescored = state.get("symbols_prescored", 0)
-    deep_candidates = state.get("deep_candidates", 0)
-    klines_conc = state.get("klines_concurrency", 0)
-    symbol_conc = state.get("symbol_concurrency", 0)
-    status = "timeout" if timed_out else "slow"
-    return (
-        f"{status} watchlist dt={cycle_dt:.2f}s limit={timeout_s}s "
-        f"fetch_symbols_dt={fetch_str} prescore_dt={prescore_str} deep_dt={deep_str} "
-        f"checked={checked} prescored={prescored} deep_candidates={deep_candidates} "
-        f"klines_conc={klines_conc} symbol_conc={symbol_conc} "
-        f"symbol_timeouts={timeout_count} "
-        f"slowest={slowest}"
-    )
-
-
-async def watchlist_worker_loop() -> None:
-    while True:
-        cycle_start = time.perf_counter()
-        timeout_s = max(15, WATCHLIST_SCAN_TIMEOUT_SEC)
-        print("[ai_signals] watchlist cycle start")
-        mark_tick("ai_signals", extra="watchlist heartbeat")
-        t0 = time.perf_counter()
-        module_state = MODULES.get("ai_signals")
-        try:
-            await asyncio.wait_for(watchlist_scan_once(), timeout=timeout_s)
-            cycle_dt = time.perf_counter() - t0
-            print(f"[ai_signals] watchlist cycle ok, dt={cycle_dt:.2f}s")
-            if module_state:
-                module_state.state["last_watchlist_dt"] = cycle_dt
-            if cycle_dt > WATCHLIST_SLOW_REPORT_THRESHOLD_SEC:
-                state = module_state.state if module_state else {}
-                report = _build_watchlist_timeout_report(
-                    state=state,
-                    cycle_dt=cycle_dt,
-                    timeout_s=timeout_s,
-                    timed_out=False,
-                )
-                if module_state:
-                    module_state.state["last_timeout_breakdown"] = report
-                print(f"[ai_signals] watchlist slow report: {report}")
-        except asyncio.TimeoutError:
-            cycle_dt = time.perf_counter() - t0
-            print(f"[ai_signals] watchlist TIMEOUT >{timeout_s}s, dt={cycle_dt:.2f}s")
-            if module_state:
-                module_state.state["last_watchlist_timeout_at"] = time.time()
-            state = module_state.state if module_state else {}
-            report = _build_watchlist_timeout_report(
-                state=state,
-                cycle_dt=cycle_dt,
-                timeout_s=timeout_s,
-                timed_out=True,
-            )
-            if module_state:
-                module_state.state["last_timeout_breakdown"] = report
-            print(f"[ai_signals] watchlist timeout report: {report}")
-            mark_warn("ai_signals", f"watchlist timeout >{timeout_s}s")
-        except Exception as e:
-            print(f"[ai_signals] watchlist ERROR {type(e).__name__}: {e}")
-            mark_error("ai_signals", str(e))
-        elapsed = time.perf_counter() - cycle_start
-        await asyncio.sleep(max(0, WATCHLIST_SCAN_EVERY_SEC - elapsed))
-
-
 # ===== ТОЧКА ВХОДА =====
 
 async def main():
@@ -4685,27 +4191,10 @@ async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     print("Бот запущен!")
     init_app_db()
-    startup_delay_sec = int(os.getenv("STARTUP_DELAY_SEC", "120"))
-    watchlist_task: asyncio.Task | None = None
 
     async def _delayed_task(delay_sec: float, coro: Awaitable[Any]):
         await asyncio.sleep(delay_sec)
         return await coro
-
-    async def startup_sequence() -> None:
-        nonlocal watchlist_task
-        await asyncio.sleep(startup_delay_sec)
-        symbols: list[str] = []
-        with binance_request_context("ai_signals"):
-            symbols = await _get_ai_universe()
-        if get_use_market_hub():
-            if symbols:
-                MARKET_HUB.set_symbols(symbols)
-            await MARKET_HUB.start()
-            print("[startup] MarketHub started after delay")
-        else:
-            print("[startup] MarketHub disabled")
-        watchlist_task = asyncio.create_task(watchlist_worker_loop())
 
     pump_task = asyncio.create_task(
         _delayed_task(6, safe_worker_loop("pumpdump", lambda: pump_scan_once(bot)))
@@ -4717,22 +4206,15 @@ async def main():
     audit_task = asyncio.create_task(_delayed_task(18, signal_audit_worker_loop()))
     watchdog_task = asyncio.create_task(watchdog())
     binance_watchdog_task = asyncio.create_task(binance_watchdog())
-    startup_task = asyncio.create_task(startup_sequence())
     try:
         await dp.start_polling(bot)
     finally:
-        if get_use_market_hub():
-            await MARKET_HUB.stop()
         signals_task.cancel()
         with suppress(asyncio.CancelledError):
             await signals_task
         pump_task.cancel()
         with suppress(asyncio.CancelledError):
             await pump_task
-        if watchlist_task:
-            watchlist_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await watchlist_task
         audit_task.cancel()
         with suppress(asyncio.CancelledError):
             await audit_task
@@ -4742,9 +4224,6 @@ async def main():
         binance_watchdog_task.cancel()
         with suppress(asyncio.CancelledError):
             await binance_watchdog_task
-        startup_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await startup_task
         await close_shared_session()
 
 

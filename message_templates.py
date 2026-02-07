@@ -48,10 +48,6 @@ def format_scenario_message(
     rr: float,
     price_precision: int,
     score_breakdown: Optional[list[dict]] = None,
-    market_mode: Optional[str] = None,
-    market_bias: Optional[str] = None,
-    btc_change_6h_pct: float = 0.0,
-    btc_atr_1h_pct: float = 0.0,
     lifetime_hours: int = 12,
 ) -> str:
     is_long = side == "LONG"
@@ -171,15 +167,6 @@ def format_scenario_message(
         i18n.t(lang, "SCENARIO_CONTEXT_RR", rr=f"{rr:.2f}"),
         "",
         i18n.t(lang, "SCENARIO_SCORE_LINE", score=score),
-        i18n.t(
-            lang,
-            "SCENARIO_MARKET_MODE_LINE",
-            mode=market_mode or "NORMAL",
-            bias=market_bias or "NEUTRAL",
-            btc_change=btc_change_6h_pct,
-            btc_atr=btc_atr_1h_pct,
-        ),
-        "",
         i18n.t(lang, "SCENARIO_BREAKDOWN_HEADER"),
         *breakdown_lines,
         i18n.t(lang, "SCENARIO_BREAKDOWN_TOTAL", score=score),
