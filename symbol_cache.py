@@ -4,7 +4,7 @@ from typing import Any, List
 
 import aiohttp
 
-from binance_rest import fetch_json, is_binance_degraded
+from binance_rest import fetch_json
 from market_cache import get_spot_24h
 
 BINANCE_SPOT_BASE = "https://api.binance.com/api/v3"
@@ -97,15 +97,6 @@ async def get_spot_usdt_symbols(session: aiohttp.ClientSession | None = None) ->
         if not blocked:
             return cached
         return [symbol for symbol in cached if symbol not in blocked]
-    if is_binance_degraded() and cached:
-        blocked = get_blocked_symbols()
-        if not blocked:
-            return cached
-        return [symbol for symbol in cached if symbol not in blocked]
-    if is_binance_degraded():
-        print("[BINANCE] degraded: skip spot symbols refresh")
-        return []
-
     data = await fetch_json(
         f"{BINANCE_SPOT_BASE}/exchangeInfo",
         session=session,
@@ -146,15 +137,6 @@ async def get_futures_usdt_symbols(session: aiohttp.ClientSession | None = None)
         if not blocked:
             return cached
         return [symbol for symbol in cached if symbol not in blocked]
-    if is_binance_degraded() and cached:
-        blocked = get_blocked_symbols()
-        if not blocked:
-            return cached
-        return [symbol for symbol in cached if symbol not in blocked]
-    if is_binance_degraded():
-        print("[BINANCE] degraded: skip futures symbols refresh")
-        return []
-
     data = await fetch_json(
         f"{BINANCE_FAPI_BASE}/fapi/v1/exchangeInfo",
         session=session,

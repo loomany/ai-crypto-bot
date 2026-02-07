@@ -42,8 +42,6 @@ _LAST_RESPONSE_TS = 0.0
 _HAS_RESPONSE = False
 _WATCHDOG_START_TS = time.time()
 _SESSION_RESTARTS = 0
-_BINANCE_DEGRADED_UNTIL = 0.0
-_DEGRADED_STREAK = 0
 
 
 @dataclass
@@ -107,7 +105,6 @@ _KLINES_CACHE_LOCK = asyncio.Lock()
 _KLINES_INFLIGHT_LOCK = asyncio.Lock()
 _AGGTRADES_CACHE_LOCK = asyncio.Lock()
 _AGGTRADES_CACHE_TTL_SEC = _env_int("AGGTRADES_TTL_SEC", 10)
-_BINANCE_WATCHDOG_MAX_AGE_SEC = _env_int("BINANCE_WATCHDOG_MAX_AGE_SEC", 300)
 _BINANCE_REQUEST_MODULE = ContextVar("binance_request_module", default=None)
 
 
@@ -175,13 +172,11 @@ async def _record_success(module: Optional[str]) -> None:
 
 
 async def _record_response() -> None:
-    global _LAST_RESPONSE_TS, _HAS_RESPONSE, _DEGRADED_STREAK
+    global _LAST_RESPONSE_TS, _HAS_RESPONSE
     now = time.time()
     async with _STATE_LOCK:
         _LAST_RESPONSE_TS = now
         _HAS_RESPONSE = True
-        if _DEGRADED_STREAK:
-            _DEGRADED_STREAK = 0
 
 
 async def _record_timeout_or_network_error(module: Optional[str]) -> None:
@@ -201,26 +196,6 @@ def get_binance_state() -> dict[str, float | int]:
         "consecutive_timeouts": _CONSECUTIVE_TIMEOUTS,
         "session_restarts": _SESSION_RESTARTS,
     }
-
-
-def is_binance_degraded() -> bool:
-    return time.time() < _BINANCE_DEGRADED_UNTIL
-
-
-def get_binance_degraded_until() -> float:
-    return _BINANCE_DEGRADED_UNTIL
-
-
-async def _enter_degraded(reason: str) -> None:
-    global _BINANCE_DEGRADED_UNTIL, _DEGRADED_STREAK
-    now = time.time()
-    duration = random.uniform(120, 300)
-    _BINANCE_DEGRADED_UNTIL = max(_BINANCE_DEGRADED_UNTIL, now + duration)
-    _DEGRADED_STREAK += 1
-    print(
-        "[binance_watchdog] CRITICAL: degraded mode enabled "
-        f"for {int(duration)}s ({reason})"
-    )
 
 
 # ---- optional concurrency gate (reduces socket spikes) ----
@@ -432,10 +407,6 @@ async def fetch_klines(
                         )
                         return cached_data[-limit:]
 
-    if is_binance_degraded():
-        print(f"[binance_rest] degraded: skip klines fetch {symbol} {interval}")
-        return None
-
     inflight_key = (symbol, interval, int(start_ms or 0))
     created = False
     requested_limit = fetch_limit
@@ -570,10 +541,6 @@ async def fetch_agg_trades(
             )
             return cached[1]
 
-    if is_binance_degraded():
-        print(f"[binance_rest] degraded: skip aggTrades {symbol} {market}")
-        return None
-
     print(f"[binance_rest] aggTrades {symbol} {market} (cache_hit=False)")
     if market == "spot":
         url = f"{BINANCE_BASE_URL}/aggTrades"
@@ -595,32 +562,4 @@ async def fetch_agg_trades(
 
 
 async def binance_watchdog() -> None:
-    while True:
-        now = time.time()
-        if _BINANCE_WATCHDOG_MAX_AGE_SEC <= 0:
-            await asyncio.sleep(45)
-            continue
-        response_age = (
-            now - _LAST_RESPONSE_TS if _HAS_RESPONSE else now - _WATCHDOG_START_TS
-        )
-        success_age = (
-            now - _LAST_SUCCESS_TS if _HAS_SUCCESS else now - _WATCHDOG_START_TS
-        )
-        if response_age > _BINANCE_WATCHDOG_MAX_AGE_SEC:
-            print(
-                "[binance_watchdog] CRITICAL: no Binance responses "
-                f">{int(_BINANCE_WATCHDOG_MAX_AGE_SEC)}s"
-            )
-            if _DEGRADED_STREAK >= 1:
-                print(
-                    "[binance_watchdog] CRITICAL: degraded recovery failed, "
-                    "retrying without exit"
-                )
-            await _restart_shared_session(reason="watchdog no responses")
-            await _enter_degraded("no responses from Binance")
-        if success_age > _BINANCE_WATCHDOG_MAX_AGE_SEC:
-            print(
-                "[binance_watchdog] WARNING: no successful Binance responses "
-                f">{int(_BINANCE_WATCHDOG_MAX_AGE_SEC)}s"
-            )
-        await asyncio.sleep(45)
+    return None

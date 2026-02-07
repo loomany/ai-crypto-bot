@@ -4,7 +4,7 @@ from statistics import mean
 from typing import Any, Dict, List, Optional
 
 from ai_types import Candle
-from binance_rest import get_klines, is_binance_degraded
+from binance_rest import get_klines
 from utils_klines import normalize_klines
 from trading_core import _compute_rsi_series, compute_ema, detect_trend_and_structure
 
@@ -97,8 +97,6 @@ async def _fetch_direct_bundle(
     symbol: str,
     tfs: tuple[str, ...],
 ) -> Optional[Dict[str, List[Candle]]]:
-    if is_binance_degraded():
-        return None
     limits = {
         "1d": 60,
         "4h": 120,

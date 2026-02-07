@@ -7,7 +7,7 @@ from statistics import mean
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ai_types import Candle
-from binance_rest import get_klines, is_binance_degraded
+from binance_rest import get_klines
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
 from market_regime import get_market_regime
@@ -124,8 +124,6 @@ async def _fetch_direct_bundle(
     limit_overrides: dict[str, int] | None = None,
     timings: dict[str, float] | None = None,
 ) -> Optional[Dict[str, List[Candle]]]:
-    if is_binance_degraded():
-        return None
     start = time.perf_counter()
     limits = dict(AI_DIRECT_LIMITS)
     if limit_overrides:
@@ -216,8 +214,6 @@ async def _get_hourly_snapshot(symbol: str) -> Optional[Dict[str, float]]:
 
 
 async def get_alt_watch_symbol(limit: int = 80, batch_size: int = 10) -> Optional[Dict[str, float]]:
-    if is_binance_degraded():
-        limit = min(limit, 30)
     symbols = await get_top_usdt_symbols_by_volume(limit)
     if not symbols:
         return None

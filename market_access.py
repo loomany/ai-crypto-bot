@@ -3,7 +3,6 @@ from typing import Dict, List, Optional, Tuple
 
 from ai_types import Candle
 from binance_client import get_required_candles, get_quick_candles
-from binance_rest import is_binance_degraded
 
 DEFAULT_TFS = ("1d", "4h", "1h", "15m", "5m")
 
@@ -17,9 +16,6 @@ async def get_bundle_with_fallback(
     stale_tfs: Tuple[str, ...] = ("1h", "15m", "5m"),
     timings: dict[str, float] | None = None,
 ) -> Optional[Dict[str, List[Candle]]]:
-    if is_binance_degraded():
-        return None
-
     # прямой Binance
     candles = await get_required_candles(symbol, timings=timings)
     if not candles:
@@ -39,9 +35,6 @@ async def get_quick_with_fallback(
     limit_overrides: dict[str, int] | None = None,
     timings: dict[str, float] | None = None,
 ) -> Optional[Dict[str, List[Candle]]]:
-    if is_binance_degraded():
-        return None
-
     quick = await get_quick_candles(
         symbol,
         tfs=tfs,
