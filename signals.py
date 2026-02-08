@@ -4,7 +4,7 @@ import math
 import os
 import time
 from statistics import mean
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ai_types import Candle
 from binance_rest import get_klines
@@ -642,6 +642,7 @@ async def scan_market(
     max_concurrency: int | None = None,
     excluded_symbols: set[str] | None = None,
     diag_state: Dict[str, Any] | None = None,
+    progress_cb: Callable[[str], None] | None = None,
 ) -> List[Dict[str, Any]] | Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Сканирует весь рынок Binance по спотовым USDT-парам и возвращает сигналы.
@@ -749,6 +750,8 @@ async def scan_market(
         symbol_start = time.perf_counter()
         timings = _ensure_symbol_timings(symbol)
         try:
+            if progress_cb is not None:
+                progress_cb(symbol)
             try:
                 quick = await _with_semaphore(
                     _gather_stage_a_klines,
@@ -887,6 +890,8 @@ async def scan_market(
         symbol_start = time.perf_counter()
         timings = _ensure_symbol_timings(symbol)
         try:
+            if progress_cb is not None:
+                progress_cb(symbol)
             try:
                 klines = await _with_semaphore(_gather_klines, symbol, timings=timings)
             except Exception:
