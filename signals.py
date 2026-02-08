@@ -55,6 +55,15 @@ AGGTRADES_TOP_K = int(os.getenv("AGGTRADES_TOP_K", "2"))
 KLINES_CONCURRENCY = int(
     os.getenv("MAX_KLINES_CONCURRENCY", os.getenv("KLINES_CONCURRENCY", "10"))
 )
+AI_STRUCTURE_MODE = os.getenv("AI_STRUCTURE_MODE", "soft").strip().lower()
+AI_STRUCTURE_PENALTY_NEUTRAL = float(os.getenv("AI_STRUCTURE_PENALTY_NEUTRAL", "10"))
+AI_STRUCTURE_HARD_FAIL_ON_OPPOSITE = os.getenv("AI_STRUCTURE_HARD_FAIL_ON_OPPOSITE", "1").lower() in (
+    "1",
+    "true",
+    "yes",
+    "y",
+)
+AI_STRUCTURE_WINDOW = os.getenv("AI_STRUCTURE_WINDOW", "4h").strip().lower()
 AI_PER_SYMBOL_TIMEOUT_SEC = float(
     os.getenv("AI_PER_SYMBOL_TIMEOUT_SEC", os.getenv("PER_SYMBOL_TIMEOUT_SEC", "6.0"))
 )
@@ -117,6 +126,34 @@ def _parse_tf_seconds(tf: str) -> int:
         return int(float(value) * units[unit])
     except (TypeError, ValueError):
         return 0
+
+
+def _normalize_structure_state(structure: Dict[str, Any]) -> str:
+    state = (structure.get("structure_state") or "").lower()
+    if state in ("bull", "bear", "neutral"):
+        return state
+    trend = (structure.get("trend") or "").lower()
+    if trend == "up":
+        return "bull"
+    if trend == "down":
+        return "bear"
+    return "neutral"
+
+
+def _structure_alignment(state: str, side: str) -> str:
+    if side == "LONG":
+        if state == "bull":
+            return "aligned"
+        if state == "bear":
+            return "opposite"
+        return "neutral"
+    if side == "SHORT":
+        if state == "bear":
+            return "aligned"
+        if state == "bull":
+            return "opposite"
+        return "neutral"
+    return "neutral"
 
 
 def _build_setup_id(
@@ -649,14 +686,15 @@ async def _prepare_signal(
         )
 
     def _derive_score_fail_reason(score_breakdown: list[dict]) -> str:
+        structure_reason = "fail_setup_structure" if AI_STRUCTURE_MODE == "hard" else "fail_confirm_now"
         mapping = {
             "atr_ok": "fail_atr",
             "ma_trend_ok": "fail_ema_distance",
             "volume_climax": "fail_volume",
             "near_key_level": "fail_setup_no_valid_zone",
-            "liquidity_sweep": "fail_setup_structure",
-            "rsi_divergence": "fail_setup_structure",
-            "bb_extreme": "fail_setup_structure",
+            "liquidity_sweep": structure_reason,
+            "rsi_divergence": structure_reason,
+            "bb_extreme": structure_reason,
             "global_trend": "fail_confirm_now",
             "local_trend": "fail_confirm_now",
             "market_regime": "fail_confirm_now",
@@ -675,8 +713,8 @@ async def _prepare_signal(
         ]
         if missing_items:
             item = max(missing_items, key=lambda it: it.get("weight", 0))
-            return mapping.get(item.get("key", ""), "fail_setup_structure")
-        return "fail_confirm_now"
+            return mapping.get(item.get("key", ""), structure_reason)
+        return structure_reason if AI_STRUCTURE_MODE == "hard" else "fail_confirm_now"
 
     def _log_final_fail(
         reason: str,
@@ -721,6 +759,10 @@ async def _prepare_signal(
 
     global_trend = daily_structure["trend"] if daily_structure["trend"] != "range" else h4_structure["trend"]
     local_trend = h1_structure["trend"]
+    structure_by_tf = {"1d": daily_structure, "4h": h4_structure, "1h": h1_structure}
+    structure_window = AI_STRUCTURE_WINDOW if AI_STRUCTURE_WINDOW in structure_by_tf else "4h"
+    structure_info = structure_by_tf.get(structure_window, h4_structure)
+    structure_state = _normalize_structure_state(structure_info)
 
     key_levels = find_key_levels(candles_1d)
 
@@ -983,6 +1025,7 @@ async def _prepare_signal(
     }
 
     raw_score, breakdown = compute_score_breakdown(context)
+    raw_score = float(raw_score)
 
     side = detect_side(entry_ref, sl, tp1)
     if side is None:
@@ -1028,6 +1071,41 @@ async def _prepare_signal(
     resistance_level = nearest_high if nearest_high is not None else level_touched
 
     _inc_final_checked()
+    structure_alignment = _structure_alignment(structure_state, side)
+    if AI_STRUCTURE_MODE == "hard":
+        if structure_alignment != "aligned":
+            _inc_fail("fail_setup_structure")
+            _inc_final_fail("fail_setup_structure")
+            _log_final_fail(
+                "fail_setup_structure",
+                score_pre=score_pre,
+                final_score=raw_score,
+                details={"structure_state": structure_state, "structure_window": structure_window},
+            )
+            return None
+    else:
+        if structure_alignment == "opposite" and AI_STRUCTURE_HARD_FAIL_ON_OPPOSITE:
+            _inc_fail("fail_structure_opposite")
+            _inc_final_fail("fail_structure_opposite")
+            _log_final_fail(
+                "fail_structure_opposite",
+                score_pre=score_pre,
+                final_score=raw_score,
+                details={"structure_state": structure_state, "structure_window": structure_window},
+            )
+            return None
+        if structure_alignment == "neutral":
+            raw_score -= AI_STRUCTURE_PENALTY_NEUTRAL
+            if final_stats is not None:
+                final_stats["structure_penalty_neutral"] = final_stats.get("structure_penalty_neutral", 0) + 1
+                samples = final_stats.setdefault("structure_samples", [])
+                if len(samples) < 3:
+                    penalty_label = int(AI_STRUCTURE_PENALTY_NEUTRAL)
+                    score_after = int(round(raw_score))
+                    samples.append(
+                        f"{symbol} {side} structure={structure_state} penalty={penalty_label} score_after={score_after}"
+                    )
+
     if abs(raw_score) < float(min_score):
         delta = float(min_score) - abs(raw_score)
         if 0 < delta <= 5:

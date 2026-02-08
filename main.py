@@ -50,6 +50,10 @@ from signals import (
     AI_EMA50_NEAR_PCT,
     AI_POI_MAX_DISTANCE_PCT,
     AI_MIN_RR,
+    AI_STRUCTURE_MODE,
+    AI_STRUCTURE_PENALTY_NEUTRAL,
+    AI_STRUCTURE_HARD_FAIL_ON_OPPOSITE,
+    AI_STRUCTURE_WINDOW,
 )
 from symbol_cache import (
     filter_tradeable_symbols,
@@ -2210,6 +2214,41 @@ def _format_ai_section(st, now: float, lang: str) -> str:
             i18n.t(lang, "DIAG_AI_CONFIG_PUMP_VOLUME", value=PUMP_VOLUME_MUL),
         ]
     )
+    final_stage = (st.last_stats or {}).get("final_stage") if st else None
+    final_fails = final_stage.get("fail_reasons", {}) if isinstance(final_stage, dict) else {}
+    structure_penalty = final_stage.get("structure_penalty_neutral", 0) if isinstance(final_stage, dict) else 0
+    fail_structure_opposite = final_fails.get("fail_structure_opposite", 0) if isinstance(final_fails, dict) else 0
+    fail_setup_structure = final_fails.get("fail_setup_structure", 0) if isinstance(final_fails, dict) else 0
+    structure_samples = final_stage.get("structure_samples") if isinstance(final_stage, dict) else None
+    sample_line = structure_samples[0] if isinstance(structure_samples, list) and structure_samples else None
+    details.append(i18n.t(lang, "DIAG_AI_STRUCTURE_TITLE"))
+    details.append(i18n.t(lang, "DIAG_AI_STRUCTURE_MODE", value=AI_STRUCTURE_MODE))
+    details.append(
+        i18n.t(
+            lang,
+            "DIAG_AI_STRUCTURE_PENALTY",
+            value=f"{AI_STRUCTURE_PENALTY_NEUTRAL:g}",
+        )
+    )
+    details.append(
+        i18n.t(
+            lang,
+            "DIAG_AI_STRUCTURE_HARD_FAIL",
+            value="yes" if AI_STRUCTURE_HARD_FAIL_ON_OPPOSITE else "no",
+        )
+    )
+    details.append(i18n.t(lang, "DIAG_AI_STRUCTURE_WINDOW", value=AI_STRUCTURE_WINDOW))
+    details.append(
+        i18n.t(
+            lang,
+            "DIAG_AI_STRUCTURE_COUNTS",
+            neutral=structure_penalty,
+            opposite=fail_structure_opposite,
+            legacy=fail_setup_structure,
+        )
+    )
+    if sample_line:
+        details.append(i18n.t(lang, "DIAG_AI_STRUCTURE_SAMPLE", sample=sample_line))
     return _format_section(i18n.t(lang, "DIAG_SECTION_AI"), status_label, details, lang)
 
 
