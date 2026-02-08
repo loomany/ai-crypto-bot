@@ -4039,6 +4039,12 @@ async def send_signal_to_all(
     )
     reason_json = json.dumps(reason, ensure_ascii=False) if reason is not None else None
     breakdown_json = json.dumps(breakdown, ensure_ascii=False) if breakdown is not None else None
+    entry_zone = signal_dict.get("entry_zone") or (0.0, 0.0)
+    try:
+        entry_low, entry_high = entry_zone
+    except (TypeError, ValueError):
+        entry_low, entry_high = 0.0, 0.0
+    direction = str(signal_dict.get("direction") or "").lower()
 
     tasks: list[asyncio.Task] = []
     recipients: list[tuple[int, bool, str]] = []
