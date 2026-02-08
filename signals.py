@@ -37,6 +37,25 @@ EMA50_NEAR_PCT_FREE = 1.0
 AI_EMA50_NEAR_PCT = float(os.getenv("AI_EMA50_NEAR_PCT", "1.4"))
 AI_POI_MAX_DISTANCE_PCT = float(os.getenv("AI_POI_MAX_DISTANCE_PCT", "0.8"))
 AI_MIN_RR = float(os.getenv("AI_MIN_RR", "3.0"))
+AI_TREND_MODE_ENABLED = os.getenv("AI_TREND_MODE_ENABLED", "0").lower() in (
+    "1",
+    "true",
+    "yes",
+    "y",
+)
+AI_TREND_TF = os.getenv("AI_TREND_TF", "15m").strip().lower()
+AI_TREND_BASE_EMA = int(os.getenv("AI_TREND_BASE_EMA", "50"))
+AI_TREND_PULLBACK_EMA = int(os.getenv("AI_TREND_PULLBACK_EMA", "21"))
+AI_TREND_SLOPE_LOOKBACK = int(os.getenv("AI_TREND_SLOPE_LOOKBACK", "20"))
+AI_TREND_SLOPE_MIN_PCT = float(os.getenv("AI_TREND_SLOPE_MIN_PCT", "0.05"))
+AI_TREND_MAX_DISTANCE_TO_PULLBACK_PCT = float(
+    os.getenv("AI_TREND_MAX_DISTANCE_TO_PULLBACK_PCT", "1.2")
+)
+AI_TREND_CONFIRM_TF = os.getenv("AI_TREND_CONFIRM_TF", "5m").strip().lower()
+AI_TREND_REQUIRE_STRUCTURE_ALIGNED = os.getenv(
+    "AI_TREND_REQUIRE_STRUCTURE_ALIGNED", "0"
+).lower() in ("1", "true", "yes", "y")
+AI_TREND_MIN_RR = float(os.getenv("AI_TREND_MIN_RR", str(AI_MIN_RR)))
 EMA50_GATE_SCORE = int(os.getenv("EMA50_GATE_SCORE", "78"))
 EMA50_NEAR_PCT_STRICT = float(os.getenv("EMA50_NEAR_PCT_STRICT", "1.0"))
 EMA50_NEAR_PCT_WEAK = float(os.getenv("EMA50_NEAR_PCT_WEAK", "1.5"))
@@ -156,6 +175,28 @@ def _structure_alignment(state: str, side: str) -> str:
     return "neutral"
 
 
+def _compute_ema_series(closes: List[float], period: int) -> List[float]:
+    if len(closes) < period:
+        return []
+    k = 2 / (period + 1)
+    ema = closes[0]
+    series = [ema]
+    for price in closes[1:]:
+        ema = price * k + ema * (1 - k)
+        series.append(ema)
+    return series
+
+
+def _confirm_direction(candles: List[Candle], side: str) -> bool:
+    if len(candles) < 3:
+        return False
+    last_closed = candles[-2]
+    prev_closed = candles[-3]
+    if side == "SHORT":
+        return last_closed.close < last_closed.open and last_closed.close < prev_closed.close
+    return last_closed.close > last_closed.open and last_closed.close > prev_closed.close
+
+
 def _build_setup_id(
     *,
     symbol: str,
@@ -165,8 +206,12 @@ def _build_setup_id(
     sl: float,
     tp1: float,
     timeframe: str,
+    setup_type: str = "meanrev",
 ) -> str:
-    seed = f"{symbol}:{side}:{timeframe}:{entry_from:.6f}:{entry_to:.6f}:{sl:.6f}:{tp1:.6f}"
+    seed = (
+        f"{symbol}:{side}:{timeframe}:{setup_type}:"
+        f"{entry_from:.6f}:{entry_to:.6f}:{sl:.6f}:{tp1:.6f}"
+    )
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
 
 
@@ -316,7 +361,11 @@ async def process_confirm_retry_queue(
             continue
 
         entry["last_checked_at"] = int(now)
-        bundle = await _fetch_direct_bundle(entry["symbol"], ("1h", "15m", "5m"))
+        confirm_tf = entry.get("confirm_tf")
+        tfs = {"1h", "15m", "5m"}
+        if isinstance(confirm_tf, str) and confirm_tf:
+            tfs.add(confirm_tf)
+        bundle = await _fetch_direct_bundle(entry["symbol"], tuple(tfs))
         if not bundle:
             next_pending.append(entry)
             continue
@@ -326,6 +375,12 @@ async def process_confirm_retry_queue(
         if not candles_1h or not candles_15m or not candles_5m:
             next_pending.append(entry)
             continue
+        if isinstance(confirm_tf, str) and confirm_tf:
+            confirm_candles = bundle.get(confirm_tf) or []
+            confirm_side = entry.get("confirm_side", "")
+            if not confirm_candles or not _confirm_direction(confirm_candles, confirm_side):
+                next_pending.append(entry)
+                continue
 
         if entry.get("use_orderflow"):
             orderflow = await analyze_orderflow(entry["symbol"])
@@ -606,6 +661,49 @@ async def _prepare_signal(
         reasons[reason] = reasons.get(reason, 0) + 1
         setup_stats["reject_reason"] = reason
 
+    def _trend_stats() -> Dict[str, Any] | None:
+        if setup_stats is None:
+            return None
+        trend_block = setup_stats.get("trend")
+        if isinstance(trend_block, dict):
+            return trend_block
+        return None
+
+    def _trend_detected(direction: str) -> None:
+        trend_block = _trend_stats()
+        if trend_block is None:
+            return
+        detected = trend_block.setdefault("detected", {})
+        detected[direction] = detected.get(direction, 0) + 1
+
+    def _trend_checked() -> None:
+        trend_block = _trend_stats()
+        if trend_block is None:
+            return
+        trend_block["setup_checked"] = trend_block.get("setup_checked", 0) + 1
+
+    def _trend_passed() -> None:
+        trend_block = _trend_stats()
+        if trend_block is None:
+            return
+        trend_block["passed"] = trend_block.get("passed", 0) + 1
+
+    def _trend_failed(reason: str) -> None:
+        trend_block = _trend_stats()
+        if trend_block is None:
+            return
+        trend_block["failed"] = trend_block.get("failed", 0) + 1
+        reasons = trend_block.setdefault("fail_reasons", {})
+        reasons[reason] = reasons.get(reason, 0) + 1
+
+    def _trend_sample(sample: str) -> None:
+        trend_block = _trend_stats()
+        if trend_block is None:
+            return
+        if trend_block.get("sample"):
+            return
+        trend_block["sample"] = sample
+
     def _add_setup_near_miss(key: str, value: float, limit: float) -> None:
         if setup_stats is None:
             return
@@ -780,6 +878,143 @@ async def _prepare_signal(
 
     candidate_side: Optional[str] = None
     level_touched: Optional[float] = None
+    setup_type = "meanrev"
+    trend_context: dict[str, float | str] = {}
+
+    def _compute_side_indicators(
+        side_value: str,
+        level_value: Optional[float],
+    ) -> tuple[bool, bool, bool, bool]:
+        sweep_value = is_liquidity_sweep(
+            candles_5m[-6:] if len(candles_5m) >= 6 else candles_5m,
+            level_value,
+            "long" if side_value == "LONG" else "short",
+        )
+        volume_value = is_volume_climax(candles_5m)
+        closes_15m = [c.close for c in candles_15m]
+        closes_5m = [c.close for c in candles_5m]
+        rsi_15m = _compute_rsi_series(closes_15m)
+        rsi_5m = _compute_rsi_series(closes_5m)
+        if side_value == "LONG":
+            rsi_value = detect_rsi_divergence(closes_15m, rsi_15m, "bullish") or detect_rsi_divergence(
+                closes_5m, rsi_5m, "bullish"
+            )
+        else:
+            rsi_value = detect_rsi_divergence(closes_15m, rsi_15m, "bearish") or detect_rsi_divergence(
+                closes_5m, rsi_5m, "bearish"
+            )
+        bb_extreme_15 = is_bb_extreme_reversal(
+            candles_15m[-40:] if len(candles_15m) >= 40 else candles_15m,
+            direction="long" if side_value == "LONG" else "short",
+        )
+        bb_extreme_5 = is_bb_extreme_reversal(
+            candles_5m[-40:] if len(candles_5m) >= 40 else candles_5m,
+            direction="long" if side_value == "LONG" else "short",
+        )
+        return sweep_value, volume_value, rsi_value, bb_extreme_15 or bb_extreme_5
+
+    async def _attempt_trend_setup() -> Optional[Dict[str, Any]]:
+        if not AI_TREND_MODE_ENABLED:
+            return None
+        _trend_checked()
+        trend_candles = candles.get(AI_TREND_TF)
+        if not trend_candles or len(trend_candles) < max(AI_TREND_BASE_EMA, AI_TREND_PULLBACK_EMA) + 2:
+            _trend_detected("none")
+            _trend_failed("fail_trend_no_trend")
+            return None
+        closes = [c.close for c in trend_candles]
+        ema_series = _compute_ema_series(closes, AI_TREND_BASE_EMA)
+        if len(ema_series) <= AI_TREND_SLOPE_LOOKBACK:
+            _trend_detected("none")
+            _trend_failed("fail_trend_no_trend")
+            return None
+        ema_base_now = ema_series[-1]
+        ema_base_prev = ema_series[-1 - AI_TREND_SLOPE_LOOKBACK]
+        if not ema_base_now:
+            _trend_detected("none")
+            _trend_failed("fail_trend_no_trend")
+            return None
+        slope_pct = (ema_base_now - ema_base_prev) / ema_base_now * 100
+        last_close = closes[-1]
+        side_value: Optional[str] = None
+        trend_label: Optional[str] = None
+        if last_close > ema_base_now and slope_pct >= AI_TREND_SLOPE_MIN_PCT:
+            side_value = "LONG"
+            trend_label = "up"
+            _trend_detected("up")
+        elif last_close < ema_base_now and slope_pct <= -AI_TREND_SLOPE_MIN_PCT:
+            side_value = "SHORT"
+            trend_label = "down"
+            _trend_detected("down")
+        else:
+            _trend_detected("none")
+            _trend_failed("fail_trend_no_trend")
+            return None
+
+        ema_pullback = get_cached_ema(symbol, AI_TREND_TF, trend_candles, AI_TREND_PULLBACK_EMA)
+        if not ema_pullback:
+            _trend_failed("fail_trend_pullback_distance")
+            return None
+        dist_pb_pct = abs(last_close - ema_pullback) / last_close * 100 if last_close else 0.0
+        if dist_pb_pct > AI_TREND_MAX_DISTANCE_TO_PULLBACK_PCT:
+            _trend_failed("fail_trend_pullback_distance")
+            return None
+
+        swing_lookback = max(10, AI_TREND_SLOPE_LOOKBACK)
+        recent = trend_candles[-swing_lookback:]
+        swing_low = min(c.low for c in recent) if recent else last_close
+        swing_high = max(c.high for c in recent) if recent else last_close
+        atr_trend = (
+            get_cached_atr(symbol, AI_TREND_TF, trend_candles[-60:], 14)
+            if len(trend_candles) >= 15
+            else None
+        )
+        stop_buffer = atr_trend * 0.8 if atr_trend else last_close * 0.003
+
+        if side_value == "LONG":
+            sl_value = swing_low - max(stop_buffer, last_close * 0.004)
+            entry_from_value = last_close * 0.999
+            entry_to_value = last_close * 1.001
+            risk_value = entry_to_value - sl_value
+            tp1_value = entry_to_value + risk_value * 2
+            tp2_value = entry_to_value + risk_value * 3
+        else:
+            sl_value = swing_high + max(stop_buffer, last_close * 0.004)
+            entry_to_value = last_close * 0.999
+            entry_from_value = last_close * 1.001
+            risk_value = sl_value - entry_to_value
+            tp1_value = entry_to_value - risk_value * 2
+            tp2_value = entry_to_value - risk_value * 3
+
+        entry_ref_value = (entry_from_value + entry_to_value) / 2
+        risk_pre_value = abs(entry_ref_value - sl_value)
+        reward_pre_value = abs(tp1_value - entry_ref_value)
+        rr_pre_value = reward_pre_value / risk_pre_value if risk_pre_value > 0 else 0.0
+        min_rr_required = AI_TREND_MIN_RR if AI_TREND_MIN_RR else AI_MIN_RR
+        if rr_pre_value < min_rr_required:
+            _trend_failed("fail_trend_rr_low")
+            return None
+
+        _trend_passed()
+        _trend_sample(
+            f"{symbol} {side_value} trend={trend_label} "
+            f"slope={slope_pct:.2f}% dist_to_ema{AI_TREND_PULLBACK_EMA}={dist_pb_pct:.2f}% "
+            f"rr={rr_pre_value:.2f} setup_type=trend"
+        )
+
+        return {
+            "candidate_side": side_value,
+            "level_touched": ema_pullback,
+            "entry_from": entry_from_value,
+            "entry_to": entry_to_value,
+            "sl": sl_value,
+            "tp1": tp1_value,
+            "tp2": tp2_value,
+            "rr_pre": rr_pre_value,
+            "trend_label": trend_label or "",
+            "slope_pct": slope_pct,
+            "dist_pb_pct": dist_pb_pct,
+        }
 
     level_near_pct = LEVEL_NEAR_PCT_FREE if free_mode else 0.6
     if dist_low is not None and dist_low <= level_near_pct:
@@ -792,49 +1027,50 @@ async def _prepare_signal(
             level_touched = nearest_high
 
     if not candidate_side:
-        _fail_setup("fail_setup_no_valid_zone")
-        return None
+        trend_result = await _attempt_trend_setup()
+        if trend_result:
+            setup_type = "trend"
+            candidate_side = trend_result["candidate_side"]
+            level_touched = trend_result["level_touched"]
+            entry_from = trend_result["entry_from"]
+            entry_to = trend_result["entry_to"]
+            sl = trend_result["sl"]
+            tp1 = trend_result["tp1"]
+            tp2 = trend_result["tp2"]
+            trend_context = {
+                "trend_label": trend_result.get("trend_label", ""),
+                "slope_pct": trend_result.get("slope_pct", 0.0),
+                "dist_pb_pct": trend_result.get("dist_pb_pct", 0.0),
+            }
+        else:
+            _fail_setup("fail_setup_no_valid_zone")
+            return None
 
-    sweep = is_liquidity_sweep(
-        candles_5m[-6:] if len(candles_5m) >= 6 else candles_5m,
+    sweep, volume_spike, rsi_div, bb_extreme = _compute_side_indicators(
+        candidate_side,
         level_touched,
-        "long" if candidate_side == "LONG" else "short",
     )
-    volume_spike = is_volume_climax(candles_5m)
-
-    closes_15m = [c.close for c in candles_15m]
-    closes_5m = [c.close for c in candles_5m]
-    rsi_15m = _compute_rsi_series(closes_15m)
-    rsi_5m = _compute_rsi_series(closes_5m)
-    rsi_div = False
-    if candidate_side == "LONG":
-        rsi_div = detect_rsi_divergence(closes_15m, rsi_15m, "bullish") or detect_rsi_divergence(
-            closes_5m, rsi_5m, "bullish"
-        )
-    else:
-        rsi_div = detect_rsi_divergence(closes_15m, rsi_15m, "bearish") or detect_rsi_divergence(
-            closes_5m, rsi_5m, "bearish"
-        )
 
     atr_15m = (
         get_cached_atr(symbol, "15m", candles_15m[-60:], 14) if len(candles_15m) >= 15 else None
     )
     stop_buffer = atr_15m * 0.8 if atr_15m else current_price * 0.003
 
-    if candidate_side == "LONG":
-        sl = (level_touched or current_price) - max(stop_buffer, current_price * 0.005)
-        entry_from = max((level_touched or current_price) * 0.998, current_price * 0.997)
-        entry_to = current_price * 1.001
-        risk = entry_to - sl
-        tp1 = entry_to + risk * 2
-        tp2 = entry_to + risk * 3
-    else:
-        sl = (level_touched or current_price) + max(stop_buffer, current_price * 0.005)
-        entry_to = current_price * 0.999
-        entry_from = current_price * 1.001
-        risk = sl - entry_to
-        tp1 = entry_to - risk * 2
-        tp2 = entry_to - risk * 3
+    if setup_type == "meanrev":
+        if candidate_side == "LONG":
+            sl = (level_touched or current_price) - max(stop_buffer, current_price * 0.005)
+            entry_from = max((level_touched or current_price) * 0.998, current_price * 0.997)
+            entry_to = current_price * 1.001
+            risk = entry_to - sl
+            tp1 = entry_to + risk * 2
+            tp2 = entry_to + risk * 3
+        else:
+            sl = (level_touched or current_price) + max(stop_buffer, current_price * 0.005)
+            entry_to = current_price * 0.999
+            entry_from = current_price * 1.001
+            risk = sl - entry_to
+            tp1 = entry_to - risk * 2
+            tp2 = entry_to - risk * 3
 
     poi_dist_pct = 0.0
     if current_price < entry_from:
@@ -843,13 +1079,46 @@ async def _prepare_signal(
         poi_dist_pct = (current_price - entry_to) / current_price * 100
     if poi_dist_pct > AI_POI_MAX_DISTANCE_PCT:
         near_limit = AI_POI_MAX_DISTANCE_PCT * 1.1
-        _fail_setup(
-            "fail_setup_poi_distance",
-            near_miss_key="poi_dist" if poi_dist_pct <= near_limit else None,
-            near_miss_value=poi_dist_pct,
-            near_miss_limit=AI_POI_MAX_DISTANCE_PCT,
-        )
-        return None
+        if setup_type == "meanrev" and AI_TREND_MODE_ENABLED:
+            trend_result = await _attempt_trend_setup()
+            if trend_result:
+                setup_type = "trend"
+                candidate_side = trend_result["candidate_side"]
+                level_touched = trend_result["level_touched"]
+                entry_from = trend_result["entry_from"]
+                entry_to = trend_result["entry_to"]
+                sl = trend_result["sl"]
+                tp1 = trend_result["tp1"]
+                tp2 = trend_result["tp2"]
+                trend_context = {
+                    "trend_label": trend_result.get("trend_label", ""),
+                    "slope_pct": trend_result.get("slope_pct", 0.0),
+                    "dist_pb_pct": trend_result.get("dist_pb_pct", 0.0),
+                }
+                sweep, volume_spike, rsi_div, bb_extreme = _compute_side_indicators(
+                    candidate_side,
+                    level_touched,
+                )
+            else:
+                _fail_setup(
+                    "fail_setup_poi_distance",
+                    near_miss_key="poi_dist" if poi_dist_pct <= near_limit else None,
+                    near_miss_value=poi_dist_pct,
+                    near_miss_limit=AI_POI_MAX_DISTANCE_PCT,
+                )
+                return None
+        else:
+            _fail_setup(
+                "fail_setup_poi_distance",
+                near_miss_key="poi_dist" if poi_dist_pct <= near_limit else None,
+                near_miss_value=poi_dist_pct,
+                near_miss_limit=AI_POI_MAX_DISTANCE_PCT,
+            )
+            return None
+
+    entry_ref = (entry_from + entry_to) / 2
+    if setup_type == "trend":
+        risk = abs(entry_ref - sl)
 
     atr_ok = True
     if atr_15m and risk > 0:
@@ -857,33 +1126,28 @@ async def _prepare_signal(
         max_stop = atr_15m * 2.0
         atr_ok = min_stop <= risk <= max_stop
 
-    bb_extreme_15 = is_bb_extreme_reversal(
-        candles_15m[-40:] if len(candles_15m) >= 40 else candles_15m,
-        direction="long" if candidate_side == "LONG" else "short",
-    )
-    bb_extreme_5 = is_bb_extreme_reversal(
-        candles_5m[-40:] if len(candles_5m) >= 40 else candles_5m,
-        direction="long" if candidate_side == "LONG" else "short",
-    )
-    bb_extreme = bb_extreme_15 or bb_extreme_5
 
     level_distance = dist_low if candidate_side == "LONG" else dist_high
     level_distance = level_distance if level_distance is not None else level_near_pct
     level_score = max(0.0, 30.0 * (1.0 - min(level_distance, level_near_pct) / level_near_pct))
 
-    entry_ref = (entry_from + entry_to) / 2
     risk_pre = abs(entry_ref - sl)
     reward_pre = abs(tp1 - entry_ref)
     rr_pre = reward_pre / risk_pre if risk_pre > 0 else 0.0
-    min_rr_pre = MIN_RR_FREE if free_mode else 2.0
+    min_rr_pre = (
+        AI_TREND_MIN_RR if setup_type == "trend" else (MIN_RR_FREE if free_mode else 2.0)
+    )
+    min_rr_required = AI_TREND_MIN_RR if setup_type == "trend" else AI_MIN_RR
 
-    if rr_pre < AI_MIN_RR:
-        near_limit = AI_MIN_RR * 0.9
+    if rr_pre < min_rr_required:
+        near_limit = min_rr_required * 0.9
+        if setup_type == "trend":
+            _trend_failed("fail_trend_rr_low")
         _fail_setup(
-            "fail_setup_rr_low",
-            near_miss_key="rr" if rr_pre >= near_limit else None,
+            "fail_trend_rr_low" if setup_type == "trend" else "fail_setup_rr_low",
+            near_miss_key="rr" if rr_pre >= near_limit and setup_type != "trend" else None,
             near_miss_value=rr_pre,
-            near_miss_limit=AI_MIN_RR,
+            near_miss_limit=min_rr_required,
         )
         return None
 
@@ -910,25 +1174,89 @@ async def _prepare_signal(
     closes_1h = [c.close for c in candles_1h]
     ema50_1h = get_cached_ema(symbol, "1h", candles_1h, 50) if len(closes_1h) >= 50 else None
     ema200_1h = get_cached_ema(symbol, "1h", candles_1h, 200) if len(closes_1h) >= 200 else None
-    ma_trend_ok = False
+    ma_trend_ok = setup_type == "trend"
     dist_to_ema50_pct: float | None = None
     allowed_dist_pct: float | None = None
-    if ema50_1h:
-        dist_to_ema50_pct = abs(current_price - ema50_1h) / ema50_1h * 100
-        if dist_to_ema50_pct > AI_EMA50_NEAR_PCT:
-            near_limit = AI_EMA50_NEAR_PCT * 1.1
-            _fail_setup(
-                "fail_setup_ema_distance",
-                near_miss_key="ema_dist" if dist_to_ema50_pct <= near_limit else None,
-                near_miss_value=dist_to_ema50_pct,
-                near_miss_limit=AI_EMA50_NEAR_PCT,
-            )
-            return None
-    if ema50_1h and ema200_1h:
-        if candidate_side == "LONG" and current_price >= ema50_1h >= ema200_1h:
-            ma_trend_ok = True
-        if candidate_side == "SHORT" and current_price <= ema50_1h <= ema200_1h:
-            ma_trend_ok = True
+    if setup_type != "trend":
+        if ema50_1h:
+            dist_to_ema50_pct = abs(current_price - ema50_1h) / ema50_1h * 100
+            if dist_to_ema50_pct > AI_EMA50_NEAR_PCT:
+                near_limit = AI_EMA50_NEAR_PCT * 1.1
+                if AI_TREND_MODE_ENABLED:
+                    trend_result = await _attempt_trend_setup()
+                    if trend_result:
+                        setup_type = "trend"
+                        candidate_side = trend_result["candidate_side"]
+                        level_touched = trend_result["level_touched"]
+                        entry_from = trend_result["entry_from"]
+                        entry_to = trend_result["entry_to"]
+                        sl = trend_result["sl"]
+                        tp1 = trend_result["tp1"]
+                        tp2 = trend_result["tp2"]
+                        trend_context = {
+                            "trend_label": trend_result.get("trend_label", ""),
+                            "slope_pct": trend_result.get("slope_pct", 0.0),
+                            "dist_pb_pct": trend_result.get("dist_pb_pct", 0.0),
+                        }
+                        sweep, volume_spike, rsi_div, bb_extreme = _compute_side_indicators(
+                            candidate_side,
+                            level_touched,
+                        )
+                        entry_ref = (entry_from + entry_to) / 2
+                        risk = abs(entry_ref - sl)
+                        risk_pre = abs(entry_ref - sl)
+                        reward_pre = abs(tp1 - entry_ref)
+                        rr_pre = reward_pre / risk_pre if risk_pre > 0 else 0.0
+                        atr_ok = True
+                        if atr_15m and risk > 0:
+                            min_stop = atr_15m * 0.5
+                            max_stop = atr_15m * 2.0
+                            atr_ok = min_stop <= risk <= max_stop
+                        level_distance = dist_low if candidate_side == "LONG" else dist_high
+                        level_distance = level_distance if level_distance is not None else level_near_pct
+                        level_score = max(
+                            0.0,
+                            30.0 * (1.0 - min(level_distance, level_near_pct) / level_near_pct),
+                        )
+                        trend_support = _trend_supports(candidate_side, local_trend) or _trend_supports(
+                            candidate_side,
+                            global_trend,
+                        )
+                        min_rr_pre = AI_TREND_MIN_RR if AI_TREND_MIN_RR else AI_MIN_RR
+                        score_pre = (
+                            level_score
+                            + (12.0 if sweep else 0.0)
+                            + (12.0 if volume_spike else 0.0)
+                            + (10.0 if rsi_div else 0.0)
+                            + (10.0 if atr_ok else 0.0)
+                            + (10.0 if bb_extreme else 0.0)
+                            + (8.0 if trend_support else 0.0)
+                            + (8.0 if rr_pre >= min_rr_pre else 0.0)
+                        )
+                        score_pre = min(100.0, max(0.0, score_pre))
+                        ma_trend_ok = True
+                        dist_to_ema50_pct = None
+                    else:
+                        _fail_setup(
+                            "fail_setup_ema_distance",
+                            near_miss_key="ema_dist" if dist_to_ema50_pct <= near_limit else None,
+                            near_miss_value=dist_to_ema50_pct,
+                            near_miss_limit=AI_EMA50_NEAR_PCT,
+                        )
+                        return None
+                else:
+                    _fail_setup(
+                        "fail_setup_ema_distance",
+                        near_miss_key="ema_dist" if dist_to_ema50_pct <= near_limit else None,
+                        near_miss_value=dist_to_ema50_pct,
+                        near_miss_limit=AI_EMA50_NEAR_PCT,
+                    )
+                    return None
+        if ema50_1h and ema200_1h and setup_type != "trend":
+            if candidate_side == "LONG" and current_price >= ema50_1h >= ema200_1h:
+                ma_trend_ok = True
+            if candidate_side == "SHORT" and current_price <= ema50_1h <= ema200_1h:
+                ma_trend_ok = True
 
     if not ma_trend_ok:
         if free_mode and ema50_1h:
@@ -987,6 +1315,105 @@ async def _prepare_signal(
     if not atr_ok:
         _fail_setup("fail_setup_sl_too_wide")
         return None
+
+    if setup_type == "trend":
+        confirm_candles = candles.get(AI_TREND_CONFIRM_TF) or []
+        if not _confirm_direction(confirm_candles, candidate_side):
+            _trend_failed("pending_confirm_trend")
+            _fail_setup("pending_confirm_trend")
+            if AI_CONFIRM_RETRY_ENABLED:
+                side = detect_side(entry_ref, sl, tp1)
+                setup_id = _build_setup_id(
+                    symbol=symbol,
+                    side=side or candidate_side,
+                    entry_from=entry_from,
+                    entry_to=entry_to,
+                    sl=sl,
+                    tp1=tp1,
+                    timeframe="1h",
+                    setup_type=setup_type,
+                )
+                if not await _is_setup_sent(setup_id):
+                    setup_snapshot = {
+                        "entry": (round(entry_from, 4), round(entry_to, 4)),
+                        "sl": round(sl, 4),
+                        "tp1": round(tp1, 4),
+                        "tp2": round(tp2, 4),
+                        "poi": round(level_touched or 0.0, 4),
+                        "score": 0,
+                    }
+                    rsi_1h_value = get_cached_rsi(symbol, "1h", candles_1h)
+                    rsi_zone = "комфортная зона"
+                    if rsi_1h_value >= 70:
+                        rsi_zone = "перекупленность"
+                    elif rsi_1h_value <= 30:
+                        rsi_zone = "перепроданность"
+                    volume_ratio, volume_avg = _volume_ratio([c.volume for c in candles_1h])
+                    support_level = nearest_low if nearest_low is not None else level_touched
+                    resistance_level = nearest_high if nearest_high is not None else level_touched
+                    context = {
+                        "candidate_side": candidate_side,
+                        "global_trend": global_trend,
+                        "local_trend": local_trend,
+                        "near_key_level": True,
+                        "liquidity_sweep": sweep,
+                        "volume_climax": volume_spike,
+                        "rsi_divergence": rsi_div,
+                        "atr_ok": atr_ok,
+                        "bb_extreme": bb_extreme,
+                        "ma_trend_ok": ma_trend_ok,
+                        "orderflow_bullish": False,
+                        "orderflow_bearish": False,
+                        "whale_activity": False,
+                        "ai_pattern_trend": None,
+                        "ai_pattern_strength": 0,
+                        "market_regime": "neutral",
+                    }
+                    signal_base = {
+                        "symbol": symbol,
+                        "direction": "long" if candidate_side == "LONG" else "short",
+                        "entry_zone": (round(entry_from, 4), round(entry_to, 4)),
+                        "sl": round(sl, 4),
+                        "tp1": round(tp1, 4),
+                        "tp2": round(tp2, 4),
+                        "score": 0,
+                        "score_raw": 0,
+                        "setup_type": setup_type,
+                        "reason": {
+                            "trend_1d": global_trend,
+                            "trend_4h": h4_structure["trend"],
+                            "rsi_1h": rsi_1h_value,
+                            "rsi_1h_zone": rsi_zone,
+                            "volume_ratio": volume_ratio,
+                            "volume_avg": volume_avg,
+                            "rr": rr_pre,
+                        },
+                        "levels": {
+                            "support": round(support_level or 0.0, 4),
+                            "resistance": round(resistance_level or 0.0, 4),
+                            "atr_30": round(atr_15m or 0.0, 4),
+                        },
+                        "meta": {"setup_id": setup_id, "setup_type": setup_type},
+                    }
+                    pending_entry = {
+                        "setup_id": setup_id,
+                        "symbol": symbol,
+                        "side": side or candidate_side,
+                        "timeframe": AI_CONFIRM_RETRY_TF,
+                        "created_at": int(time.time()),
+                        "last_checked_at": int(time.time()),
+                        "attempts": 1,
+                        "expires_at": int(time.time()) + AI_CONFIRM_RETRY_TTL_SEC,
+                        "setup_snapshot": setup_snapshot,
+                        "signal_base": signal_base,
+                        "context_base": context,
+                        "min_score": float(min_score),
+                        "use_orderflow": fetch_orderflow,
+                        "confirm_tf": AI_TREND_CONFIRM_TF,
+                        "confirm_side": candidate_side,
+                    }
+                    await _queue_pending_confirm(pending_entry)
+            return None
 
     if timings is not None:
         timings["setup_dt"] = time.perf_counter() - setup_start
@@ -1119,6 +1546,7 @@ async def _prepare_signal(
         sl=sl,
         tp1=tp1,
         timeframe="1h",
+        setup_type=setup_type,
     )
     if await _is_setup_sent(setup_id):
         return None
@@ -1126,7 +1554,7 @@ async def _prepare_signal(
     risk = abs(entry_ref - sl)
     reward = abs(tp1 - entry_ref)
     rr = reward / risk if risk > 0 else 0.0
-    min_rr = MIN_RR_FREE if free_mode else 2.0
+    min_rr = AI_TREND_MIN_RR if setup_type == "trend" else (MIN_RR_FREE if free_mode else 2.0)
 
     rsi_1h_value = get_cached_rsi(symbol, "1h", candles_1h)
     rsi_zone = "комфортная зона"
@@ -1145,16 +1573,23 @@ async def _prepare_signal(
     structure_alignment = _structure_alignment(structure_state, side)
     if AI_STRUCTURE_MODE == "hard":
         if structure_alignment != "aligned":
-            _inc_fail("fail_setup_structure")
-            _inc_final_fail("fail_setup_structure")
-            _log_final_fail(
-                "fail_setup_structure",
-                score_pre=score_pre,
-                final_score=raw_score,
-                details={"structure_state": structure_state, "structure_window": structure_window},
-            )
-            _store_final_sample(False, "fail_setup_structure")
-            return None
+            if (
+                setup_type == "trend"
+                and not AI_TREND_REQUIRE_STRUCTURE_ALIGNED
+                and structure_alignment == "neutral"
+            ):
+                pass
+            else:
+                _inc_fail("fail_setup_structure")
+                _inc_final_fail("fail_setup_structure")
+                _log_final_fail(
+                    "fail_setup_structure",
+                    score_pre=score_pre,
+                    final_score=raw_score,
+                    details={"structure_state": structure_state, "structure_window": structure_window},
+                )
+                _store_final_sample(False, "fail_setup_structure")
+                return None
     else:
         if structure_alignment == "opposite" and AI_STRUCTURE_HARD_FAIL_ON_OPPOSITE:
             _inc_fail("fail_structure_opposite")
@@ -1223,6 +1658,7 @@ async def _prepare_signal(
                 "tp2": round(tp2, 4),
                 "poi": round(level_touched or 0.0, 4),
                 "score": min(100, abs(raw_score)),
+                "setup_type": setup_type,
             }
             signal_base = {
                 "symbol": symbol,
@@ -1233,6 +1669,7 @@ async def _prepare_signal(
                 "tp2": round(tp2, 4),
                 "score": min(100, abs(raw_score)),
                 "score_raw": int(round(raw_score)),
+                "setup_type": setup_type,
                 "reason": {
                     "trend_1d": global_trend,
                     "trend_4h": h4_structure["trend"],
@@ -1249,7 +1686,7 @@ async def _prepare_signal(
                     "resistance": round(resistance_level or 0.0, 4),
                     "atr_30": round(atr_15m or 0.0, 4),
                 },
-                "meta": {"setup_id": setup_id},
+                "meta": {"setup_id": setup_id, "setup_type": setup_type},
             }
             pending_entry = {
                 "setup_id": setup_id,
@@ -1347,6 +1784,7 @@ async def _prepare_signal(
         "tp2": round(tp2, 4),
         "score": min(100, abs(raw_score)),
         "score_raw": int(round(raw_score)),
+        "setup_type": setup_type,
         "reason": {
             "trend_1d": global_trend,
             "trend_4h": h4_structure["trend"],
@@ -1363,7 +1801,7 @@ async def _prepare_signal(
             "resistance": round(resistance_level or 0.0, 4),
             "atr_30": round(atr_15m or 0.0, 4),
         },
-        "meta": {"setup_id": setup_id},
+        "meta": {"setup_id": setup_id, "setup_type": setup_type},
     }
 
 
@@ -1425,6 +1863,15 @@ async def scan_market(
             "poi_dist": [],
             "rr": [],
             "ema_dist": [],
+        },
+        "trend": {
+            "enabled": AI_TREND_MODE_ENABLED,
+            "detected": {"up": 0, "down": 0, "none": 0},
+            "setup_checked": 0,
+            "passed": 0,
+            "failed": 0,
+            "fail_reasons": {},
+            "sample": None,
         },
     }
     final_stage_stats: Dict[str, Any] = {
