@@ -123,7 +123,7 @@ from signal_audit_db import (
     init_signal_audit_tables,
     insert_signal_audit,
 )
-from signal_audit_worker import signal_audit_worker_loop
+from signal_audit_worker import signal_audit_worker_loop, set_signal_result_notifier
 import i18n
 from keyboards import (
     ai_signals_inline_kb,
@@ -4771,6 +4771,7 @@ async def ai_scan_once() -> None:
 async def main():
     global bot
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+    set_signal_result_notifier(notify_signal_result_short)
     print("Бот запущен!")
     init_app_db()
 
