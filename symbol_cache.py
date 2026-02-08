@@ -34,6 +34,7 @@ EXCLUDED_BASE_ASSETS = {
 LEVERAGE_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR", "3L", "3S", "5L", "5S")
 DEFAULT_BLOCKED_SYMBOLS = {
     "TVKUSDT",
+    "VOXELUSDT",
 }
 
 _spot_cache: dict[str, Any] = {"updated_at": 0.0, "symbols": []}
