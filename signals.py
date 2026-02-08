@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import logging
 import math
 import os
@@ -8,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ai_types import Candle
 from binance_rest import get_klines
+from db import get_state, set_state
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
 from market_regime import get_market_regime
@@ -75,11 +78,22 @@ AI_DIRECT_LIMITS = {
     "5m": 160,
 }
 MIN_KLINES_REQUIRED = 20
+AI_CONFIRM_RETRY_ENABLED = os.getenv("AI_CONFIRM_RETRY_ENABLED", "1").lower() in (
+    "1",
+    "true",
+    "yes",
+    "y",
+)
+AI_CONFIRM_RETRY_MAX_ATTEMPTS = int(os.getenv("AI_CONFIRM_RETRY_MAX_ATTEMPTS", "3"))
+AI_CONFIRM_RETRY_TF = os.getenv("AI_CONFIRM_RETRY_TF", "5m")
+AI_CONFIRM_RETRY_TTL_SEC = int(os.getenv("AI_CONFIRM_RETRY_TTL_SEC", "1800"))
 
 AI_FALLBACK_DIRECT = 0
 
 logger = logging.getLogger(__name__)
 _BLUECHIP_SET = {item.strip().upper() for item in AI_BLUECHIPS.split(",") if item.strip()}
+_CONFIRM_RETRY_STATE_KEY = "ai_confirm_retry_state_v1"
+_CONFIRM_RETRY_LOCK = asyncio.Lock()
 
 
 def get_ai_fallback_direct() -> int:
@@ -90,6 +104,258 @@ def _is_bluechip(symbol: str) -> bool:
     return symbol.upper() in _BLUECHIP_SET
 
 
+def _parse_tf_seconds(tf: str) -> int:
+    tf = (tf or "").strip().lower()
+    if not tf:
+        return 0
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    unit = tf[-1]
+    value = tf[:-1]
+    if unit not in units:
+        return 0
+    try:
+        return int(float(value) * units[unit])
+    except (TypeError, ValueError):
+        return 0
+
+
+def _build_setup_id(
+    *,
+    symbol: str,
+    side: str,
+    entry_from: float,
+    entry_to: float,
+    sl: float,
+    tp1: float,
+    timeframe: str,
+) -> str:
+    seed = f"{symbol}:{side}:{timeframe}:{entry_from:.6f}:{entry_to:.6f}:{sl:.6f}:{tp1:.6f}"
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+
+
+def _load_confirm_retry_state() -> dict:
+    payload = get_state(_CONFIRM_RETRY_STATE_KEY, None)
+    if not payload:
+        return {"pending": [], "sent": {}, "sent_after_retry": 0, "dropped_after_retry": 0}
+    try:
+        parsed = json.loads(payload)
+    except (TypeError, ValueError):
+        return {"pending": [], "sent": {}, "sent_after_retry": 0, "dropped_after_retry": 0}
+    if not isinstance(parsed, dict):
+        return {"pending": [], "sent": {}, "sent_after_retry": 0, "dropped_after_retry": 0}
+    parsed.setdefault("pending", [])
+    parsed.setdefault("sent", {})
+    parsed.setdefault("sent_after_retry", 0)
+    parsed.setdefault("dropped_after_retry", 0)
+    return parsed
+
+
+def _save_confirm_retry_state(state: dict) -> None:
+    set_state(_CONFIRM_RETRY_STATE_KEY, json.dumps(state, ensure_ascii=False))
+
+
+def _should_retry_confirm(last_checked_at: int | None, tf_seconds: int, now: float) -> bool:
+    if tf_seconds <= 0:
+        return True
+    if not last_checked_at:
+        return True
+    return now - last_checked_at >= tf_seconds
+
+
+def _format_retry_sample(entry: dict, now: float) -> str:
+    symbol = entry.get("symbol", "-")
+    side = entry.get("side", "-")
+    attempts = entry.get("attempts", 0)
+    expires_at = entry.get("expires_at", 0)
+    ttl_left = max(0, int(expires_at - now))
+    ttl_min = max(0, ttl_left // 60)
+    return f"{symbol} {side} attempts={attempts} ttl_left={ttl_min}m"
+
+
+async def _queue_pending_confirm(entry: dict) -> bool:
+    async with _CONFIRM_RETRY_LOCK:
+        state = _load_confirm_retry_state()
+        pending = state.get("pending", [])
+        sent = state.get("sent", {})
+        expire_before = time.time() - AI_CONFIRM_RETRY_TTL_SEC
+        sent = {
+            setup_id: ts
+            for setup_id, ts in sent.items()
+            if isinstance(ts, (int, float)) and ts >= expire_before
+        }
+        setup_id = entry.get("setup_id")
+        if not setup_id:
+            return False
+        if setup_id in sent:
+            return False
+        if any(item.get("setup_id") == setup_id for item in pending):
+            return False
+        pending.append(entry)
+        state["pending"] = pending
+        state["sent"] = sent
+        _save_confirm_retry_state(state)
+    return True
+
+
+async def register_confirm_retry_sent(setup_id: str) -> None:
+    if not setup_id:
+        return
+    async with _CONFIRM_RETRY_LOCK:
+        state = _load_confirm_retry_state()
+        sent = state.get("sent", {})
+        sent[setup_id] = int(time.time())
+        state["sent"] = sent
+        _save_confirm_retry_state(state)
+
+
+async def _is_setup_sent(setup_id: str) -> bool:
+    if not setup_id:
+        return False
+    async with _CONFIRM_RETRY_LOCK:
+        state = _load_confirm_retry_state()
+        sent = state.get("sent", {})
+        expire_before = time.time() - AI_CONFIRM_RETRY_TTL_SEC
+        sent = {
+            setup_key: ts
+            for setup_key, ts in sent.items()
+            if isinstance(ts, (int, float)) and ts >= expire_before
+        }
+        state["sent"] = sent
+        _save_confirm_retry_state(state)
+        return setup_id in sent
+
+
+async def process_confirm_retry_queue(
+    *,
+    diag_state: Dict[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    if not AI_CONFIRM_RETRY_ENABLED:
+        if diag_state is not None:
+            diag_state["confirm_retry"] = {
+                "enabled": False,
+                "pending": 0,
+                "sent_after_retry": 0,
+                "dropped_after_retry": 0,
+                "samples": [],
+            }
+        return []
+    now = time.time()
+    tf_seconds = _parse_tf_seconds(AI_CONFIRM_RETRY_TF)
+    async with _CONFIRM_RETRY_LOCK:
+        state = _load_confirm_retry_state()
+        pending = state.get("pending", [])
+        sent = state.get("sent", {})
+        sent_after_retry = int(state.get("sent_after_retry", 0))
+        dropped_after_retry = int(state.get("dropped_after_retry", 0))
+
+    expire_before = now - AI_CONFIRM_RETRY_TTL_SEC
+    sent = {
+        setup_id: ts
+        for setup_id, ts in sent.items()
+        if isinstance(ts, (int, float)) and ts >= expire_before
+    }
+
+    to_send: List[Dict[str, Any]] = []
+    next_pending: List[dict] = []
+    dropped = 0
+    sent_now = 0
+
+    for entry in pending:
+        expires_at = entry.get("expires_at", 0)
+        attempts = int(entry.get("attempts", 0) or 0)
+        last_checked_at = entry.get("last_checked_at")
+        setup_id = entry.get("setup_id")
+
+        if setup_id in sent:
+            continue
+        if expires_at and now > expires_at:
+            dropped += 1
+            continue
+        if attempts >= AI_CONFIRM_RETRY_MAX_ATTEMPTS:
+            dropped += 1
+            continue
+        if not _should_retry_confirm(last_checked_at, tf_seconds, now):
+            next_pending.append(entry)
+            continue
+
+        entry["last_checked_at"] = int(now)
+        bundle = await _fetch_direct_bundle(entry["symbol"], ("1h", "15m", "5m"))
+        if not bundle:
+            next_pending.append(entry)
+            continue
+        candles_1h = bundle.get("1h") or []
+        candles_15m = bundle.get("15m") or []
+        candles_5m = bundle.get("5m") or []
+        if not candles_1h or not candles_15m or not candles_5m:
+            next_pending.append(entry)
+            continue
+
+        if entry.get("use_orderflow"):
+            orderflow = await analyze_orderflow(entry["symbol"])
+        else:
+            orderflow = {"orderflow_bullish": False, "orderflow_bearish": False, "whale_activity": False}
+        pattern_info = await analyze_ai_patterns(entry["symbol"], candles_1h, candles_15m, candles_5m)
+        market_info = await get_market_regime()
+
+        context = dict(entry.get("context_base") or {})
+        context.update(
+            {
+                "orderflow_bullish": orderflow.get("orderflow_bullish", False),
+                "orderflow_bearish": orderflow.get("orderflow_bearish", False),
+                "whale_activity": orderflow.get("whale_activity", False),
+                "ai_pattern_trend": pattern_info.get("pattern_trend"),
+                "ai_pattern_strength": pattern_info.get("pattern_strength", 0),
+                "market_regime": market_info.get("regime", "neutral"),
+            }
+        )
+        raw_score, breakdown = compute_score_breakdown(context)
+        entry["attempts"] = attempts + 1
+        min_score = float(entry.get("min_score", FINAL_SCORE_THRESHOLD))
+        if abs(raw_score) >= min_score:
+            signal_base = dict(entry.get("signal_base") or {})
+            signal_base.update(
+                {
+                    "score": min(100, abs(raw_score)),
+                    "score_raw": int(round(raw_score)),
+                    "breakdown": breakdown,
+                    "score_breakdown": breakdown,
+                    "meta": {
+                        "setup_id": setup_id,
+                        "retry": True,
+                        "retry_attempts": entry["attempts"],
+                    },
+                }
+            )
+            to_send.append(signal_base)
+            sent[setup_id] = int(now)
+            sent_now += 1
+            continue
+
+        next_pending.append(entry)
+
+    sent_after_retry += sent_now
+    dropped_after_retry += dropped
+    state = {
+        "pending": next_pending,
+        "sent": sent,
+        "sent_after_retry": sent_after_retry,
+        "dropped_after_retry": dropped_after_retry,
+    }
+    async with _CONFIRM_RETRY_LOCK:
+        _save_confirm_retry_state(state)
+
+    samples = [
+        _format_retry_sample(entry, now) for entry in next_pending[:3]
+    ]
+    if diag_state is not None:
+        diag_state["confirm_retry"] = {
+            "enabled": True,
+            "pending": len(next_pending),
+            "sent_after_retry": sent_after_retry,
+            "dropped_after_retry": dropped_after_retry,
+            "samples": samples,
+        }
+    return to_send
 
 def _volume_ratio(volumes: Sequence[float]) -> Tuple[float, float]:
     if not volumes:
@@ -391,17 +657,17 @@ async def _prepare_signal(
             "liquidity_sweep": "fail_setup_structure",
             "rsi_divergence": "fail_setup_structure",
             "bb_extreme": "fail_setup_structure",
-            "global_trend": "fail_confirm",
-            "local_trend": "fail_confirm",
-            "market_regime": "fail_confirm",
-            "ai_pattern": "fail_confirm",
-            "orderflow": "fail_confirm",
-            "whale_activity": "fail_confirm",
+            "global_trend": "fail_confirm_now",
+            "local_trend": "fail_confirm_now",
+            "market_regime": "fail_confirm_now",
+            "ai_pattern": "fail_confirm_now",
+            "orderflow": "fail_confirm_now",
+            "whale_activity": "fail_confirm_now",
         }
         negative_items = [item for item in score_breakdown if item.get("delta", 0) < 0]
         if negative_items:
             item = min(negative_items, key=lambda it: it.get("delta", 0))
-            return mapping.get(item.get("key", ""), "fail_confirm")
+            return mapping.get(item.get("key", ""), "fail_confirm_now")
         missing_items = [
             item
             for item in score_breakdown
@@ -410,7 +676,7 @@ async def _prepare_signal(
         if missing_items:
             item = max(missing_items, key=lambda it: it.get("weight", 0))
             return mapping.get(item.get("key", ""), "fail_setup_structure")
-        return "fail_confirm"
+        return "fail_confirm_now"
 
     def _log_final_fail(
         reason: str,
@@ -731,12 +997,116 @@ async def _prepare_signal(
         print(f"[ai_signals] Invalid side for {symbol}: entry={entry_ref} sl={sl} tp1={tp1}")
         return None
 
+    setup_id = _build_setup_id(
+        symbol=symbol,
+        side=side,
+        entry_from=entry_from,
+        entry_to=entry_to,
+        sl=sl,
+        tp1=tp1,
+        timeframe="1h",
+    )
+    if await _is_setup_sent(setup_id):
+        return None
+
+    risk = abs(entry_ref - sl)
+    reward = abs(tp1 - entry_ref)
+    rr = reward / risk if risk > 0 else 0.0
+    min_rr = MIN_RR_FREE if free_mode else 2.0
+
+    rsi_1h_value = get_cached_rsi(symbol, "1h", candles_1h)
+    rsi_zone = "комфортная зона"
+    if rsi_1h_value >= 70:
+        rsi_zone = "перекупленность"
+    elif rsi_1h_value <= 30:
+        rsi_zone = "перепроданность"
+
+    volume_ratio, volume_avg = _volume_ratio([c.volume for c in candles_1h])
+    min_volume_ratio = MIN_VOLUME_RATIO_FREE if free_mode else 1.3
+
+    support_level = nearest_low if nearest_low is not None else level_touched
+    resistance_level = nearest_high if nearest_high is not None else level_touched
+
     _inc_final_checked()
     if abs(raw_score) < float(min_score):
         delta = float(min_score) - abs(raw_score)
         if 0 < delta <= 5:
             _inc_near_miss("score")
         score_reason = _derive_score_fail_reason(breakdown)
+        if AI_CONFIRM_RETRY_ENABLED and score_reason == "fail_confirm_now":
+            now_ts = int(time.time())
+            if rr < min_rr or rr < 1.5 or risk <= 0 or reward <= 0:
+                _inc_fail("fail_rr")
+                _inc_final_fail("fail_rr")
+                _log_final_fail(
+                    "fail_rr",
+                    score_pre=score_pre,
+                    final_score=raw_score,
+                    details={"rr": round(rr, 2), "min_rr": round(min_rr, 2)},
+                )
+                return None
+            if volume_ratio < min_volume_ratio:
+                _inc_fail("fail_volume")
+                _inc_final_fail("fail_volume")
+                _log_final_fail(
+                    "fail_volume",
+                    score_pre=score_pre,
+                    final_score=raw_score,
+                    details={"volume_ratio": round(volume_ratio, 2), "min_ratio": round(min_volume_ratio, 2)},
+                )
+                return None
+            setup_snapshot = {
+                "entry": (round(entry_from, 4), round(entry_to, 4)),
+                "sl": round(sl, 4),
+                "tp1": round(tp1, 4),
+                "tp2": round(tp2, 4),
+                "poi": round(level_touched or 0.0, 4),
+                "score": min(100, abs(raw_score)),
+            }
+            signal_base = {
+                "symbol": symbol,
+                "direction": "long" if side == "LONG" else "short",
+                "entry_zone": (round(entry_from, 4), round(entry_to, 4)),
+                "sl": round(sl, 4),
+                "tp1": round(tp1, 4),
+                "tp2": round(tp2, 4),
+                "score": min(100, abs(raw_score)),
+                "score_raw": int(round(raw_score)),
+                "reason": {
+                    "trend_1d": global_trend,
+                    "trend_4h": h4_structure["trend"],
+                    "rsi_1h": rsi_1h_value,
+                    "rsi_1h_zone": rsi_zone,
+                    "volume_ratio": volume_ratio,
+                    "volume_avg": volume_avg,
+                    "rr": rr,
+                },
+                "breakdown": breakdown,
+                "score_breakdown": breakdown,
+                "levels": {
+                    "support": round(support_level or 0.0, 4),
+                    "resistance": round(resistance_level or 0.0, 4),
+                    "atr_30": round(atr_15m or 0.0, 4),
+                },
+                "meta": {"setup_id": setup_id},
+            }
+            pending_entry = {
+                "setup_id": setup_id,
+                "symbol": symbol,
+                "side": side,
+                "timeframe": AI_CONFIRM_RETRY_TF,
+                "created_at": now_ts,
+                "last_checked_at": now_ts,
+                "attempts": 1,
+                "expires_at": now_ts + AI_CONFIRM_RETRY_TTL_SEC,
+                "setup_snapshot": setup_snapshot,
+                "signal_base": signal_base,
+                "context_base": context,
+                "min_score": float(min_score),
+                "use_orderflow": fetch_orderflow,
+            }
+            await _queue_pending_confirm(pending_entry)
+            return None
         _inc_fail(score_reason)
         _inc_final_fail(score_reason)
         detail_map: dict[str, float | str] = {}
@@ -755,11 +1125,6 @@ async def _prepare_signal(
         )
         return None
 
-    risk = abs(entry_ref - sl)
-    reward = abs(tp1 - entry_ref)
-    rr = reward / risk if risk > 0 else 0.0
-
-    min_rr = MIN_RR_FREE if free_mode else 2.0
     if rr < min_rr:
         _inc_fail("fail_rr")
         _inc_final_fail("fail_rr")
@@ -786,17 +1151,7 @@ async def _prepare_signal(
         )
         return None
 
-    rsi_1h_value = get_cached_rsi(symbol, "1h", candles_1h)
-    rsi_zone = "комфортная зона"
-    if rsi_1h_value >= 70:
-        rsi_zone = "перекупленность"
-    elif rsi_1h_value <= 30:
-        rsi_zone = "перепроданность"
-
-    volume_ratio, volume_avg = _volume_ratio([c.volume for c in candles_1h])
-
     # Требуем хотя бы 30% всплеска объёма
-    min_volume_ratio = MIN_VOLUME_RATIO_FREE if free_mode else 1.3
     if volume_ratio < min_volume_ratio:
         _inc_fail("fail_volume")
         _inc_final_fail("fail_volume")
@@ -810,9 +1165,6 @@ async def _prepare_signal(
 
     if timings is not None:
         timings["score_dt"] = time.perf_counter() - score_start
-
-    support_level = nearest_low if nearest_low is not None else level_touched
-    resistance_level = nearest_high if nearest_high is not None else level_touched
 
     _inc_final_passed()
     return {
@@ -840,6 +1192,7 @@ async def _prepare_signal(
             "resistance": round(resistance_level or 0.0, 4),
             "atr_30": round(atr_15m or 0.0, 4),
         },
+        "meta": {"setup_id": setup_id},
     }
 
 
