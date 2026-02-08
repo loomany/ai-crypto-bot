@@ -40,6 +40,8 @@ from pump_detector import (
 )
 from signals import (
     scan_market,
+    process_confirm_retry_queue,
+    register_confirm_retry_sent,
     AI_MAX_DEEP_PER_CYCLE,
     AI_STAGE_A_TOP_K,
     PRE_SCORE_THRESHOLD,
@@ -1974,6 +1976,32 @@ def _format_reason_counts(reasons: dict, top_n: int = 5) -> str:
     return ", ".join(f"{reason}={count}" for reason, count in ordered)
 
 
+def _format_confirm_retry_info(state: dict | None, lang: str) -> list[str]:
+    if not state:
+        return []
+    info = state.get("confirm_retry")
+    if not isinstance(info, dict):
+        return []
+    enabled = info.get("enabled", False)
+    pending = info.get("pending", 0)
+    sent = info.get("sent_after_retry", 0)
+    dropped = info.get("dropped_after_retry", 0)
+    samples = info.get("samples") or []
+    sample_text = ", ".join(samples) if samples else "-"
+    return [
+        i18n.t(lang, "DIAG_CONFIRM_RETRY_HEADER"),
+        i18n.t(
+            lang,
+            "DIAG_CONFIRM_RETRY_STATUS",
+            enabled="true" if enabled else "false",
+            pending=pending,
+            sent=sent,
+            dropped=dropped,
+        ),
+        i18n.t(lang, "DIAG_CONFIRM_RETRY_SAMPLES", samples=sample_text),
+    ]
+
+
 def _format_setup_near_miss_examples(examples: dict) -> str:
     if not examples:
         return "-"
@@ -2299,6 +2327,7 @@ def _format_filters_section(st, lang: str) -> str:
                 reasons=_format_reason_counts(final_stage.get("fail_reasons", {})),
             )
         )
+    details.extend(_format_confirm_retry_info(st.state if st else None, lang))
     if st and st.fails_top:
         if isinstance(st.fails_top, dict):
             details.append(_format_fails_top(st.fails_top, lang))
@@ -4244,6 +4273,28 @@ async def ai_scan_once() -> None:
         reset_ticker_request_count("ai_signals")
         mark_tick("ai_signals", extra="сканирую рынок...")
 
+        retry_sent = 0
+        with binance_request_context("ai_signals"):
+            retry_signals = await process_confirm_retry_queue(
+                diag_state=module_state.state if module_state else None
+            )
+        for signal in retry_signals:
+            if time.time() - start > BUDGET:
+                print("[AI] budget exceeded during confirm retry sends")
+                break
+            update_current_symbol("ai_signals", signal.get("symbol", ""))
+            print(
+                "[ai_signals] RETRY SEND "
+                f"{signal.get('symbol', '')} {signal.get('direction', '')} "
+                f"score={signal.get('score', 0)}"
+            )
+            await send_signal_to_all(signal)
+            meta = signal.get("meta") if isinstance(signal, dict) else None
+            setup_id = meta.get("setup_id") if isinstance(meta, dict) else None
+            if setup_id:
+                await register_confirm_retry_sent(setup_id)
+            retry_sent += 1
+
         with binance_request_context("ai_signals"):
             symbols = await _get_ai_universe()
         if not symbols:
@@ -4389,7 +4440,7 @@ async def ai_scan_once() -> None:
                 module_state.last_error = str(exc)
                 logger.exception("AI signals error")
         deep_scans_done = stats.get("deep_scans_done", 0) if isinstance(stats, dict) else 0
-        sent_count = 0
+        sent_count = retry_sent
         for signal in _select_signals_for_cycle(signals):
             if time.time() - start > BUDGET:
                 print("[AI] budget exceeded, stopping early")
@@ -4400,6 +4451,10 @@ async def ai_scan_once() -> None:
             update_current_symbol("ai_signals", signal.get("symbol", ""))
             print(f"[ai_signals] DIRECT SEND {signal['symbol']} {signal['direction']} score={score}")
             await send_signal_to_all(signal)
+            meta = signal.get("meta") if isinstance(signal, dict) else None
+            setup_id = meta.get("setup_id") if isinstance(meta, dict) else None
+            if setup_id:
+                await register_confirm_retry_sent(setup_id)
             sent_count += 1
 
         current_symbol = MODULES.get("ai_signals").current_symbol if "ai_signals" in MODULES else None

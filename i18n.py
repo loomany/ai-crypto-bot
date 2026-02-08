@@ -430,6 +430,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "DIAG_SETUP_NEAR_MISS_EXAMPLES": "• Near-miss примеры: {examples}",
         "DIAG_FINAL_STAGE_SUMMARY": "• Final stage: checked={checked} passed={passed} failed={failed}",
         "DIAG_FINAL_FAIL_REASONS": "• Final fail reasons: {reasons}",
+        "DIAG_CONFIRM_RETRY_HEADER": "• Confirm retry:",
+        "DIAG_CONFIRM_RETRY_STATUS": (
+            "  • enabled: {enabled} | pending: {pending} | sent_after_retry: {sent} | "
+            "fail_confirm_retry_exhausted: {dropped}"
+        ),
+        "DIAG_CONFIRM_RETRY_SAMPLES": "  • Примеры: {samples}",
         "DIAG_REQUESTS_HEADER": "Запросы к Binance",
         "DIAG_REQUESTS_MADE": "• Запросов сделано: {count}",
         "DIAG_CANDLES": "• Свечей получено: {count}",
@@ -893,6 +899,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "DIAG_SETUP_NEAR_MISS_EXAMPLES": "• Near-miss examples: {examples}",
         "DIAG_FINAL_STAGE_SUMMARY": "• Final stage: checked={checked} passed={passed} failed={failed}",
         "DIAG_FINAL_FAIL_REASONS": "• Final fail reasons: {reasons}",
+        "DIAG_CONFIRM_RETRY_HEADER": "• Confirm retry:",
+        "DIAG_CONFIRM_RETRY_STATUS": (
+            "  • enabled: {enabled} | pending: {pending} | sent_after_retry: {sent} | "
+            "fail_confirm_retry_exhausted: {dropped}"
+        ),
+        "DIAG_CONFIRM_RETRY_SAMPLES": "  • Samples: {samples}",
         "DIAG_REQUESTS_HEADER": "Binance requests",
         "DIAG_REQUESTS_MADE": "• Requests made: {count}",
         "DIAG_CANDLES": "• Candles received: {count}",
