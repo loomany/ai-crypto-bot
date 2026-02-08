@@ -56,6 +56,8 @@ def detect_trend_and_structure(candles: List[Candle]) -> dict:
     trend = "range"
     last_swing_high = swing_highs[-1][1] if swing_highs else None
     last_swing_low = swing_lows[-1][1] if swing_lows else None
+    hh_hl_count = 0
+    lh_ll_count = 0
 
     hh_hl_pattern = False
     lh_ll_pattern = False
@@ -67,9 +69,21 @@ def detect_trend_and_structure(candles: List[Candle]) -> dict:
         if last_high > prev_high and last_low > prev_low:
             trend = "up"
             hh_hl_pattern = True
+            hh_hl_count = 1
         elif last_high < prev_high and last_low < prev_low:
             trend = "down"
             lh_ll_pattern = True
+            lh_ll_count = 1
+
+    if trend == "up":
+        structure_state = "bull"
+        structure_strength = 1.0
+    elif trend == "down":
+        structure_state = "bear"
+        structure_strength = 1.0
+    else:
+        structure_state = "neutral"
+        structure_strength = 0.0
 
     return {
         "trend": trend,
@@ -77,6 +91,16 @@ def detect_trend_and_structure(candles: List[Candle]) -> dict:
         "last_swing_low": last_swing_low,
         "hh_hl_pattern": hh_hl_pattern,
         "lh_ll_pattern": lh_ll_pattern,
+        "structure_state": structure_state,
+        "structure_strength": structure_strength,
+        "details": {
+            "last_swing": {
+                "high": last_swing_high,
+                "low": last_swing_low,
+            },
+            "hh_hl_count": hh_hl_count,
+            "lh_ll_count": lh_ll_count,
+        },
     }
 
 
