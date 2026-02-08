@@ -481,9 +481,14 @@ def list_ai_subscribers() -> List[int]:
     conn = sqlite3.connect(get_db_path())
     try:
         cur = conn.cursor()
-        cur.execute("SELECT chat_id FROM ai_signals_subscribers")
-        for (chat_id,) in cur.fetchall():
-            subs.add(int(chat_id))
+        try:
+            cur.execute("SELECT chat_id FROM ai_signals_subscribers")
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+        else:
+            for (chat_id,) in cur.fetchall():
+                subs.add(int(chat_id))
     finally:
         conn.close()
 
