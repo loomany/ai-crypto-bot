@@ -511,7 +511,7 @@ BOT_TOKEN = load_settings()
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 bot: Bot | None = None
 dp = Dispatcher()
-FREE_MIN_SCORE = 70
+FREE_MIN_SCORE = cfg.final_score_threshold
 COOLDOWN_FREE_SEC = int(os.getenv("AI_SIGNALS_COOLDOWN_SEC", "86400"))
 MAX_SIGNALS_PER_CYCLE = 3
 MAX_BTC_PER_CYCLE = 1
@@ -2320,8 +2320,8 @@ def _format_ai_section(st, now: float, lang: str) -> str:
         raw_final_threshold if raw_final_threshold is not None else ""
     )
     details.append(
-        "  • Final threshold source: env_key=FINAL_SCORE_THRESHOLD "
-        f'raw_env="{raw_final_threshold_display}" '
+        "  • final_threshold_source: env FINAL_SCORE_THRESHOLD "
+        f'raw="{raw_final_threshold_display}" '
         f"parsed={cfg.final_score_threshold:g}"
     )
     final_stage = (st.last_stats or {}).get("final_stage") if st else None
