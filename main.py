@@ -3627,7 +3627,7 @@ async def diagnostics_button(message: Message):
     )
 
 
-@dp.message(F.text.in_(i18n.all_labels("MENU_BACK")))
+@dp.message(F.text.regexp(r"^\s*⬅️?\s*(Назад|Back)\s*$"))
 async def back_to_main(message: Message):
     lang = get_user_lang(message.chat.id) or "ru"
     await message.answer(
