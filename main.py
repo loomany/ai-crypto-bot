@@ -45,6 +45,9 @@ from signals import (
     PRE_SCORE_THRESHOLD,
     MIN_PRE_SCORE,
     FINAL_SCORE_THRESHOLD,
+    AI_EMA50_NEAR_PCT,
+    AI_POI_MAX_DISTANCE_PCT,
+    AI_MIN_RR,
 )
 from symbol_cache import (
     filter_tradeable_symbols,
@@ -1971,6 +1974,33 @@ def _format_reason_counts(reasons: dict, top_n: int = 5) -> str:
     return ", ".join(f"{reason}={count}" for reason, count in ordered)
 
 
+def _format_setup_near_miss_examples(examples: dict) -> str:
+    if not examples:
+        return "-"
+
+    def _format_key(key: str, suffix: str) -> str:
+        items = examples.get(key) or []
+        parts = []
+        for item in items:
+            symbol = item.get("symbol", "-")
+            value = item.get("value")
+            limit = item.get("limit")
+            if not isinstance(value, (int, float)) or not isinstance(limit, (int, float)):
+                continue
+            value_str = f"{value:.2f}".rstrip("0").rstrip(".")
+            limit_str = f"{limit:.2f}".rstrip("0").rstrip(".")
+            if suffix:
+                value_str += suffix
+                limit_str += suffix
+            parts.append(f"{_short_symbol(symbol)}({value_str}/{limit_str})")
+        return ", ".join(parts) if parts else "-"
+
+    poi = _format_key("poi_dist", "%")
+    rr = _format_key("rr", "")
+    ema = _format_key("ema_dist", "%")
+    return f"poi_dist: {poi} | rr: {rr} | ema_dist: {ema}"
+
+
 def _format_slowest_symbols(items: list[dict[str, Any]]) -> str:
     if not items:
         return "-"
@@ -2158,6 +2188,7 @@ def _format_ai_section(st, now: float, lang: str) -> str:
 def _format_filters_section(st, lang: str) -> str:
     pre_score = (st.last_stats or {}).get("pre_score") if st else None
     final_stage = (st.last_stats or {}).get("final_stage") if st else None
+    setup_stage = (st.last_stats or {}).get("setup_stage") if st else None
     status_label = _build_status_label(
         ok=bool(pre_score),
         warn=not pre_score,
@@ -2167,6 +2198,15 @@ def _format_filters_section(st, lang: str) -> str:
         error_text=i18n.t(lang, "DIAG_STATUS_ERROR"),
     )
     details: list[str] = []
+    details.append(
+        i18n.t(
+            lang,
+            "DIAG_LIMITS_LINE",
+            ema=f"{AI_EMA50_NEAR_PCT:g}",
+            poi=f"{AI_POI_MAX_DISTANCE_PCT:g}",
+            rr=f"{AI_MIN_RR:g}",
+        )
+    )
     if pre_score:
         threshold = pre_score.get("threshold")
         threshold_str = f"{threshold:.1f}" if isinstance(threshold, (int, float)) else "-"
@@ -2216,6 +2256,32 @@ def _format_filters_section(st, lang: str) -> str:
                     samples=_format_symbol_tags(bluechip_samples, "bypass"),
                 )
             )
+    if setup_stage:
+        details.append(
+            i18n.t(
+                lang,
+                "DIAG_SETUP_STAGE_SUMMARY",
+                checked=setup_stage.get("checked", 0),
+                passed=setup_stage.get("passed", 0),
+                failed=setup_stage.get("failed", 0),
+            )
+        )
+        details.append(
+            i18n.t(
+                lang,
+                "DIAG_SETUP_FAIL_REASONS",
+                reasons=_format_reason_counts(setup_stage.get("fail_reasons", {})),
+            )
+        )
+        details.append(
+            i18n.t(
+                lang,
+                "DIAG_SETUP_NEAR_MISS_EXAMPLES",
+                examples=_format_setup_near_miss_examples(
+                    setup_stage.get("near_miss_examples", {})
+                ),
+            )
+        )
     if final_stage:
         details.append(
             i18n.t(

@@ -31,6 +31,9 @@ LEVEL_NEAR_PCT_FREE = 1.2
 MIN_VOLUME_RATIO_FREE = 1.15
 MIN_RR_FREE = 1.8
 EMA50_NEAR_PCT_FREE = 1.0
+AI_EMA50_NEAR_PCT = float(os.getenv("AI_EMA50_NEAR_PCT", "1.4"))
+AI_POI_MAX_DISTANCE_PCT = float(os.getenv("AI_POI_MAX_DISTANCE_PCT", "0.8"))
+AI_MIN_RR = float(os.getenv("AI_MIN_RR", "3.0"))
 EMA50_GATE_SCORE = int(os.getenv("EMA50_GATE_SCORE", "78"))
 EMA50_NEAR_PCT_STRICT = float(os.getenv("EMA50_NEAR_PCT_STRICT", "1.0"))
 EMA50_NEAR_PCT_WEAK = float(os.getenv("EMA50_NEAR_PCT_WEAK", "1.5"))
@@ -266,6 +269,7 @@ async def _prepare_signal(
     min_score: float = 80,
     stats: Dict[str, int] | None = None,
     near_miss: Dict[str, int] | None = None,
+    setup_stats: Dict[str, Any] | None = None,
     debug_state: Dict[str, int] | None = None,
     final_stats: Dict[str, Any] | None = None,
     fetch_orderflow: bool = True,
@@ -280,6 +284,55 @@ async def _prepare_signal(
         if near_miss is None:
             return
         near_miss[reason] = near_miss.get(reason, 0) + 1
+
+    def _inc_setup_checked() -> None:
+        if setup_stats is None:
+            return
+        setup_stats["checked"] = setup_stats.get("checked", 0) + 1
+
+    def _inc_setup_passed() -> None:
+        if setup_stats is None:
+            return
+        setup_stats["passed"] = setup_stats.get("passed", 0) + 1
+
+    def _inc_setup_failed(reason: str) -> None:
+        if setup_stats is None:
+            return
+        setup_stats["failed"] = setup_stats.get("failed", 0) + 1
+        reasons = setup_stats.setdefault("fail_reasons", {})
+        reasons[reason] = reasons.get(reason, 0) + 1
+        setup_stats["reject_reason"] = reason
+
+    def _add_setup_near_miss(key: str, value: float, limit: float) -> None:
+        if setup_stats is None:
+            return
+        examples = setup_stats.setdefault("near_miss_examples", {})
+        items = examples.setdefault(key, [])
+        if len(items) >= 3:
+            return
+        items.append(
+            {
+                "symbol": symbol,
+                "value": round(value, 3),
+                "limit": round(limit, 3),
+            }
+        )
+
+    def _fail_setup(
+        reason: str,
+        *,
+        near_miss_key: str | None = None,
+        near_miss_value: float | None = None,
+        near_miss_limit: float | None = None,
+    ) -> None:
+        _inc_fail(reason)
+        _inc_setup_failed(reason)
+        if (
+            near_miss_key
+            and near_miss_value is not None
+            and near_miss_limit is not None
+        ):
+            _add_setup_near_miss(near_miss_key, near_miss_value, near_miss_limit)
 
     def _inc_final_checked() -> None:
         if final_stats is None:
@@ -334,10 +387,10 @@ async def _prepare_signal(
             "atr_ok": "fail_atr",
             "ma_trend_ok": "fail_ema_distance",
             "volume_climax": "fail_volume",
-            "near_key_level": "fail_setup",
-            "liquidity_sweep": "fail_setup",
-            "rsi_divergence": "fail_setup",
-            "bb_extreme": "fail_setup",
+            "near_key_level": "fail_setup_no_valid_zone",
+            "liquidity_sweep": "fail_setup_structure",
+            "rsi_divergence": "fail_setup_structure",
+            "bb_extreme": "fail_setup_structure",
             "global_trend": "fail_confirm",
             "local_trend": "fail_confirm",
             "market_regime": "fail_confirm",
@@ -356,7 +409,7 @@ async def _prepare_signal(
         ]
         if missing_items:
             item = max(missing_items, key=lambda it: it.get("weight", 0))
-            return mapping.get(item.get("key", ""), "fail_setup")
+            return mapping.get(item.get("key", ""), "fail_setup_structure")
         return "fail_confirm"
 
     def _log_final_fail(
@@ -382,6 +435,7 @@ async def _prepare_signal(
         )
 
     setup_start = time.perf_counter()
+    _inc_setup_checked()
     candles_1d = candles["1d"]
     candles_4h = candles["4h"]
     candles_1h = candles["1h"]
@@ -392,7 +446,7 @@ async def _prepare_signal(
 
     # Отсекаем сверхдешёвые монеты
     if current_price < 0.00001:
-        _inc_fail("fail_price_too_low")
+        _fail_setup("fail_price_too_low")
         return None
 
     daily_structure = detect_trend_and_structure(candles_1d)
@@ -430,7 +484,7 @@ async def _prepare_signal(
             level_touched = nearest_high
 
     if not candidate_side:
-        _inc_fail("fail_not_near_level")
+        _fail_setup("fail_setup_no_valid_zone")
         return None
 
     sweep = is_liquidity_sweep(
@@ -474,6 +528,21 @@ async def _prepare_signal(
         tp1 = entry_to - risk * 2
         tp2 = entry_to - risk * 3
 
+    poi_dist_pct = 0.0
+    if current_price < entry_from:
+        poi_dist_pct = (entry_from - current_price) / current_price * 100
+    elif current_price > entry_to:
+        poi_dist_pct = (current_price - entry_to) / current_price * 100
+    if poi_dist_pct > AI_POI_MAX_DISTANCE_PCT:
+        near_limit = AI_POI_MAX_DISTANCE_PCT * 1.1
+        _fail_setup(
+            "fail_setup_poi_distance",
+            near_miss_key="poi_dist" if poi_dist_pct <= near_limit else None,
+            near_miss_value=poi_dist_pct,
+            near_miss_limit=AI_POI_MAX_DISTANCE_PCT,
+        )
+        return None
+
     atr_ok = True
     if atr_15m and risk > 0:
         min_stop = atr_15m * 0.5
@@ -499,6 +568,16 @@ async def _prepare_signal(
     reward_pre = abs(tp1 - entry_ref)
     rr_pre = reward_pre / risk_pre if risk_pre > 0 else 0.0
     min_rr_pre = MIN_RR_FREE if free_mode else 2.0
+
+    if rr_pre < AI_MIN_RR:
+        near_limit = AI_MIN_RR * 0.9
+        _fail_setup(
+            "fail_setup_rr_low",
+            near_miss_key="rr" if rr_pre >= near_limit else None,
+            near_miss_value=rr_pre,
+            near_miss_limit=AI_MIN_RR,
+        )
+        return None
 
     def _trend_supports(side_value: str, trend_value: str) -> bool:
         if side_value == "LONG":
@@ -526,6 +605,17 @@ async def _prepare_signal(
     ma_trend_ok = False
     dist_to_ema50_pct: float | None = None
     allowed_dist_pct: float | None = None
+    if ema50_1h:
+        dist_to_ema50_pct = abs(current_price - ema50_1h) / ema50_1h * 100
+        if dist_to_ema50_pct > AI_EMA50_NEAR_PCT:
+            near_limit = AI_EMA50_NEAR_PCT * 1.1
+            _fail_setup(
+                "fail_setup_ema_distance",
+                near_miss_key="ema_dist" if dist_to_ema50_pct <= near_limit else None,
+                near_miss_value=dist_to_ema50_pct,
+                near_miss_limit=AI_EMA50_NEAR_PCT,
+            )
+            return None
     if ema50_1h and ema200_1h:
         if candidate_side == "LONG" and current_price >= ema50_1h >= ema200_1h:
             ma_trend_ok = True
@@ -534,7 +624,6 @@ async def _prepare_signal(
 
     if not ma_trend_ok:
         if free_mode and ema50_1h:
-            dist_to_ema50_pct = abs(current_price - ema50_1h) / ema50_1h * 100
             allowed_dist_pct = EMA50_NEAR_PCT_WEAK
             if EMA50_SCORE_WEAK <= score_pre < EMA50_SCORE_MID:
                 allowed_dist_pct = EMA50_NEAR_PCT_MID
@@ -550,7 +639,7 @@ async def _prepare_signal(
                         _inc_fail("fail_not_near_ema50_weak")
                         if dist_to_ema50_pct <= allowed_dist_pct + 0.5:
                             _inc_near_miss("ema")
-                    _inc_fail("fail_pre_score")
+                    _fail_setup("fail_pre_score")
                     return None
 
                 is_expanded_pass = (
@@ -569,7 +658,7 @@ async def _prepare_signal(
                         else:
                             confirmed = last_closed.close > last_closed.open and last_closed.close > prev_closed.close
                     if not confirmed:
-                        _inc_fail("fail_no_15m_confirm")
+                        _fail_setup("fail_no_15m_confirm")
                         _log_fail_debug(
                             "fail_no_15m_confirm",
                             score_pre=score_pre,
@@ -582,17 +671,18 @@ async def _prepare_signal(
                         )
                         return None
             else:
-                _inc_fail("ema50_bypassed_strong")
+                _fail_setup("ema50_bypassed_strong")
         else:
-            _inc_fail("fail_ma_trend")
+            _fail_setup("fail_ma_trend")
             return None
 
     if not atr_ok:
-        _inc_fail("fail_atr_ok")
+        _fail_setup("fail_setup_sl_too_wide")
         return None
 
     if timings is not None:
         timings["setup_dt"] = time.perf_counter() - setup_start
+    _inc_setup_passed()
 
     confirm_start = time.perf_counter()
     if fetch_orderflow:
@@ -801,6 +891,18 @@ async def scan_market(
         "passed_samples": [],
         "pass_rate": 0.0,
     }
+    setup_stage_stats: Dict[str, Any] = {
+        "checked": 0,
+        "passed": 0,
+        "failed": 0,
+        "fail_reasons": {},
+        "reject_reason": None,
+        "near_miss_examples": {
+            "poi_dist": [],
+            "rr": [],
+            "ema_dist": [],
+        },
+    }
     final_stage_stats: Dict[str, Any] = {
         "checked": 0,
         "passed": 0,
@@ -981,6 +1083,7 @@ async def scan_market(
                 "fails": fails,
                 "near_miss": near_miss,
                 "pre_score": pre_score_stats,
+                "setup_stage": setup_stage_stats,
                 "final_stage": final_stage_stats,
                 "slowest_symbols": _build_slowest(),
             }
@@ -1017,6 +1120,7 @@ async def scan_market(
                 "fails": fails,
                 "near_miss": near_miss,
                 "pre_score": pre_score_stats,
+                "setup_stage": setup_stage_stats,
                 "final_stage": final_stage_stats,
                 "slowest_symbols": _build_slowest(),
             }
@@ -1050,6 +1154,7 @@ async def scan_market(
                 min_score=min_score,
                 stats=fails if return_stats else None,
                 near_miss=near_miss if return_stats else None,
+                setup_stats=setup_stage_stats if return_stats else None,
                 debug_state=debug_state,
                 final_stats=final_stage_stats if return_stats else None,
                 fetch_orderflow=symbol in orderflow_candidates,
@@ -1092,6 +1197,7 @@ async def scan_market(
                 "fails": fails,
                 "near_miss": near_miss,
                 "pre_score": pre_score_stats,
+                "setup_stage": setup_stage_stats,
                 "final_stage": final_stage_stats,
                 "slowest_symbols": _build_slowest(),
             }
@@ -1140,6 +1246,7 @@ async def scan_market(
             "fails": fails,
             "near_miss": near_miss,
             "pre_score": pre_score_stats,
+            "setup_stage": setup_stage_stats,
             "final_stage": final_stage_stats,
             "slowest_symbols": _build_slowest(),
         }
