@@ -4211,6 +4211,7 @@ async def ai_scan_once() -> None:
                 deep_scan_limit=AI_DEEP_TOP_K,
                 excluded_symbols=excluded,
                 diag_state=module_state.state if module_state else None,
+                progress_cb=lambda sym: update_current_symbol("ai_signals", sym),
             )
         module_state = MODULES.get("ai_signals")
         if module_state and isinstance(stats, dict):
