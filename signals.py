@@ -40,6 +40,7 @@ EMA50_SCORE_MID = int(os.getenv("EMA50_SCORE_MID", "78"))
 MIN_PRE_SCORE = float(os.getenv("MIN_PRE_SCORE", "70"))
 PRE_SCORE_THRESHOLD = float(os.getenv("PRE_SCORE_THRESHOLD", "65"))
 FINAL_SCORE_THRESHOLD = float(os.getenv("FINAL_SCORE_THRESHOLD", "80"))
+AI_BLUECHIPS = os.getenv("AI_BLUECHIPS", "ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT")
 AI_MAX_DEEP_PER_CYCLE = int(os.getenv("AI_MAX_DEEP_PER_CYCLE", "3"))
 AI_DEEP_TOP_K = int(os.getenv("AI_DEEP_TOP_K", str(AI_MAX_DEEP_PER_CYCLE)))
 AI_CHEAP_LIMIT = int(os.getenv("AI_CHEAP_LIMIT", "120"))
@@ -75,10 +76,15 @@ MIN_KLINES_REQUIRED = 20
 AI_FALLBACK_DIRECT = 0
 
 logger = logging.getLogger(__name__)
+_BLUECHIP_SET = {item.strip().upper() for item in AI_BLUECHIPS.split(",") if item.strip()}
 
 
 def get_ai_fallback_direct() -> int:
     return AI_FALLBACK_DIRECT
+
+
+def _is_bluechip(symbol: str) -> bool:
+    return symbol.upper() in _BLUECHIP_SET
 
 
 
@@ -261,6 +267,7 @@ async def _prepare_signal(
     stats: Dict[str, int] | None = None,
     near_miss: Dict[str, int] | None = None,
     debug_state: Dict[str, int] | None = None,
+    final_stats: Dict[str, Any] | None = None,
     fetch_orderflow: bool = True,
     timings: dict[str, float] | None = None,
 ) -> Optional[Dict[str, Any]]:
@@ -273,6 +280,23 @@ async def _prepare_signal(
         if near_miss is None:
             return
         near_miss[reason] = near_miss.get(reason, 0) + 1
+
+    def _inc_final_checked() -> None:
+        if final_stats is None:
+            return
+        final_stats["checked"] = final_stats.get("checked", 0) + 1
+
+    def _inc_final_passed() -> None:
+        if final_stats is None:
+            return
+        final_stats["passed"] = final_stats.get("passed", 0) + 1
+
+    def _inc_final_fail(reason: str) -> None:
+        if final_stats is None:
+            return
+        final_stats["failed"] = final_stats.get("failed", 0) + 1
+        reasons = final_stats.setdefault("fail_reasons", {})
+        reasons[reason] = reasons.get(reason, 0) + 1
 
     def detect_side(entry: float, sl: float, tp1: float) -> Optional[str]:
         if tp1 > entry and sl < entry:
@@ -303,6 +327,58 @@ async def _prepare_signal(
             f"dist_to_ema50_pct={dist_to_ema50_pct:.2f} allowed_dist_pct={allowed_dist_pct:.2f} "
             f"strict_pct={strict_pct:.2f} ema50={ema50_value:.6f} last_price={last_price:.6f} "
             f"side={scenario}"
+        )
+
+    def _derive_score_fail_reason(score_breakdown: list[dict]) -> str:
+        mapping = {
+            "atr_ok": "fail_atr",
+            "ma_trend_ok": "fail_ema_distance",
+            "volume_climax": "fail_volume",
+            "near_key_level": "fail_setup",
+            "liquidity_sweep": "fail_setup",
+            "rsi_divergence": "fail_setup",
+            "bb_extreme": "fail_setup",
+            "global_trend": "fail_confirm",
+            "local_trend": "fail_confirm",
+            "market_regime": "fail_confirm",
+            "ai_pattern": "fail_confirm",
+            "orderflow": "fail_confirm",
+            "whale_activity": "fail_confirm",
+        }
+        negative_items = [item for item in score_breakdown if item.get("delta", 0) < 0]
+        if negative_items:
+            item = min(negative_items, key=lambda it: it.get("delta", 0))
+            return mapping.get(item.get("key", ""), "fail_confirm")
+        missing_items = [
+            item
+            for item in score_breakdown
+            if not item.get("applied") and item.get("weight", 0) > 0
+        ]
+        if missing_items:
+            item = max(missing_items, key=lambda it: it.get("weight", 0))
+            return mapping.get(item.get("key", ""), "fail_setup")
+        return "fail_confirm"
+
+    def _log_final_fail(
+        reason: str,
+        *,
+        score_pre: float,
+        final_score: float,
+        details: dict[str, float | str] | None = None,
+    ) -> None:
+        if debug_state is None:
+            return
+        if debug_state["used"] >= debug_state["max"]:
+            return
+        debug_state["used"] += 1
+        detail_parts = []
+        if details:
+            detail_parts = [f"{key}={value}" for key, value in details.items()]
+        detail_str = f" details={' '.join(detail_parts)}" if detail_parts else ""
+        logger.info(
+            "[ai_signals] final_fail "
+            f"symbol={symbol} pre_score={score_pre:.2f} final_score={final_score:.2f} "
+            f"main_reason={reason}{detail_str}"
         )
 
     setup_start = time.perf_counter()
@@ -448,6 +524,8 @@ async def _prepare_signal(
     ema50_1h = get_cached_ema(symbol, "1h", candles_1h, 50) if len(closes_1h) >= 50 else None
     ema200_1h = get_cached_ema(symbol, "1h", candles_1h, 200) if len(closes_1h) >= 200 else None
     ma_trend_ok = False
+    dist_to_ema50_pct: float | None = None
+    allowed_dist_pct: float | None = None
     if ema50_1h and ema200_1h:
         if candidate_side == "LONG" and current_price >= ema50_1h >= ema200_1h:
             ma_trend_ok = True
@@ -553,14 +631,38 @@ async def _prepare_signal(
     side = detect_side(entry_ref, sl, tp1)
     if side is None:
         _inc_fail("fail_invalid_side")
+        _inc_final_checked()
+        _inc_final_fail("fail_invalid_side")
+        _log_final_fail(
+            "fail_invalid_side",
+            score_pre=score_pre,
+            final_score=raw_score,
+        )
         print(f"[ai_signals] Invalid side for {symbol}: entry={entry_ref} sl={sl} tp1={tp1}")
         return None
 
+    _inc_final_checked()
     if abs(raw_score) < float(min_score):
         delta = float(min_score) - abs(raw_score)
         if 0 < delta <= 5:
             _inc_near_miss("score")
-        _inc_fail("fail_score")
+        score_reason = _derive_score_fail_reason(breakdown)
+        _inc_fail(score_reason)
+        _inc_final_fail(score_reason)
+        detail_map: dict[str, float | str] = {}
+        if dist_to_ema50_pct is not None:
+            detail_map["distance_to_ema50_pct"] = round(dist_to_ema50_pct, 2)
+        if allowed_dist_pct is not None:
+            detail_map["ema_allowed_pct"] = round(allowed_dist_pct, 2)
+        detail_map["rr_pre"] = round(rr_pre, 2)
+        if atr_15m and current_price:
+            detail_map["atr_pct"] = round(atr_15m / current_price * 100, 2)
+        _log_final_fail(
+            score_reason,
+            score_pre=score_pre,
+            final_score=raw_score,
+            details=detail_map,
+        )
         return None
 
     risk = abs(entry_ref - sl)
@@ -570,10 +672,24 @@ async def _prepare_signal(
     min_rr = MIN_RR_FREE if free_mode else 2.0
     if rr < min_rr:
         _inc_fail("fail_rr")
+        _inc_final_fail("fail_rr")
+        _log_final_fail(
+            "fail_rr",
+            score_pre=score_pre,
+            final_score=raw_score,
+            details={"rr": round(rr, 2), "min_rr": round(min_rr, 2)},
+        )
         return None
 
     if side not in ("LONG", "SHORT") or rr < 1.5 or risk <= 0 or reward <= 0:
         _inc_fail("fail_rr")
+        _inc_final_fail("fail_rr")
+        _log_final_fail(
+            "fail_rr",
+            score_pre=score_pre,
+            final_score=raw_score,
+            details={"rr": round(rr, 2), "risk": round(risk, 6), "reward": round(reward, 6)},
+        )
         print(
             "[ai_signals] Pre-send check failed "
             f"{symbol}: side={side} rr={rr:.2f} risk={risk:.6f} reward={reward:.6f}"
@@ -592,7 +708,14 @@ async def _prepare_signal(
     # Требуем хотя бы 30% всплеска объёма
     min_volume_ratio = MIN_VOLUME_RATIO_FREE if free_mode else 1.3
     if volume_ratio < min_volume_ratio:
-        _inc_fail("fail_volume_ratio")
+        _inc_fail("fail_volume")
+        _inc_final_fail("fail_volume")
+        _log_final_fail(
+            "fail_volume",
+            score_pre=score_pre,
+            final_score=raw_score,
+            details={"volume_ratio": round(volume_ratio, 2), "min_ratio": round(min_volume_ratio, 2)},
+        )
         return None
 
     if timings is not None:
@@ -601,6 +724,7 @@ async def _prepare_signal(
     support_level = nearest_low if nearest_low is not None else level_touched
     resistance_level = nearest_high if nearest_high is not None else level_touched
 
+    _inc_final_passed()
     return {
         "symbol": symbol,
         "direction": "long" if side == "LONG" else "short",
@@ -670,10 +794,18 @@ async def scan_market(
         "checked": 0,
         "passed": 0,
         "failed": 0,
+        "bluechip_bypasses": 0,
+        "bluechip_samples": [],
         "threshold": float(PRE_SCORE_THRESHOLD),
         "failed_samples": [],
         "passed_samples": [],
         "pass_rate": 0.0,
+    }
+    final_stage_stats: Dict[str, Any] = {
+        "checked": 0,
+        "passed": 0,
+        "failed": 0,
+        "fail_reasons": {},
     }
     start_time = time.time()
     prescore_start = time.perf_counter()
@@ -741,6 +873,11 @@ async def scan_market(
         if len(samples) >= 5:
             return
         samples.append((symbol, round(score, 2)))
+
+    def _add_bluechip_sample(samples: list[str], symbol: str) -> None:
+        if len(samples) >= 5:
+            return
+        samples.append(symbol)
 
     signals: List[Dict[str, Any]] = []
 
@@ -810,10 +947,15 @@ async def scan_market(
                 continue
             pre_score_stats["checked"] += 1
             if pre_score < PRE_SCORE_THRESHOLD:
-                fails["fail_pre_score"] = fails.get("fail_pre_score", 0) + 1
-                pre_score_stats["failed"] += 1
-                _add_pre_score_sample(pre_score_stats["failed_samples"], symbol, pre_score)
-                continue
+                if _is_bluechip(symbol):
+                    pre_score_stats["bluechip_bypasses"] += 1
+                    _add_bluechip_sample(pre_score_stats["bluechip_samples"], symbol)
+                    pre_score = max(pre_score, PRE_SCORE_THRESHOLD)
+                else:
+                    fails["fail_pre_score"] = fails.get("fail_pre_score", 0) + 1
+                    pre_score_stats["failed"] += 1
+                    _add_pre_score_sample(pre_score_stats["failed_samples"], symbol, pre_score)
+                    continue
             pre_score_stats["passed"] += 1
             _add_pre_score_sample(pre_score_stats["passed_samples"], symbol, pre_score)
             scored.append((symbol, pre_score))
@@ -839,6 +981,7 @@ async def scan_market(
                 "fails": fails,
                 "near_miss": near_miss,
                 "pre_score": pre_score_stats,
+                "final_stage": final_stage_stats,
                 "slowest_symbols": _build_slowest(),
             }
         return signals
@@ -874,6 +1017,7 @@ async def scan_market(
                 "fails": fails,
                 "near_miss": near_miss,
                 "pre_score": pre_score_stats,
+                "final_stage": final_stage_stats,
                 "slowest_symbols": _build_slowest(),
             }
         return signals
@@ -907,6 +1051,7 @@ async def scan_market(
                 stats=fails if return_stats else None,
                 near_miss=near_miss if return_stats else None,
                 debug_state=debug_state,
+                final_stats=final_stage_stats if return_stats else None,
                 fetch_orderflow=symbol in orderflow_candidates,
                 timings=timings,
             )
@@ -947,6 +1092,7 @@ async def scan_market(
                 "fails": fails,
                 "near_miss": near_miss,
                 "pre_score": pre_score_stats,
+                "final_stage": final_stage_stats,
                 "slowest_symbols": _build_slowest(),
             }
         return signals
@@ -994,6 +1140,7 @@ async def scan_market(
             "fails": fails,
             "near_miss": near_miss,
             "pre_score": pre_score_stats,
+            "final_stage": final_stage_stats,
             "slowest_symbols": _build_slowest(),
         }
     return signals

@@ -1958,6 +1958,19 @@ def _format_samples(samples: list[tuple[str, float]]) -> str:
     return ", ".join(formatted)
 
 
+def _format_symbol_tags(samples: list[str], tag: str) -> str:
+    if not samples:
+        return "-"
+    return ", ".join(f"{_short_symbol(symbol)}({tag})" for symbol in samples)
+
+
+def _format_reason_counts(reasons: dict, top_n: int = 5) -> str:
+    if not reasons:
+        return "-"
+    ordered = sorted(reasons.items(), key=lambda item: item[1], reverse=True)[:top_n]
+    return ", ".join(f"{reason}={count}" for reason, count in ordered)
+
+
 def _format_slowest_symbols(items: list[dict[str, Any]]) -> str:
     if not items:
         return "-"
@@ -2144,6 +2157,7 @@ def _format_ai_section(st, now: float, lang: str) -> str:
 
 def _format_filters_section(st, lang: str) -> str:
     pre_score = (st.last_stats or {}).get("pre_score") if st else None
+    final_stage = (st.last_stats or {}).get("final_stage") if st else None
     status_label = _build_status_label(
         ok=bool(pre_score),
         warn=not pre_score,
@@ -2191,6 +2205,34 @@ def _format_filters_section(st, lang: str) -> str:
                     samples=_format_samples(passed_samples),
                 )
             )
+        bluechip_bypasses = pre_score.get("bluechip_bypasses", 0)
+        bluechip_samples = pre_score.get("bluechip_samples") or []
+        if bluechip_bypasses:
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_PRESCORE_BLUECHIP",
+                    count=bluechip_bypasses,
+                    samples=_format_symbol_tags(bluechip_samples, "bypass"),
+                )
+            )
+    if final_stage:
+        details.append(
+            i18n.t(
+                lang,
+                "DIAG_FINAL_STAGE_SUMMARY",
+                checked=final_stage.get("checked", 0),
+                passed=final_stage.get("passed", 0),
+                failed=final_stage.get("failed", 0),
+            )
+        )
+        details.append(
+            i18n.t(
+                lang,
+                "DIAG_FINAL_FAIL_REASONS",
+                reasons=_format_reason_counts(final_stage.get("fail_reasons", {})),
+            )
+        )
     if st and st.fails_top:
         if isinstance(st.fails_top, dict):
             details.append(_format_fails_top(st.fails_top, lang))
