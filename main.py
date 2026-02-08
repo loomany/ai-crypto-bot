@@ -154,7 +154,7 @@ def load_settings() -> str:
 
 
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
-PUMP_COOLDOWN_SYMBOL_SEC = int(os.getenv("PUMP_COOLDOWN_SYMBOL_SEC", "21600"))  # 6h
+PUMP_COOLDOWN_SYMBOL_SEC = int(os.getenv("PUMP_COOLDOWN_SYMBOL_SEC", "86400"))  # 24h
 PUMP_COOLDOWN_GLOBAL_SEC = int(os.getenv("PUMP_COOLDOWN_GLOBAL_SEC", "3600"))  # 1h
 PUMP_DAILY_LIMIT = int(os.getenv("PUMP_DAILY_LIMIT", "6"))
 SUB_DAYS = 30
@@ -492,7 +492,7 @@ ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 bot: Bot | None = None
 dp = Dispatcher()
 FREE_MIN_SCORE = 70
-COOLDOWN_FREE_SEC = int(os.getenv("AI_SIGNALS_COOLDOWN_SEC", "3600"))
+COOLDOWN_FREE_SEC = int(os.getenv("AI_SIGNALS_COOLDOWN_SEC", "86400"))
 MAX_SIGNALS_PER_CYCLE = 3
 MAX_BTC_PER_CYCLE = 1
 AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "30"))
@@ -3618,18 +3618,7 @@ async def send_signal_to_all(
         print("[ai_signals] deliver: subs=0 queued=0 dedup=0")
         return stats if return_stats else 0
 
-    entry_low, entry_high = signal_dict["entry_zone"]
-    direction = signal_dict.get("direction", "long")
-    time_bucket = int(time.time() // 3600)
-    if symbol == "BTCUSDT":
-        bucket = 50.0
-        e1 = round(float(entry_low) / bucket) * bucket
-        e2 = round(float(entry_high) / bucket) * bucket
-    else:
-        e1 = round(float(entry_low), 4)
-        e2 = round(float(entry_high), 4)
-
-    dedup_key = f"{symbol}:{direction}:1h:{time_bucket}:{e1}-{e2}"
+    dedup_key = f"{symbol}:24h"
 
     sent_at = int(time.time())
     insert_signal_audit(signal_dict, tier="free", module="ai_signals", sent_at=sent_at)
