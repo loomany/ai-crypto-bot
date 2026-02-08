@@ -12,7 +12,13 @@ from typing import Any, Dict, List, Awaitable
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardMarkup,
+)
 from aiogram.filters import CommandStart, Command
 from dotenv import load_dotenv
 
@@ -2168,6 +2174,41 @@ def _format_overall_status(now: float, lang: str) -> str:
     return _format_section(i18n.t(lang, "DIAG_SECTION_OVERALL"), status_label, details, lang)
 
 
+async def _answer_long_message(
+    message: Message,
+    text: str,
+    reply_markup: ReplyKeyboardMarkup | InlineKeyboardMarkup | None = None,
+    max_len: int = 3900,
+) -> None:
+    if len(text) <= max_len:
+        await message.answer(text, reply_markup=reply_markup)
+        return
+
+    lines = text.splitlines()
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    for line in lines:
+        line_len = len(line) + 1
+        if current and current_len + line_len > max_len:
+            chunks.append("\n".join(current))
+            current = [line]
+            current_len = len(line)
+        else:
+            current.append(line)
+            current_len += line_len
+
+    if current:
+        chunks.append("\n".join(current))
+
+    for idx, chunk in enumerate(chunks):
+        await message.answer(
+            chunk,
+            reply_markup=reply_markup if idx == len(chunks) - 1 else None,
+        )
+
+
 def _format_ai_section(st, now: float, lang: str) -> str:
     extra = _parse_extra_kv(st.extra or "")
     status_label = _build_status_label(
@@ -2774,7 +2815,8 @@ async def test_admin(message: Message):
         blocks.append(_format_pump_section(pump_module, now, lang))
 
     lang = get_user_lang(message.chat.id) or "ru"
-    await message.answer(
+    await _answer_long_message(
+        message,
         "\n".join(blocks).strip(),
         reply_markup=build_admin_diagnostics_kb(lang),
     )
