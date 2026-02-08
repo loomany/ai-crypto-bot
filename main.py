@@ -1980,6 +1980,59 @@ def _format_reason_counts(reasons: dict, top_n: int = 5) -> str:
     return ", ".join(f"{reason}={count}" for reason, count in ordered)
 
 
+def _format_score_adjustments(adjustments: list[dict]) -> str:
+    if not adjustments:
+        return "—"
+    parts = []
+    for adj in adjustments:
+        key = adj.get("key", "?")
+        delta = adj.get("delta")
+        if isinstance(delta, (int, float)):
+            delta_label = f"{delta:+g}"
+        else:
+            delta_label = str(delta)
+        parts.append(f"{key}({delta_label})")
+    return ", ".join(parts)
+
+
+def _sum_score_adjustments(adjustments: list[dict]) -> float:
+    total = 0.0
+    for adj in adjustments:
+        delta = adj.get("delta")
+        if isinstance(delta, (int, float)):
+            total += float(delta)
+    return total
+
+
+def _format_final_score_sample(sample: dict, include_delta: bool = True) -> str:
+    symbol = sample.get("symbol", "-")
+    side = sample.get("side", "-")
+    tf = sample.get("tf", "-")
+    pre_score = sample.get("pre_score", "-")
+    score_before = sample.get("score_before_adj", "-")
+    score_after = sample.get("score_after_adj", "-")
+    adjustments = sample.get("score_adjustments", []) or []
+    delta_sum = _sum_score_adjustments(adjustments)
+    delta_part = f" ({delta_sum:+g})" if include_delta else ""
+    return (
+        f"{symbol} {side} {tf} pre_score={pre_score} "
+        f"score={score_before}->{score_after}{delta_part}"
+    )
+
+
+def _format_final_blockers(sample: dict) -> str:
+    blockers = sample.get("blockers") or []
+    if blockers:
+        return ", ".join(blockers)
+    adjustments = sample.get("score_adjustments", []) or []
+    negative = [
+        adj for adj in adjustments if isinstance(adj.get("delta"), (int, float)) and adj["delta"] < 0
+    ]
+    if not negative:
+        return "—"
+    return ", ".join(f"{adj.get('key')}({adj.get('delta'):+g})" for adj in negative)
+
+
 def _format_confirm_retry_info(state: dict | None, lang: str) -> list[str]:
     if not state:
         return []
@@ -2249,6 +2302,89 @@ def _format_ai_section(st, now: float, lang: str) -> str:
     )
     if sample_line:
         details.append(i18n.t(lang, "DIAG_AI_STRUCTURE_SAMPLE", sample=sample_line))
+    final_stage_debug = (st.last_stats or {}).get("final_stage") if st else None
+    if isinstance(final_stage_debug, dict) and final_stage_debug.get("score_samples"):
+        samples = final_stage_debug.get("score_samples", [])
+        last_pass = next((s for s in reversed(samples) if s.get("final_pass")), None)
+        last_fail = next((s for s in reversed(samples) if not s.get("final_pass")), None)
+        near_miss = None
+        near_miss_samples = final_stage_debug.get("near_miss_samples") or []
+        if near_miss_samples:
+            near_miss = near_miss_samples[0]
+        threshold = final_stage_debug.get("threshold", FINAL_SCORE_THRESHOLD)
+        checked = final_stage_debug.get("checked", 0)
+        passed = final_stage_debug.get("passed", 0)
+        failed = final_stage_debug.get("failed", 0)
+        details.append(i18n.t(lang, "DIAG_FINAL_SCORE_HEADER"))
+        details.append(i18n.t(lang, "DIAG_FINAL_SCORE_THRESHOLD", threshold=f"{threshold:.1f}"))
+        details.append(
+            i18n.t(
+                lang,
+                "DIAG_FINAL_SCORE_SUMMARY",
+                checked=checked,
+                passed=passed,
+                failed=failed,
+            )
+        )
+        if last_pass:
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_FINAL_SCORE_LAST_PASS",
+                    sample=_format_final_score_sample(last_pass, include_delta=True),
+                )
+            )
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_FINAL_SCORE_ADJUSTMENTS",
+                    adjustments=_format_score_adjustments(last_pass.get("score_adjustments", [])),
+                )
+            )
+        if last_fail:
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_FINAL_SCORE_LAST_FAIL",
+                    sample=_format_final_score_sample(last_fail, include_delta=False),
+                )
+            )
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_FINAL_SCORE_ADJUSTMENTS",
+                    adjustments=_format_score_adjustments(last_fail.get("score_adjustments", [])),
+                )
+            )
+            fail_reason = last_fail.get("final_fail_reason") or "—"
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_FINAL_SCORE_FAIL_REASON",
+                    reason=fail_reason,
+                )
+            )
+        if near_miss:
+            missing = near_miss.get("missing", "-")
+            score_after = near_miss.get("score_after_adj", "-")
+            threshold_line = near_miss.get("final_threshold", threshold)
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_FINAL_SCORE_NEAR_MISS",
+                    sample=(
+                        f"{near_miss.get('symbol', '-')}"
+                        f" score_after={score_after} threshold={threshold_line} missing={missing}"
+                    ),
+                )
+            )
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_FINAL_SCORE_NEAR_MISS_BLOCKERS",
+                    blockers=_format_final_blockers(near_miss),
+                )
+            )
     return _format_section(i18n.t(lang, "DIAG_SECTION_AI"), status_label, details, lang)
 
 

@@ -1026,6 +1026,76 @@ async def _prepare_signal(
 
     raw_score, breakdown = compute_score_breakdown(context)
     raw_score = float(raw_score)
+    score_before_adj = raw_score
+    score_adjustments: list[dict[str, Any]] = []
+
+    def _add_score_adjustment(
+        key: str,
+        delta: float,
+        *,
+        value: float | str | None = None,
+    ) -> None:
+        entry: dict[str, Any] = {"key": key, "delta": round(float(delta), 2)}
+        if value is not None:
+            entry["value"] = value
+        score_adjustments.append(entry)
+
+    def _build_blockers() -> list[str]:
+        neg_adjustments = [
+            adj for adj in score_adjustments if isinstance(adj.get("delta"), (int, float)) and adj["delta"] < 0
+        ]
+        if neg_adjustments:
+            return [
+                f"{adj.get('key')}({adj.get('delta'):+g})"
+                for adj in neg_adjustments[:3]
+            ]
+        negative_items = [
+            item for item in breakdown if item.get("delta", 0) < 0
+        ]
+        negative_items.sort(key=lambda item: item.get("delta", 0))
+        return [
+            f"{item.get('key')}({item.get('delta', 0):+g})"
+            for item in negative_items[:3]
+        ]
+
+    def _store_final_sample(final_pass: bool, fail_reason: str | None = None) -> None:
+        if final_stats is None:
+            return
+        final_stats.setdefault("threshold", float(min_score))
+        samples = final_stats.setdefault("score_samples", [])
+        if len(samples) < 5:
+            samples.append(
+                {
+                    "symbol": symbol,
+                    "side": side or candidate_side,
+                    "tf": "1h",
+                    "pre_score": round(score_pre, 2),
+                    "score_before_adj": round(score_before_adj, 2),
+                    "score_adjustments": [dict(item) for item in score_adjustments],
+                    "score_after_adj": round(raw_score, 2),
+                    "final_threshold": float(min_score),
+                    "final_pass": final_pass,
+                    "final_fail_reason": fail_reason,
+                }
+            )
+        if not final_pass:
+            missing = float(min_score) - abs(raw_score)
+            if missing > 0:
+                near_samples = final_stats.setdefault("near_miss_samples", [])
+                near_samples.append(
+                    {
+                        "symbol": symbol,
+                        "side": side or candidate_side,
+                        "tf": "1h",
+                        "score_after_adj": round(raw_score, 2),
+                        "final_threshold": float(min_score),
+                        "missing": round(missing, 2),
+                        "blockers": _build_blockers(),
+                        "score_adjustments": [dict(item) for item in score_adjustments],
+                    }
+                )
+                near_samples.sort(key=lambda item: item.get("missing", float("inf")))
+                del near_samples[5:]
 
     side = detect_side(entry_ref, sl, tp1)
     if side is None:
@@ -1037,6 +1107,7 @@ async def _prepare_signal(
             score_pre=score_pre,
             final_score=raw_score,
         )
+        _store_final_sample(False, "fail_invalid_side")
         print(f"[ai_signals] Invalid side for {symbol}: entry={entry_ref} sl={sl} tp1={tp1}")
         return None
 
@@ -1082,6 +1153,7 @@ async def _prepare_signal(
                 final_score=raw_score,
                 details={"structure_state": structure_state, "structure_window": structure_window},
             )
+            _store_final_sample(False, "fail_setup_structure")
             return None
     else:
         if structure_alignment == "opposite" and AI_STRUCTURE_HARD_FAIL_ON_OPPOSITE:
@@ -1093,9 +1165,15 @@ async def _prepare_signal(
                 final_score=raw_score,
                 details={"structure_state": structure_state, "structure_window": structure_window},
             )
+            _store_final_sample(False, "fail_structure_opposite")
             return None
         if structure_alignment == "neutral":
             raw_score -= AI_STRUCTURE_PENALTY_NEUTRAL
+            _add_score_adjustment(
+                "structure_penalty_neutral",
+                -AI_STRUCTURE_PENALTY_NEUTRAL,
+                value=structure_state,
+            )
             if final_stats is not None:
                 final_stats["structure_penalty_neutral"] = final_stats.get("structure_penalty_neutral", 0) + 1
                 samples = final_stats.setdefault("structure_samples", [])
@@ -1112,6 +1190,7 @@ async def _prepare_signal(
             _inc_near_miss("score")
         score_reason = _derive_score_fail_reason(breakdown)
         if AI_CONFIRM_RETRY_ENABLED and score_reason == "fail_confirm_now":
+            _add_score_adjustment("confirm_retry", 0.0, value=score_reason)
             now_ts = int(time.time())
             if rr < min_rr or rr < 1.5 or risk <= 0 or reward <= 0:
                 _inc_fail("fail_rr")
@@ -1122,6 +1201,8 @@ async def _prepare_signal(
                     final_score=raw_score,
                     details={"rr": round(rr, 2), "min_rr": round(min_rr, 2)},
                 )
+                _add_score_adjustment("rr_low_penalty", 0.0, value=round(rr, 2))
+                _store_final_sample(False, "fail_rr")
                 return None
             if volume_ratio < min_volume_ratio:
                 _inc_fail("fail_volume")
@@ -1132,6 +1213,8 @@ async def _prepare_signal(
                     final_score=raw_score,
                     details={"volume_ratio": round(volume_ratio, 2), "min_ratio": round(min_volume_ratio, 2)},
                 )
+                _add_score_adjustment("volume_penalty", 0.0, value=round(volume_ratio, 2))
+                _store_final_sample(False, "fail_volume")
                 return None
             setup_snapshot = {
                 "entry": (round(entry_from, 4), round(entry_to, 4)),
@@ -1184,7 +1267,9 @@ async def _prepare_signal(
                 "use_orderflow": fetch_orderflow,
             }
             await _queue_pending_confirm(pending_entry)
+            _store_final_sample(False, "confirm_retry")
             return None
+        _add_score_adjustment("confirm_fail", 0.0, value=score_reason)
         _inc_fail(score_reason)
         _inc_final_fail(score_reason)
         detail_map: dict[str, float | str] = {}
@@ -1201,6 +1286,7 @@ async def _prepare_signal(
             final_score=raw_score,
             details=detail_map,
         )
+        _store_final_sample(False, score_reason)
         return None
 
     if rr < min_rr:
@@ -1212,6 +1298,8 @@ async def _prepare_signal(
             final_score=raw_score,
             details={"rr": round(rr, 2), "min_rr": round(min_rr, 2)},
         )
+        _add_score_adjustment("rr_low_penalty", 0.0, value=round(rr, 2))
+        _store_final_sample(False, "fail_rr")
         return None
 
     if side not in ("LONG", "SHORT") or rr < 1.5 or risk <= 0 or reward <= 0:
@@ -1223,6 +1311,8 @@ async def _prepare_signal(
             final_score=raw_score,
             details={"rr": round(rr, 2), "risk": round(risk, 6), "reward": round(reward, 6)},
         )
+        _add_score_adjustment("rr_low_penalty", 0.0, value=round(rr, 2))
+        _store_final_sample(False, "fail_rr")
         print(
             "[ai_signals] Pre-send check failed "
             f"{symbol}: side={side} rr={rr:.2f} risk={risk:.6f} reward={reward:.6f}"
@@ -1239,12 +1329,15 @@ async def _prepare_signal(
             final_score=raw_score,
             details={"volume_ratio": round(volume_ratio, 2), "min_ratio": round(min_volume_ratio, 2)},
         )
+        _add_score_adjustment("volume_penalty", 0.0, value=round(volume_ratio, 2))
+        _store_final_sample(False, "fail_volume")
         return None
 
     if timings is not None:
         timings["score_dt"] = time.perf_counter() - score_start
 
     _inc_final_passed()
+    _store_final_sample(True, None)
     return {
         "symbol": symbol,
         "direction": "long" if side == "LONG" else "short",
