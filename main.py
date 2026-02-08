@@ -2485,6 +2485,45 @@ def _format_filters_section(st, lang: str) -> str:
                 ),
             )
         )
+        trend_stats = setup_stage.get("trend", {})
+        if isinstance(trend_stats, dict):
+            detected = trend_stats.get("detected", {}) if isinstance(trend_stats.get("detected"), dict) else {}
+            details.append(i18n.t(lang, "DIAG_TREND_TITLE"))
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_TREND_MODE",
+                    value="yes" if trend_stats.get("enabled") else "no",
+                )
+            )
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_TREND_DETECTED",
+                    up=detected.get("up", 0),
+                    down=detected.get("down", 0),
+                    none=detected.get("none", 0),
+                )
+            )
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_TREND_SETUP_SUMMARY",
+                    checked=trend_stats.get("setup_checked", 0),
+                    passed=trend_stats.get("passed", 0),
+                    failed=trend_stats.get("failed", 0),
+                )
+            )
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_TREND_FAIL_REASONS",
+                    reasons=_format_reason_counts(trend_stats.get("fail_reasons", {})),
+                )
+            )
+            sample = trend_stats.get("sample")
+            if sample:
+                details.append(i18n.t(lang, "DIAG_TREND_SAMPLE", sample=sample))
     if final_stage:
         details.append(
             i18n.t(
