@@ -9,6 +9,7 @@ from statistics import mean
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ai_types import Candle
+from config import cfg
 from binance_rest import get_klines
 from db import get_state, set_state
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
@@ -64,7 +65,6 @@ EMA50_SCORE_WEAK = int(os.getenv("EMA50_SCORE_WEAK", "72"))
 EMA50_SCORE_MID = int(os.getenv("EMA50_SCORE_MID", "78"))
 MIN_PRE_SCORE = float(os.getenv("MIN_PRE_SCORE", "70"))
 PRE_SCORE_THRESHOLD = float(os.getenv("PRE_SCORE_THRESHOLD", "65"))
-FINAL_SCORE_THRESHOLD = float(os.getenv("FINAL_SCORE_THRESHOLD", "80"))
 AI_BLUECHIPS = os.getenv("AI_BLUECHIPS", "ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT")
 AI_MAX_DEEP_PER_CYCLE = int(os.getenv("AI_MAX_DEEP_PER_CYCLE", "3"))
 AI_DEEP_TOP_K = int(os.getenv("AI_DEEP_TOP_K", str(AI_MAX_DEEP_PER_CYCLE)))
@@ -402,7 +402,7 @@ async def process_confirm_retry_queue(
         )
         raw_score, breakdown = compute_score_breakdown(context)
         entry["attempts"] = attempts + 1
-        min_score = float(entry.get("min_score", FINAL_SCORE_THRESHOLD))
+        min_score = float(entry.get("min_score", cfg.final_score_threshold))
         if abs(raw_score) >= min_score:
             signal_base = dict(entry.get("signal_base") or {})
             signal_base.update(
@@ -1826,7 +1826,7 @@ async def scan_market(
     if batch_size is None:
         batch_size = int(os.getenv("AI_SCAN_BATCH_SIZE", "8"))
     if min_score is None:
-        min_score = FINAL_SCORE_THRESHOLD
+        min_score = cfg.final_score_threshold
     excluded = {item.strip().upper() for item in (excluded_symbols or set()) if item.strip()}
 
     if symbols is None:

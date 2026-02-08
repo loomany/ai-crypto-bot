@@ -46,7 +46,6 @@ from signals import (
     AI_STAGE_A_TOP_K,
     PRE_SCORE_THRESHOLD,
     MIN_PRE_SCORE,
-    FINAL_SCORE_THRESHOLD,
     AI_EMA50_NEAR_PCT,
     AI_POI_MAX_DISTANCE_PCT,
     AI_MIN_RR,
@@ -55,6 +54,7 @@ from signals import (
     AI_STRUCTURE_HARD_FAIL_ON_OPPOSITE,
     AI_STRUCTURE_WINDOW,
 )
+from config import cfg
 from symbol_cache import (
     filter_tradeable_symbols,
     get_all_usdt_symbols,
@@ -2262,10 +2262,21 @@ def _format_ai_section(st, now: float, lang: str) -> str:
             i18n.t(lang, "DIAG_AI_CONFIG_STAGE_A", value=AI_STAGE_A_TOP_K),
             i18n.t(lang, "DIAG_AI_CONFIG_PRESCORE_THRESHOLD", value=PRE_SCORE_THRESHOLD),
             i18n.t(lang, "DIAG_AI_CONFIG_PRESCORE_MIN", value=MIN_PRE_SCORE),
-            i18n.t(lang, "DIAG_AI_CONFIG_FINAL_THRESHOLD", value=FINAL_SCORE_THRESHOLD),
+            i18n.t(
+                lang, "DIAG_AI_CONFIG_FINAL_THRESHOLD", value=cfg.final_score_threshold
+            ),
             i18n.t(lang, "DIAG_AI_CONFIG_MIN_VOLUME", value=MIN_VOLUME_5M_USDT),
             i18n.t(lang, "DIAG_AI_CONFIG_PUMP_VOLUME", value=PUMP_VOLUME_MUL),
         ]
+    )
+    raw_final_threshold = os.getenv("FINAL_SCORE_THRESHOLD")
+    raw_final_threshold_display = (
+        raw_final_threshold if raw_final_threshold is not None else ""
+    )
+    details.append(
+        "  • Final threshold source: env_key=FINAL_SCORE_THRESHOLD "
+        f'raw_env="{raw_final_threshold_display}" '
+        f"parsed={cfg.final_score_threshold:g}"
     )
     final_stage = (st.last_stats or {}).get("final_stage") if st else None
     final_fails = final_stage.get("fail_reasons", {}) if isinstance(final_stage, dict) else {}
@@ -2311,7 +2322,7 @@ def _format_ai_section(st, now: float, lang: str) -> str:
         near_miss_samples = final_stage_debug.get("near_miss_samples") or []
         if near_miss_samples:
             near_miss = near_miss_samples[0]
-        threshold = final_stage_debug.get("threshold", FINAL_SCORE_THRESHOLD)
+        threshold = final_stage_debug.get("threshold", cfg.final_score_threshold)
         checked = final_stage_debug.get("checked", 0)
         passed = final_stage_debug.get("passed", 0)
         failed = final_stage_debug.get("failed", 0)
