@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -10,9 +11,16 @@ from health import (
     update_module_progress,
     update_current_symbol,
 )
-from db import update_signal_events_status
+from db import list_signal_events_by_identity, update_signal_events_status
 from signal_audit_db import fetch_open_signals, mark_signal_closed
 from settings import SIGNAL_TTL_SECONDS
+
+_signal_result_notifier = None
+
+
+def set_signal_result_notifier(handler) -> None:
+    global _signal_result_notifier
+    _signal_result_notifier = handler
 
 
 def _parse_kline(kline: list[Any]) -> Optional[Dict[str, float]]:
@@ -205,12 +213,26 @@ async def evaluate_open_signals(
             }
             status_value = status_map.get(result["outcome"])
             if status_value is not None:
+                module = str(signal.get("module", ""))
+                symbol = str(signal.get("symbol", ""))
+                ts_value = int(signal.get("sent_at", 0))
                 update_signal_events_status(
-                    module=str(signal.get("module", "")),
-                    symbol=str(signal.get("symbol", "")),
-                    ts=int(signal.get("sent_at", 0)),
+                    module=module,
+                    symbol=symbol,
+                    ts=ts_value,
                     status=status_value,
                 )
+                if _signal_result_notifier is not None:
+                    events = list_signal_events_by_identity(
+                        module=module,
+                        symbol=symbol,
+                        ts=ts_value,
+                    )
+                    notify_tasks = [
+                        _signal_result_notifier(dict(event)) for event in events
+                    ]
+                    if notify_tasks:
+                        await asyncio.gather(*notify_tasks)
         except Exception as exc:
             print(f"[signal_audit] Failed to evaluate signal {signal.get('signal_id')}: {exc}")
             continue

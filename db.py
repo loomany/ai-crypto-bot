@@ -474,13 +474,36 @@ def update_signal_events_status(
         cur = conn.execute(
             """
             UPDATE signal_events
-            SET status = ?
+            SET status = ?,
+                result = ?,
+                updated_at = ?
             WHERE module = ? AND symbol = ? AND ts = ?
             """,
-            (status, module, symbol, int(ts)),
+            (status, status, int(time.time()), module, symbol, int(ts)),
         )
         conn.commit()
         return cur.rowcount if cur.rowcount is not None else 0
+    finally:
+        conn.close()
+
+
+def list_signal_events_by_identity(
+    *,
+    module: str,
+    symbol: str,
+    ts: int,
+) -> List[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM signal_events
+            WHERE module = ? AND symbol = ? AND ts = ?
+            """,
+            (module, symbol, int(ts)),
+        )
+        return cur.fetchall()
     finally:
         conn.close()
 
