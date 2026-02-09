@@ -3017,6 +3017,45 @@ def _format_user_bot_status(chat_id: int) -> str:
         match = re.search(rf"{key}=(\\d+)", extra)
         return int(match.group(1)) if match else None
 
+    def _format_context(regime: str | None) -> tuple[str, str, str]:
+        if regime == "risk_off":
+            return (
+                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_STATE_RISK_OFF"),
+                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_DIRECTION_RISK_OFF"),
+                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_ACTIVITY_RISK_OFF"),
+            )
+        if regime == "risk_on":
+            return (
+                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_STATE_RISK_ON"),
+                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_DIRECTION_RISK_ON"),
+                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_ACTIVITY_RISK_ON"),
+            )
+        if regime == "neutral":
+            return (
+                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_STATE_NEUTRAL"),
+                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_DIRECTION_NEUTRAL"),
+                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_ACTIVITY_NEUTRAL"),
+            )
+        return (
+            i18n.t(lang, "SYSTEM_STATUS_CONTEXT_STATE_AUTO"),
+            i18n.t(lang, "SYSTEM_STATUS_CONTEXT_DIRECTION_AUTO"),
+            i18n.t(lang, "SYSTEM_STATUS_CONTEXT_ACTIVITY_AUTO"),
+        )
+
+    def _format_pump_impulse(stats: dict | None) -> str:
+        if not isinstance(stats, dict):
+            return i18n.t(lang, "SYSTEM_STATUS_PUMP_IMPULSE_UNKNOWN")
+        checked = int(stats.get("checked", 0) or 0)
+        found = int(stats.get("found", 0) or 0)
+        if checked <= 0:
+            return i18n.t(lang, "SYSTEM_STATUS_PUMP_IMPULSE_UNKNOWN")
+        ratio = found / checked
+        if ratio <= 0.1:
+            return i18n.t(lang, "SYSTEM_STATUS_PUMP_IMPULSE_MOST")
+        if ratio <= 0.3:
+            return i18n.t(lang, "SYSTEM_STATUS_PUMP_IMPULSE_SOME")
+        return i18n.t(lang, "SYSTEM_STATUS_PUMP_IMPULSE_FEW")
+
     def _format_last_ai_signal_parts() -> tuple[str, str, str]:
         row = get_last_signal_audit("ai_signals")
         if not row:
@@ -3071,6 +3110,29 @@ def _format_user_bot_status(chat_id: int) -> str:
         if extra_total is not None:
             ai_total = extra_total
     market_symbols_total = ai_total if ai_total else "—"
+    ai_chunk = ai.checked_last_cycle if ai else 0
+    if (not ai_chunk) and ai and ai.extra:
+        extra_chunk = _extract_from_extra(ai.extra, "chunk")
+        if extra_chunk is not None:
+            ai_chunk = extra_chunk
+    ai_chunk_size = ai_chunk if ai_chunk else "—"
+
+    ai_cycle_sec = "—"
+    if ai and ai.extra:
+        extra_cycle = _extract_from_extra(ai.extra, "cycle")
+        if extra_cycle is not None:
+            ai_cycle_sec = str(extra_cycle)
+
+    ai_safe_mode = False
+    if ai and isinstance(ai.state, dict):
+        ai_safe_mode = bool(ai.state.get("ai_safe_mode", False))
+    ai_safe_mode_text = (
+        i18n.t(lang, "SYSTEM_STATUS_SAFE_MODE_ON")
+        if ai_safe_mode
+        else i18n.t(lang, "SYSTEM_STATUS_SAFE_MODE_OFF")
+    )
+
+    market_context_state, market_context_direction, market_context_activity = _format_context(regime)
     pending_confirmations = 0
     if ai and isinstance(ai.state, dict):
         confirm_retry = ai.state.get("confirm_retry")
@@ -3085,13 +3147,23 @@ def _format_user_bot_status(chat_id: int) -> str:
         signals_status_text = i18n.t(lang, "SYSTEM_STATUS_SIGNALS_PAUSED")
 
     ideas_found_today = "—"
-    dropped_no_confirm_today = "—"
+    ideas_passed_today = "—"
+    ideas_rejected_today = "—"
     signals_sent_today = "—"
-    try:
-        last_24h = datetime.now() - timedelta(hours=24)
-        signals_sent_today = count_signals_sent_since(int(last_24h.timestamp()), module="ai_signals")
-    except Exception:
-        signals_sent_today = "—"
+    ai_stats = ai.last_stats if ai else None
+    if isinstance(ai_stats, dict):
+        pre_score = ai_stats.get("pre_score") if isinstance(ai_stats.get("pre_score"), dict) else {}
+        if pre_score:
+            ideas_found_today = pre_score.get("checked", "—")
+            ideas_passed_today = pre_score.get("passed", "—")
+            ideas_rejected_today = pre_score.get("failed", "—")
+        signals_found = ai_stats.get("signals_found")
+        if isinstance(signals_found, int):
+            signals_sent_today = signals_found
+    if ai and ai.extra:
+        extra_sent = _extract_from_extra(ai.extra, "sent")
+        if extra_sent is not None:
+            signals_sent_today = extra_sent
 
     last_signal_symbol_or_dash, last_signal_side_or_dash, last_signal_dt_or_dash = (
         _format_last_ai_signal_parts()
@@ -3102,6 +3174,7 @@ def _format_user_bot_status(chat_id: int) -> str:
         if pd and pd.last_tick
         else i18n.t(lang, "SYSTEM_STATUS_PUMP_PAUSED")
     )
+    pump_impulse_text = _format_pump_impulse(pd.last_stats if pd else None)
     return i18n.t(
         lang,
         "SYSTEM_STATUS_TEXT",
@@ -3109,15 +3182,23 @@ def _format_user_bot_status(chat_id: int) -> str:
         binance_status_text=binance_status_text,
         last_ok_age_sec=last_ok_age_sec,
         market_mode_text=market_mode_text,
+        market_context_state=market_context_state,
+        market_context_direction=market_context_direction,
+        market_context_activity=market_context_activity,
         market_symbols_total=market_symbols_total,
+        ai_chunk_size=ai_chunk_size,
+        ai_cycle_sec=ai_cycle_sec,
+        ai_safe_mode_text=ai_safe_mode_text,
         signals_status_text=signals_status_text,
         ideas_found_today=ideas_found_today,
-        dropped_no_confirm_today=dropped_no_confirm_today,
+        ideas_passed_today=ideas_passed_today,
+        ideas_rejected_today=ideas_rejected_today,
         signals_sent_today=signals_sent_today,
         last_signal_symbol_or_dash=last_signal_symbol_or_dash,
         last_signal_side_or_dash=last_signal_side_or_dash,
         last_signal_dt_or_dash=last_signal_dt_or_dash,
         pump_status_text=pump_status_text,
+        pump_impulse_text=pump_impulse_text,
     )
 
 
