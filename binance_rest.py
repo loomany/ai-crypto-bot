@@ -10,12 +10,6 @@ from typing import Any, Optional
 import aiohttp
 
 from binance_limits import BINANCE_WEIGHT_TRACKER
-from health import (
-    increment_request_count,
-    increment_klines_request_count,
-    update_binance_global_state,
-    update_binance_stage,
-)
 from rate_limiter import BINANCE_RATE_LIMITER
 
 # ---- shared session (one per process) ----
@@ -115,6 +109,42 @@ _AGGTRADES_CACHE_TTL_SEC = _env_int("AGGTRADES_TTL_SEC", 10)
 _BINANCE_REQUEST_MODULE = ContextVar("binance_request_module", default=None)
 
 
+def _get_health_callbacks():
+    from health import (
+        increment_request_count,
+        increment_klines_request_count,
+        update_binance_global_state,
+        update_binance_stage,
+    )
+
+    return (
+        increment_request_count,
+        increment_klines_request_count,
+        update_binance_global_state,
+        update_binance_stage,
+    )
+
+
+def _increment_request_count(module: str) -> None:
+    increment_request_count, _, _, _ = _get_health_callbacks()
+    increment_request_count(module)
+
+
+def _increment_klines_request_count(module: str) -> None:
+    _, increment_klines_request_count, _, _ = _get_health_callbacks()
+    increment_klines_request_count(module)
+
+
+def _update_binance_global_state(**kwargs: float | int) -> None:
+    _, _, update_binance_global_state, _ = _get_health_callbacks()
+    update_binance_global_state(**kwargs)
+
+
+def _update_binance_stage(module: str, stage: str) -> None:
+    _, _, _, update_binance_stage = _get_health_callbacks()
+    update_binance_stage(module, stage)
+
+
 async def get_shared_session() -> aiohttp.ClientSession:
     global _SHARED_SESSION, _SHARED_CONNECTOR
     async with _SHARED_LOCK:
@@ -157,7 +187,7 @@ async def _restart_shared_session(reason: str | None = None) -> None:
     async with _STATE_LOCK:
         _SESSION_RESTARTS += 1
         _CONSECUTIVE_TIMEOUTS = 0
-        update_binance_global_state(
+        _update_binance_global_state(
             consecutive_timeouts=_CONSECUTIVE_TIMEOUTS,
             session_restarts=_SESSION_RESTARTS,
         )
@@ -172,7 +202,7 @@ async def _record_success(module: Optional[str]) -> None:
         _CONSECUTIVE_TIMEOUTS = 0
         _LAST_SUCCESS_TS = now
         _HAS_SUCCESS = True
-        update_binance_global_state(
+        _update_binance_global_state(
             last_success_ts=_LAST_SUCCESS_TS,
             consecutive_timeouts=_CONSECUTIVE_TIMEOUTS,
         )
@@ -190,7 +220,7 @@ async def _record_timeout_or_network_error(module: Optional[str]) -> None:
     global _CONSECUTIVE_TIMEOUTS
     async with _STATE_LOCK:
         _CONSECUTIVE_TIMEOUTS += 1
-        update_binance_global_state(consecutive_timeouts=_CONSECUTIVE_TIMEOUTS)
+        _update_binance_global_state(consecutive_timeouts=_CONSECUTIVE_TIMEOUTS)
         should_restart = _CONSECUTIVE_TIMEOUTS >= 3
     if should_restart:
         await _restart_shared_session(reason="consecutive timeouts")
@@ -229,14 +259,14 @@ def _track_request() -> None:
     module = _BINANCE_REQUEST_MODULE.get()
     if module:
         _BINANCE_METRICS.increment(_BINANCE_METRICS.requests_total, module)
-        increment_request_count(module)
+        _increment_request_count(module)
 
 
 def _track_klines_request() -> None:
     module = _BINANCE_REQUEST_MODULE.get()
     if module:
         _BINANCE_METRICS.increment(_BINANCE_METRICS.klines_requests, module)
-        increment_klines_request_count(module)
+        _increment_klines_request_count(module)
 
 
 def _increment_stat(bucket: dict[str, int], module: Optional[str], count: int = 1) -> None:
@@ -297,7 +327,7 @@ async def fetch_json(
 
     module = _BINANCE_REQUEST_MODULE.get()
     if module:
-        update_binance_stage(module, stage)
+        _update_binance_stage(module, stage)
 
     for attempt in range(_MAX_RETRIES + 1):
         try:
