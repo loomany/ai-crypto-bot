@@ -375,6 +375,48 @@ def get_last_signal_audit(module: str) -> dict | None:
         conn.close()
 
 
+def count_signals_sent_since(
+    since_ts: int,
+    *,
+    module: str | None = "ai_signals",
+) -> int:
+    conn = sqlite3.connect(get_db_path())
+    conn.row_factory = sqlite3.Row
+    try:
+        blocked_clause, blocked_params = _blocked_symbols_clause()
+        module_clause = ""
+        params: list[object] = [since_ts]
+        if module:
+            module_clause = "AND module = ?"
+            params.append(module)
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM signal_audit
+            WHERE sent_at >= ?
+              {module_clause}
+              AND NOT (
+                symbol LIKE 'TEST%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%test%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%тест%'
+              )
+              {blocked_clause}
+            """,
+            [*params, *blocked_params],
+        )
+        row = cur.fetchone()
+        if not row:
+            return 0
+        return int(row["total"] or 0)
+    finally:
+        conn.close()
+
+
 def get_ai_signal_stats(days: int | None) -> dict:
     now = int(time.time())
     params: list[Any] = ["TP1", "TP2", "SL", "EXPIRED"]
