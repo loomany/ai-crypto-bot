@@ -65,7 +65,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "MENU_STATS": "📊 Статистика",
         "MENU_SYSTEM": "ℹ️ О системе",
         "MENU_BACK": "⬅️ Назад",
-        "SYS_STATUS": "🧠 Статус анализ рынка",
+        "SYS_STATUS": "🧠 Статус анализа рынка",
         "SYS_DIAG_ADMIN": "🧪 Диагностика (админ)",
         "SYS_TEST_AI": "🧪 Тест AI (всем)",
         "SYS_TEST_PD": "🧪 Тест Pump/Dump (всем)",
@@ -75,19 +75,26 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SYSTEM_STATUS_TEXT": (
             "🧠 Статус анализа рынка\n\n"
             "🔌 Связь с Binance: {binance_ok_emoji} {binance_status_text}\n"
-            "⏱ последний анализ: {last_ok_age_sec} сек назад\n\n"
-            "📊 Режим рынка: {market_mode_text}\n\n"
-            "🎯 AI-анализ:\n"
-            "• рынок анализируется: {market_symbols_total} монет\n"
-            "• сигналы: {signals_status_text}\n\n"
-            "🧪 За 24 часа:\n"
-            "• найдено идей: {ideas_found_today}\n"
-            "• отброшено без подтверждения: {dropped_no_confirm_today}\n"
+            "⏱ последний цикл анализа: {last_ok_age_sec} сек назад\n\n"
+            "📊 Контекст рынка:\n"
+            "• общее состояние: {market_context_state}\n"
+            "• рабочее направление: {market_context_direction}\n"
+            "• торговая активность: {market_context_activity}\n\n"
+            "🎯 AI-анализ (реальное время):\n"
+            "• рынок в работе: {market_symbols_total} монет\n"
+            "• одновременно анализируется: {ai_chunk_size}\n"
+            "• среднее время цикла: ~{ai_cycle_sec} сек\n"
+            "• {ai_safe_mode_text}\n\n"
+            "🧪 Фильтрация сценариев:\n"
+            "• первичных идей: {ideas_found_today}\n"
+            "• прошли первичный фильтр: {ideas_passed_today}\n"
+            "• отклонены (RR / структура / риск): {ideas_rejected_today}\n"
             "• отправлено сигналов: {signals_sent_today}\n\n"
             "📉 Последний подтверждённый сценарий:\n"
             "{last_signal_symbol_or_dash} — {last_signal_side_or_dash} | {last_signal_dt_or_dash}\n\n"
             "⚡ Pump / Dump монитор:\n"
-            "• {pump_status_text}\n"
+            "• статус: {pump_status_text}\n"
+            "• импульсных движений без подтверждения: {pump_impulse_text}\n"
         ),
         "SYSTEM_STATUS_BINANCE_ACTIVE": "активна",
         "SYSTEM_STATUS_BINANCE_DOWN": "нет связи",
@@ -95,10 +102,28 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SYSTEM_STATUS_MARKET_NEUTRAL": "нейтральный",
         "SYSTEM_STATUS_MARKET_RISK_ON": "бычий (приоритет LONG)",
         "SYSTEM_STATUS_MARKET_AUTO": "по рынку",
+        "SYSTEM_STATUS_CONTEXT_STATE_RISK_OFF": "флет / давление вниз",
+        "SYSTEM_STATUS_CONTEXT_STATE_RISK_ON": "рост / импульс вверх",
+        "SYSTEM_STATUS_CONTEXT_STATE_NEUTRAL": "флет / смешанный",
+        "SYSTEM_STATUS_CONTEXT_STATE_AUTO": "по рынку",
+        "SYSTEM_STATUS_CONTEXT_DIRECTION_RISK_OFF": "SHORT",
+        "SYSTEM_STATUS_CONTEXT_DIRECTION_RISK_ON": "LONG",
+        "SYSTEM_STATUS_CONTEXT_DIRECTION_NEUTRAL": "по рынку",
+        "SYSTEM_STATUS_CONTEXT_DIRECTION_AUTO": "по рынку",
+        "SYSTEM_STATUS_CONTEXT_ACTIVITY_RISK_OFF": "выборочная",
+        "SYSTEM_STATUS_CONTEXT_ACTIVITY_RISK_ON": "активная",
+        "SYSTEM_STATUS_CONTEXT_ACTIVITY_NEUTRAL": "умеренная",
+        "SYSTEM_STATUS_CONTEXT_ACTIVITY_AUTO": "умеренная",
+        "SYSTEM_STATUS_SAFE_MODE_ON": "активный режим защиты (SAFE)",
+        "SYSTEM_STATUS_SAFE_MODE_OFF": "режим защиты: обычный",
+        "SYSTEM_STATUS_PUMP_IMPULSE_MOST": "большинство",
+        "SYSTEM_STATUS_PUMP_IMPULSE_SOME": "значительная часть",
+        "SYSTEM_STATUS_PUMP_IMPULSE_FEW": "меньшинство",
+        "SYSTEM_STATUS_PUMP_IMPULSE_UNKNOWN": "нет данных",
         "SYSTEM_STATUS_SIGNALS_PENDING": "ожидаю подтверждение",
         "SYSTEM_STATUS_SIGNALS_RUNNING": "работаю",
         "SYSTEM_STATUS_SIGNALS_PAUSED": "пауза/ошибка",
-        "SYSTEM_STATUS_PUMP_ACTIVE": "монитор активен",
+        "SYSTEM_STATUS_PUMP_ACTIVE": "активен",
         "SYSTEM_STATUS_PUMP_PAUSED": "пауза/ошибка",
         "BTN_AI_ON": "🔔 Включить AI-уведомления",
         "BTN_AI_OFF": "🚫 Отключить AI-уведомления",
@@ -592,19 +617,26 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SYSTEM_STATUS_TEXT": (
             "🧠 Market Analysis Status\n\n"
             "🔌 Binance connection: {binance_ok_emoji} {binance_status_text}\n"
-            "⏱ last analysis: {last_ok_age_sec} sec ago\n\n"
-            "📊 Market mode: {market_mode_text}\n\n"
-            "🎯 AI analysis:\n"
-            "• market coverage: {market_symbols_total} coins\n"
-            "• signals: {signals_status_text}\n\n"
-            "🧪 Last 24 hours:\n"
-            "• ideas found: {ideas_found_today}\n"
-            "• dropped without confirmation: {dropped_no_confirm_today}\n"
+            "⏱ last analysis cycle: {last_ok_age_sec} sec ago\n\n"
+            "📊 Market context:\n"
+            "• overall state: {market_context_state}\n"
+            "• working bias: {market_context_direction}\n"
+            "• trading activity: {market_context_activity}\n\n"
+            "🎯 AI analysis (real time):\n"
+            "• market in work: {market_symbols_total} coins\n"
+            "• concurrently analyzed: {ai_chunk_size}\n"
+            "• average cycle time: ~{ai_cycle_sec} sec\n"
+            "• {ai_safe_mode_text}\n\n"
+            "🧪 Scenario filtering:\n"
+            "• primary ideas: {ideas_found_today}\n"
+            "• passed primary filter: {ideas_passed_today}\n"
+            "• rejected (RR / structure / risk): {ideas_rejected_today}\n"
             "• signals sent: {signals_sent_today}\n\n"
             "📉 Last confirmed scenario:\n"
             "{last_signal_symbol_or_dash} — {last_signal_side_or_dash} | {last_signal_dt_or_dash}\n\n"
             "⚡ Pump / Dump monitor:\n"
-            "• {pump_status_text}\n"
+            "• status: {pump_status_text}\n"
+            "• impulses without confirmation: {pump_impulse_text}\n"
         ),
         "SYSTEM_STATUS_BINANCE_ACTIVE": "connected",
         "SYSTEM_STATUS_BINANCE_DOWN": "no connection",
@@ -612,10 +644,28 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SYSTEM_STATUS_MARKET_NEUTRAL": "neutral",
         "SYSTEM_STATUS_MARKET_RISK_ON": "bullish (LONG priority)",
         "SYSTEM_STATUS_MARKET_AUTO": "by market",
+        "SYSTEM_STATUS_CONTEXT_STATE_RISK_OFF": "range / downside pressure",
+        "SYSTEM_STATUS_CONTEXT_STATE_RISK_ON": "uptrend / upside impulse",
+        "SYSTEM_STATUS_CONTEXT_STATE_NEUTRAL": "range / mixed",
+        "SYSTEM_STATUS_CONTEXT_STATE_AUTO": "by market",
+        "SYSTEM_STATUS_CONTEXT_DIRECTION_RISK_OFF": "SHORT",
+        "SYSTEM_STATUS_CONTEXT_DIRECTION_RISK_ON": "LONG",
+        "SYSTEM_STATUS_CONTEXT_DIRECTION_NEUTRAL": "by market",
+        "SYSTEM_STATUS_CONTEXT_DIRECTION_AUTO": "by market",
+        "SYSTEM_STATUS_CONTEXT_ACTIVITY_RISK_OFF": "selective",
+        "SYSTEM_STATUS_CONTEXT_ACTIVITY_RISK_ON": "active",
+        "SYSTEM_STATUS_CONTEXT_ACTIVITY_NEUTRAL": "moderate",
+        "SYSTEM_STATUS_CONTEXT_ACTIVITY_AUTO": "moderate",
+        "SYSTEM_STATUS_SAFE_MODE_ON": "protection mode active (SAFE)",
+        "SYSTEM_STATUS_SAFE_MODE_OFF": "protection mode: normal",
+        "SYSTEM_STATUS_PUMP_IMPULSE_MOST": "most",
+        "SYSTEM_STATUS_PUMP_IMPULSE_SOME": "a significant share",
+        "SYSTEM_STATUS_PUMP_IMPULSE_FEW": "minority",
+        "SYSTEM_STATUS_PUMP_IMPULSE_UNKNOWN": "no data",
         "SYSTEM_STATUS_SIGNALS_PENDING": "awaiting confirmation",
         "SYSTEM_STATUS_SIGNALS_RUNNING": "running",
         "SYSTEM_STATUS_SIGNALS_PAUSED": "paused/error",
-        "SYSTEM_STATUS_PUMP_ACTIVE": "monitor active",
+        "SYSTEM_STATUS_PUMP_ACTIVE": "active",
         "SYSTEM_STATUS_PUMP_PAUSED": "paused/error",
         "PAYWALL_AI": (
             "🔒 AI signals are available by subscription.\n"
