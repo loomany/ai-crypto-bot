@@ -29,6 +29,14 @@ def _format_pct(value: float) -> str:
     return f"{value:+.1f}%"
 
 
+def _signal_quality_block(score: int, lang: str) -> str:
+    if score >= 90:
+        return i18n.t(lang, "SIGNAL_QUALITY_RECOMMENDED")
+    if score >= 80:
+        return i18n.t(lang, "SIGNAL_QUALITY_HIGH_RISK")
+    return i18n.t(lang, "SIGNAL_QUALITY_ANALYSIS_ONLY")
+
+
 def format_scenario_message(
     *,
     lang: str,
@@ -56,6 +64,7 @@ def format_scenario_message(
     entry_mid = (entry_from + entry_to) / 2
 
     score = max(0, min(100, int(score)))
+    quality_block = _signal_quality_block(score, lang)
 
     holds_rule = (
         i18n.t(lang, "SCENARIO_VALID_ABOVE")
@@ -124,6 +133,8 @@ def format_scenario_message(
         breakdown_lines.append(f"• {label}: {sign}{abs(delta_value)}")
 
     lines = [
+        quality_block,
+        "",
         symbol_text,
         i18n.t(lang, "SCENARIO_POSSIBLE_LINE", emoji=emoji, scenario=scenario_text),
         i18n.t(lang, "SCENARIO_TIMEFRAME_LINE", timeframe=timeframe),

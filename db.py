@@ -879,6 +879,69 @@ def get_signal_score_bucket_counts(
         conn.close()
 
 
+def get_signal_avg_rr(
+    *,
+    user_id: int | None,
+    since_ts: int | None,
+    min_score: float | None,
+    score_min: float | None,
+    score_max: float | None,
+) -> dict[str, float | int]:
+    conn = get_conn()
+    try:
+        clauses = ["(is_test IS NULL OR is_test = 0)"]
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
+        if since_ts is not None:
+            clauses.append("ts >= ?")
+            params.append(int(since_ts))
+        if min_score is not None:
+            clauses.append("score >= ?")
+            params.append(float(min_score))
+        if score_min is not None:
+            clauses.append("score >= ?")
+            params.append(float(score_min))
+        if score_max is not None:
+            clauses.append("score <= ?")
+            params.append(float(score_max))
+        clauses.append(
+            "NOT ("
+            "symbol LIKE 'TEST%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
+        )
+        _append_blocked_symbols_filter(clauses, params)
+        where_clause = " AND ".join(clauses)
+        cur = conn.execute(
+            f"""
+            SELECT poi_low, poi_high, sl, tp1
+            FROM signal_events
+            WHERE {where_clause}
+            """,
+            params,
+        )
+        rr_values: list[float] = []
+        for row in cur.fetchall():
+            try:
+                entry_mid = (float(row["poi_low"]) + float(row["poi_high"])) / 2
+                sl = float(row["sl"])
+                tp1 = float(row["tp1"])
+            except (TypeError, ValueError):
+                continue
+            risk = abs(entry_mid - sl)
+            reward = abs(tp1 - entry_mid)
+            if risk > 0 and reward > 0:
+                rr_values.append(reward / risk)
+        avg_rr = sum(rr_values) / len(rr_values) if rr_values else 0.0
+        return {"avg_rr": avg_rr, "samples": int(len(rr_values))}
+    finally:
+        conn.close()
+
+
 def get_signal_event(
     *,
     user_id: int | None,
