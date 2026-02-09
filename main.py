@@ -762,8 +762,18 @@ def _format_signal_event_status(raw_status: str, lang: str) -> str:
     return status_map.get(raw_status, raw_status)
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _format_event_time(ts: int) -> str:
-    dt = datetime.fromtimestamp(ts, tz=ALMATY_TZ)
+    try:
+        dt = datetime.fromtimestamp(int(ts), tz=ALMATY_TZ)
+    except (OSError, OverflowError, TypeError, ValueError):
+        return "—"
     return dt.strftime("%d.%m %H:%M")
 
 
@@ -925,43 +935,47 @@ def _get_history_page(
     time_window: str,
     page: int,
 ) -> tuple[int, int, list[dict], dict, dict[str, dict[str, int]], float]:
-    enforce_signal_ttl()
-    now_ts = int(time.time())
-    since_ts = window_since(time_window, now_ts)
-    total = count_signal_events(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=80,
-    )
-    pages = max(1, (total + 9) // 10)
-    page = max(0, min(page, pages - 1))
-    events_rows = list_signal_events(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=80,
-        limit=10,
-        offset=page * 10,
-    )
-    events = [dict(row) for row in events_rows]
-    outcome_counts = get_signal_outcome_counts(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=80,
-    )
-    score_bucket_counts = get_signal_score_bucket_counts(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=80,
-    )
-    rr_stats = get_signal_avg_rr(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=80,
-        score_min=90,
-        score_max=100,
-    )
-    avg_rr_90_100 = float(rr_stats.get("avg_rr", 0.0))
-    return page, pages, events, outcome_counts, score_bucket_counts, avg_rr_90_100
+    try:
+        enforce_signal_ttl()
+        now_ts = int(time.time())
+        since_ts = window_since(time_window, now_ts)
+        total = count_signal_events(
+            user_id=None,
+            since_ts=since_ts,
+            min_score=80,
+        )
+        pages = max(1, (total + 9) // 10)
+        page = max(0, min(page, pages - 1))
+        events_rows = list_signal_events(
+            user_id=None,
+            since_ts=since_ts,
+            min_score=80,
+            limit=10,
+            offset=page * 10,
+        )
+        events = [dict(row) for row in events_rows]
+        outcome_counts = get_signal_outcome_counts(
+            user_id=None,
+            since_ts=since_ts,
+            min_score=80,
+        )
+        score_bucket_counts = get_signal_score_bucket_counts(
+            user_id=None,
+            since_ts=since_ts,
+            min_score=80,
+        )
+        rr_stats = get_signal_avg_rr(
+            user_id=None,
+            since_ts=since_ts,
+            min_score=80,
+            score_min=90,
+            score_max=100,
+        )
+        avg_rr_90_100 = float(rr_stats.get("avg_rr", 0.0))
+        return page, pages, events, outcome_counts, score_bucket_counts, avg_rr_90_100
+    except Exception as exc:
+        logger.exception("history page load failed: %s", exc)
+        return 0, 1, [], {}, {}, 0.0
 
 
 async def _render_history(
@@ -1606,9 +1620,9 @@ def _archive_inline_kb(
             [
                 InlineKeyboardButton(
                     text=(
-                        f"{status_icon} Score {int(event.get('score', 0))} • "
+                        f"{status_icon} Score {_safe_int(event.get('score', 0))} • "
                         f"{event.get('symbol')} {event.get('side')} | "
-                        f"{_format_event_time(int(event.get('ts', 0)))}"
+                        f"{_format_event_time(_safe_int(event.get('ts', 0)))}"
                     ),
                     callback_data=f"sig_open:{time_window}:{event.get('id')}",
                 )
