@@ -68,6 +68,7 @@ def format_scenario_message(
         else i18n.t(lang, "SCENARIO_CONDITION_ABOVE")
     )
     invalid_level = _format_price(sl, price_precision)
+    sl_pct = (sl / entry_mid - 1) * 100
 
     tp_candidates = [tp1, tp2]
     if is_long:
@@ -145,6 +146,14 @@ def format_scenario_message(
             "SCENARIO_INVALIDATION_LINE",
             condition=stop_condition,
             level=invalid_level,
+        ),
+        "",
+        i18n.t(lang, "SCENARIO_SL_HEADER"),
+        i18n.t(
+            lang,
+            "SCENARIO_SL_LINE",
+            price=invalid_level,
+            pct=_format_pct(sl_pct),
         ),
         "",
         i18n.t(lang, "SCENARIO_TARGETS_HEADER"),
