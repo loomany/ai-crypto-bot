@@ -78,6 +78,7 @@ from health import (
     update_module_progress,
     update_current_symbol,
     PUMP_CYCLE_SLEEP_SEC,
+    load_module_statuses,
 )
 
 from db import (
@@ -258,6 +259,7 @@ def init_app_db():
         conn.close()
 
     init_storage_db()
+    load_module_statuses()
     init_signal_audit_tables()
     blocked_symbols = sorted(get_blocked_symbols())
     if blocked_symbols:
@@ -3069,8 +3071,6 @@ def _format_user_bot_status(chat_id: int) -> str:
         if extra_total is not None:
             ai_total = extra_total
     market_symbols_total = ai_total if ai_total else "—"
-    current_symbol_or_dash = ai.current_symbol if ai and ai.current_symbol else "—"
-
     pending_confirmations = 0
     if ai and isinstance(ai.state, dict):
         confirm_retry = ai.state.get("confirm_retry")
@@ -3088,8 +3088,8 @@ def _format_user_bot_status(chat_id: int) -> str:
     dropped_no_confirm_today = "—"
     signals_sent_today = "—"
     try:
-        start_of_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        signals_sent_today = count_signals_sent_since(int(start_of_day.timestamp()), module="ai_signals")
+        last_24h = datetime.now() - timedelta(hours=24)
+        signals_sent_today = count_signals_sent_since(int(last_24h.timestamp()), module="ai_signals")
     except Exception:
         signals_sent_today = "—"
 
@@ -3102,7 +3102,6 @@ def _format_user_bot_status(chat_id: int) -> str:
         if pd and pd.last_tick
         else i18n.t(lang, "SYSTEM_STATUS_PUMP_PAUSED")
     )
-    pump_current_symbol_or_dash = pd.current_symbol if pd and pd.current_symbol else "—"
     return i18n.t(
         lang,
         "SYSTEM_STATUS_TEXT",
@@ -3111,7 +3110,6 @@ def _format_user_bot_status(chat_id: int) -> str:
         last_ok_age_sec=last_ok_age_sec,
         market_mode_text=market_mode_text,
         market_symbols_total=market_symbols_total,
-        current_symbol_or_dash=current_symbol_or_dash,
         signals_status_text=signals_status_text,
         ideas_found_today=ideas_found_today,
         dropped_no_confirm_today=dropped_no_confirm_today,
@@ -3120,7 +3118,6 @@ def _format_user_bot_status(chat_id: int) -> str:
         last_signal_side_or_dash=last_signal_side_or_dash,
         last_signal_dt_or_dash=last_signal_dt_or_dash,
         pump_status_text=pump_status_text,
-        pump_current_symbol_or_dash=pump_current_symbol_or_dash,
     )
 
 

@@ -79,9 +79,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "📊 Режим рынка: {market_mode_text}\n\n"
             "🎯 AI-анализ:\n"
             "• рынок анализируется: {market_symbols_total} монет\n"
-            "• сейчас проверяю: {current_symbol_or_dash}\n"
             "• сигналы: {signals_status_text}\n\n"
-            "🧪 Сегодня:\n"
+            "🧪 За 24 часа:\n"
             "• найдено идей: {ideas_found_today}\n"
             "• отброшено без подтверждения: {dropped_no_confirm_today}\n"
             "• отправлено сигналов: {signals_sent_today}\n\n"
@@ -89,7 +88,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "{last_signal_symbol_or_dash} — {last_signal_side_or_dash} | {last_signal_dt_or_dash}\n\n"
             "⚡ Pump / Dump монитор:\n"
             "• {pump_status_text}\n"
-            "• сейчас проверяю: {pump_current_symbol_or_dash}"
         ),
         "SYSTEM_STATUS_BINANCE_ACTIVE": "активна",
         "SYSTEM_STATUS_BINANCE_DOWN": "нет связи",
@@ -598,9 +596,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "📊 Market mode: {market_mode_text}\n\n"
             "🎯 AI analysis:\n"
             "• market coverage: {market_symbols_total} coins\n"
-            "• currently scanning: {current_symbol_or_dash}\n"
             "• signals: {signals_status_text}\n\n"
-            "🧪 Today:\n"
+            "🧪 Last 24 hours:\n"
             "• ideas found: {ideas_found_today}\n"
             "• dropped without confirmation: {dropped_no_confirm_today}\n"
             "• signals sent: {signals_sent_today}\n\n"
@@ -608,7 +605,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "{last_signal_symbol_or_dash} — {last_signal_side_or_dash} | {last_signal_dt_or_dash}\n\n"
             "⚡ Pump / Dump monitor:\n"
             "• {pump_status_text}\n"
-            "• currently scanning: {pump_current_symbol_or_dash}"
         ),
         "SYSTEM_STATUS_BINANCE_ACTIVE": "connected",
         "SYSTEM_STATUS_BINANCE_DOWN": "no connection",
