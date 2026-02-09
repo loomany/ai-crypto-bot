@@ -899,10 +899,13 @@ async def _edit_message_with_chunks(
     first_chunk = chunks[0] if chunks else ""
     try:
         await message.edit_text(first_chunk, reply_markup=reply_markup)
-    except Exception:
-        await message.answer(first_chunk, reply_markup=reply_markup)
+    except Exception as exc:
+        logger.warning("edit message failed, sending new: %s", exc)
+        with suppress(Exception):
+            await message.answer(first_chunk, reply_markup=reply_markup)
     for chunk in chunks[1:]:
-        await message.answer(chunk)
+        with suppress(Exception):
+            await message.answer(chunk)
 
 
 def _history_state_key(user_id: int) -> str:
