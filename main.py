@@ -1015,7 +1015,7 @@ def _is_final_signal_status(status: str) -> bool:
     return normalized in {"TP1", "TP2", "BE", "SL", "EXP", "NF"}
 
 
-def _format_short_result_message(event: dict) -> str | None:
+def _format_short_result_message(event: dict, lang: str) -> str | None:
     status_raw = str(event.get("result") or event.get("status") or "OPEN")
     status = _normalize_signal_status(status_raw)
     symbol = str(event.get("symbol", "")).upper()
@@ -1023,78 +1023,75 @@ def _format_short_result_message(event: dict) -> str | None:
     score = int(event.get("score", 0))
     entry_from = float(event.get("poi_low", 0.0))
     entry_to = float(event.get("poi_high", 0.0))
+    sl = float(event.get("sl", 0.0))
     tp1 = float(event.get("tp1", 0.0))
     tp2 = float(event.get("tp2", 0.0))
+    if not sl:
+        return None
+
     header = ""
-    subtitle = ""
     detail_lines: list[str] = []
     extra_lines: list[str] = []
 
     if entry_from or entry_to:
         if entry_from and entry_to:
-            extra_lines.append(
-                f"Вход: {_format_price(entry_from)}–{_format_price(entry_to)}"
-            )
+            entry_value = f"{_format_price(entry_from)}–{_format_price(entry_to)}"
         else:
-            extra_lines.append(f"Вход: {_format_price(entry_from or entry_to)}")
+            entry_value = _format_price(entry_from or entry_to)
+        extra_lines.append(
+            i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=entry_value)
+        )
+    extra_lines.append(
+        i18n.t(lang, "SIGNAL_RESULT_SL_LINE", price=_format_price(sl))
+    )
     if tp1:
-        extra_lines.append(f"TP1: {_format_price(tp1)}")
+        extra_lines.append(
+            i18n.t(lang, "SIGNAL_RESULT_TP1_LINE", price=_format_price(tp1))
+        )
     if tp2:
-        extra_lines.append(f"TP2: {_format_price(tp2)}")
+        extra_lines.append(
+            i18n.t(lang, "SIGNAL_RESULT_TP2_LINE", price=_format_price(tp2))
+        )
 
     if status == "TP1":
-        header = "✅ TP1"
-        subtitle = "✅ Сигнал закрылся в плюс"
+        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_TP1")
         detail_lines = [
             f"{symbol} {side}",
-            "Результат: TP1 🎯",
-            f"Score: {score}",
         ]
     elif status == "TP2":
-        header = "✅ TP2"
-        subtitle = "🚀 Сигнал выполнен полностью"
+        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_TP2")
         detail_lines = [
             f"{symbol} {side}",
-            "Результат: TP2 🎯",
-            f"Score: {score}",
         ]
     elif status == "BE":
-        header = "⚪ BE"
-        subtitle = "⚪ Сигнал ушёл в безубыток"
+        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_BE")
         detail_lines = [
             f"{symbol} {side}",
-            "Результат: BE",
-            "Риск снят",
         ]
     elif status == "SL":
-        header = "❌ SL"
-        subtitle = "❌ Сигнал закрылся по стопу"
+        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_SL")
         detail_lines = [
             f"{symbol} {side}",
-            "Результат: SL",
-            f"Score: {score}",
         ]
     elif status == "NF":
-        header = "⏳ NF"
-        subtitle = "⏳ Сигнал не активировался"
+        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_NF")
         detail_lines = [
             f"{symbol} {side}",
-            "Результат: NF",
-            "Цена не дошла до входа",
         ]
     elif status == "EXP":
-        header = "⏳ EXP"
-        subtitle = "⏳ Сценарий устарел"
+        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_EXP")
         detail_lines = [
             f"{symbol} {side}",
-            "Результат: EXP",
-            "Истёк лимит 12 часов",
         ]
     else:
         return None
 
     detail_lines.extend(extra_lines)
-    return "\n".join([header, subtitle, "", *detail_lines])
+    if status in {"TP1", "TP2", "SL"}:
+        detail_lines.append(
+            i18n.t(lang, "SIGNAL_RESULT_SCORE_LINE", score=score)
+        )
+    return "\n".join([header, "", *detail_lines])
 
 
 async def notify_signal_result_short(signal: dict) -> bool:
@@ -1116,7 +1113,8 @@ async def notify_signal_result_short(signal: dict) -> bool:
     if not is_notify_enabled(user_id, "ai_signals"):
         return False
 
-    message_text = _format_short_result_message(signal)
+    lang = get_user_lang(user_id) or "ru"
+    message_text = _format_short_result_message(signal, lang)
     if not message_text:
         return False
 
