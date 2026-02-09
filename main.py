@@ -859,6 +859,39 @@ def _format_archive_list(
     return "\n".join(lines)
 
 
+def _split_message_text(text: str, limit: int = 3800) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    lines = text.split("\n")
+    chunks: list[str] = []
+    current = ""
+    for line in lines:
+        candidate = line if not current else f"{current}\n{line}"
+        if len(candidate) > limit and current:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+async def _edit_message_with_chunks(
+    message: Message,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    chunks = _split_message_text(text)
+    first_chunk = chunks[0] if chunks else ""
+    try:
+        await message.edit_text(first_chunk, reply_markup=reply_markup)
+    except Exception:
+        await message.answer(first_chunk, reply_markup=reply_markup)
+    for chunk in chunks[1:]:
+        await message.answer(chunk)
+
+
 def _history_state_key(user_id: int) -> str:
     return f"history_ctx:{user_id}"
 
@@ -947,7 +980,8 @@ async def _render_history(
     lang = get_user_lang(callback.from_user.id) if callback.from_user else None
     lang = lang or "ru"
     _set_history_context(callback.from_user.id, time_window, page)
-    await callback.message.edit_text(
+    await _edit_message_with_chunks(
+        callback.message,
         _format_archive_list(
             lang,
             time_window,
@@ -1735,7 +1769,8 @@ async def sig_refresh(callback: CallbackQuery):
                     time_window=time_window,
                     page=page,
                 )
-                await callback.message.edit_text(
+                await _edit_message_with_chunks(
+                    callback.message,
                     _format_archive_list(
                         lang,
                         time_window,
