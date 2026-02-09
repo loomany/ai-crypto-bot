@@ -3013,193 +3013,242 @@ def _format_user_bot_status(chat_id: int) -> str:
     def _sec_ago(ts: float | int) -> int:
         return max(0, int(now - ts))
 
-    def _extract_from_extra(extra: str, key: str) -> int | None:
-        match = re.search(rf"{key}=(\\d+)", extra)
-        return int(match.group(1)) if match else None
+    def _int_value(value: object) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        return None
 
-    def _format_context(regime: str | None) -> tuple[str, str, str]:
-        if regime == "risk_off":
-            return (
-                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_STATE_RISK_OFF"),
-                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_DIRECTION_RISK_OFF"),
-                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_ACTIVITY_RISK_OFF"),
-            )
-        if regime == "risk_on":
-            return (
-                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_STATE_RISK_ON"),
-                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_DIRECTION_RISK_ON"),
-                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_ACTIVITY_RISK_ON"),
-            )
-        if regime == "neutral":
-            return (
-                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_STATE_NEUTRAL"),
-                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_DIRECTION_NEUTRAL"),
-                i18n.t(lang, "SYSTEM_STATUS_CONTEXT_ACTIVITY_NEUTRAL"),
-            )
-        return (
-            i18n.t(lang, "SYSTEM_STATUS_CONTEXT_STATE_AUTO"),
-            i18n.t(lang, "SYSTEM_STATUS_CONTEXT_DIRECTION_AUTO"),
-            i18n.t(lang, "SYSTEM_STATUS_CONTEXT_ACTIVITY_AUTO"),
-        )
-
-    def _format_pump_impulse(stats: dict | None) -> str:
-        if not isinstance(stats, dict):
-            return i18n.t(lang, "SYSTEM_STATUS_PUMP_IMPULSE_UNKNOWN")
-        checked = int(stats.get("checked", 0) or 0)
-        found = int(stats.get("found", 0) or 0)
-        if checked <= 0:
-            return i18n.t(lang, "SYSTEM_STATUS_PUMP_IMPULSE_UNKNOWN")
-        ratio = found / checked
-        if ratio <= 0.1:
-            return i18n.t(lang, "SYSTEM_STATUS_PUMP_IMPULSE_MOST")
-        if ratio <= 0.3:
-            return i18n.t(lang, "SYSTEM_STATUS_PUMP_IMPULSE_SOME")
-        return i18n.t(lang, "SYSTEM_STATUS_PUMP_IMPULSE_FEW")
-
-    def _format_last_ai_signal_parts() -> tuple[str, str, str]:
+    def _format_last_ai_signal_parts() -> tuple[str | None, str | None, str | None]:
         row = get_last_signal_audit("ai_signals")
         if not row:
-            return "—", "—", "—"
-        symbol = str(row.get("symbol") or "—")
+            return None, None, None
+        symbol = str(row.get("symbol") or "")
         direction = str(row.get("direction", "")).upper()
         side = "LONG" if direction == "LONG" else "SHORT" if direction == "SHORT" else direction
-        if not side:
-            side = "—"
         sent_at = int(row.get("sent_at", 0) or 0)
-        stamp = _format_event_time(sent_at) if sent_at else "—"
-        return symbol or "—", side, stamp
+        stamp = _format_event_time(sent_at) if sent_at else None
+        return symbol or None, side or None, stamp
 
     binance_ts = max(
         (st.binance_last_success_ts for st in MODULES.values() if st.binance_last_success_ts),
         default=0,
     )
-    last_cycle_ts = max(
-        (st.last_tick for st in MODULES.values() if st.last_tick),
-        default=0,
-    )
-    reference_ts = binance_ts or last_cycle_ts
-    last_ok_age_sec = str(_sec_ago(reference_ts)) if reference_ts else "—"
+    extra = _parse_extra_kv(ai.extra or "") if ai else {}
+    ai_state = ai.state if ai and isinstance(ai.state, dict) else {}
+    ai_stats = ai.last_stats if ai and isinstance(ai.last_stats, dict) else {}
 
+    lines: list[str] = [i18n.t(lang, "SYSTEM_STATUS_TITLE"), ""]
+
+    connection_lines: list[str] = []
     if binance_ts:
         age = _sec_ago(binance_ts)
         if age <= 60:
             binance_ok_emoji = "✅"
-            binance_status_text = i18n.t(lang, "SYSTEM_STATUS_BINANCE_ACTIVE")
+            binance_status_text = i18n.t(lang, "SYSTEM_STATUS_CONN_OK")
         else:
             binance_ok_emoji = "⚠️"
-            binance_status_text = i18n.t(lang, "SYSTEM_STATUS_BINANCE_DOWN")
+            binance_status_text = i18n.t(lang, "SYSTEM_STATUS_CONN_WARN")
+        connection_lines.append(
+            i18n.t(
+                lang,
+                "SYSTEM_STATUS_BINANCE_LINE",
+                status=f"{binance_ok_emoji} {binance_status_text}",
+            )
+        )
     else:
-        binance_ok_emoji = "❌"
-        binance_status_text = i18n.t(lang, "SYSTEM_STATUS_BINANCE_DOWN")
+        connection_lines.append(
+            i18n.t(
+                lang,
+                "SYSTEM_STATUS_BINANCE_LINE",
+                status=f"❌ {i18n.t(lang, 'SYSTEM_STATUS_CONN_ERROR')}",
+            )
+        )
 
-    regime = None
-    if ai and isinstance(ai.state, dict):
-        regime = ai.state.get("market_regime")
-    if regime == "risk_off":
-        market_mode_text = i18n.t(lang, "SYSTEM_STATUS_MARKET_RISK_OFF")
-    elif regime == "risk_on":
-        market_mode_text = i18n.t(lang, "SYSTEM_STATUS_MARKET_RISK_ON")
-    elif regime == "neutral":
-        market_mode_text = i18n.t(lang, "SYSTEM_STATUS_MARKET_NEUTRAL")
+    last_cycle_ts = _int_value(ai_state.get("last_cycle_ts")) if ai_state else None
+    if last_cycle_ts is None and ai and ai.last_tick:
+        last_cycle_ts = int(ai.last_tick)
+    if last_cycle_ts:
+        connection_lines.append(
+            i18n.t(
+                lang,
+                "SYSTEM_STATUS_LAST_CYCLE_LINE",
+                seconds=_sec_ago(last_cycle_ts),
+            )
+        )
+
+    if connection_lines:
+        lines.extend(connection_lines)
+        lines.append("")
+
+    market_lines: list[str] = []
+    setup_stage = ai_stats.get("setup_stage") if isinstance(ai_stats.get("setup_stage"), dict) else {}
+    trend_stats = setup_stage.get("trend") if isinstance(setup_stage.get("trend"), dict) else {}
+    detected = trend_stats.get("detected") if isinstance(trend_stats.get("detected"), dict) else None
+    trend_up = _int_value(detected.get("up")) if detected else None
+    trend_down = _int_value(detected.get("down")) if detected else None
+    if trend_up is not None and trend_down is not None:
+        if trend_down > trend_up:
+            market_state = i18n.t(lang, "SYSTEM_STATUS_MARKET_STATE_DOWN")
+        elif trend_up > trend_down:
+            market_state = i18n.t(lang, "SYSTEM_STATUS_MARKET_STATE_UP")
+        else:
+            market_state = i18n.t(lang, "SYSTEM_STATUS_MARKET_STATE_NEUTRAL")
+        market_lines.append(
+            i18n.t(lang, "SYSTEM_STATUS_MARKET_STATE_LINE", state=market_state)
+        )
+
+    shorts_allowed = ai_state.get("shorts_allowed") if ai_state else None
+    longs_allowed = ai_state.get("longs_allowed") if ai_state else None
+    shorts_restricted = ai_state.get("shorts_restricted") if ai_state else None
+    longs_restricted = ai_state.get("longs_restricted") if ai_state else None
+    if isinstance(shorts_allowed, bool) and isinstance(longs_restricted, bool):
+        if shorts_allowed and longs_restricted:
+            priority = i18n.t(lang, "SYSTEM_STATUS_MARKET_PRIORITY_SHORT")
+        else:
+            priority = i18n.t(lang, "SYSTEM_STATUS_MARKET_PRIORITY_SELECTIVE")
+        market_lines.append(
+            i18n.t(lang, "SYSTEM_STATUS_MARKET_PRIORITY_LINE", priority=priority)
+        )
+    elif isinstance(longs_allowed, bool) and isinstance(shorts_restricted, bool):
+        if longs_allowed and shorts_restricted:
+            priority = i18n.t(lang, "SYSTEM_STATUS_MARKET_PRIORITY_LONG")
+        else:
+            priority = i18n.t(lang, "SYSTEM_STATUS_MARKET_PRIORITY_SELECTIVE")
+        market_lines.append(
+            i18n.t(lang, "SYSTEM_STATUS_MARKET_PRIORITY_LINE", priority=priority)
+        )
+
+    signals_sent_cycle = _int_value(extra.get("sent")) if extra else None
+    if signals_sent_cycle is not None:
+        activity = (
+            i18n.t(lang, "SYSTEM_STATUS_MARKET_ACTIVITY_MODERATE")
+            if signals_sent_cycle > 0
+            else i18n.t(lang, "SYSTEM_STATUS_MARKET_ACTIVITY_LOW")
+        )
+        market_lines.append(
+            i18n.t(lang, "SYSTEM_STATUS_MARKET_ACTIVITY_LINE", activity=activity)
+        )
+
+    if market_lines:
+        lines.append(i18n.t(lang, "SYSTEM_STATUS_SECTION_MARKET"))
+        lines.extend(market_lines)
+        lines.append("")
+
+    analysis_lines: list[str] = []
+    market_symbols_total = _int_value(extra.get("universe")) if extra else None
+    if market_symbols_total is None:
+        market_symbols_total = _int_value(ai.total_symbols) if ai else None
+    if market_symbols_total is not None:
+        analysis_lines.append(
+            i18n.t(lang, "SYSTEM_STATUS_MARKET_COVERAGE_LINE", count=market_symbols_total)
+        )
+    symbols_per_cycle = _int_value(ai_state.get("ai_chunk_current")) if ai_state else None
+    if symbols_per_cycle is None:
+        symbols_per_cycle = _int_value(extra.get("chunk")) if extra else None
+    if symbols_per_cycle is None:
+        symbols_per_cycle = _int_value(ai.checked_last_cycle) if ai else None
+    if symbols_per_cycle is None:
+        symbols_per_cycle = _int_value(ai_state.get("symbols_checked")) if ai_state else None
+    if symbols_per_cycle is not None:
+        analysis_lines.append(
+            i18n.t(lang, "SYSTEM_STATUS_MARKET_CYCLE_LINE", count=symbols_per_cycle)
+        )
+    if ai_state:
+        adapt_flag = ai_state.get("ai_adapt_enabled")
+        safe_flag = ai_state.get("ai_safe_mode")
+        if adapt_flag is not None or safe_flag is not None:
+            safe_enabled = bool(adapt_flag) or bool(safe_flag)
+            safe_mode_label = (
+                i18n.t(lang, "SYSTEM_STATUS_SAFE_MODE_ON")
+                if safe_enabled
+                else i18n.t(lang, "SYSTEM_STATUS_SAFE_MODE_OFF")
+            )
+            analysis_lines.append(
+                i18n.t(lang, "SYSTEM_STATUS_SAFE_MODE_LINE", mode=safe_mode_label)
+            )
+    if analysis_lines:
+        lines.append(i18n.t(lang, "SYSTEM_STATUS_SECTION_AI"))
+        lines.extend(analysis_lines)
+        lines.append("")
+
+    filter_lines: list[str] = []
+    pre_score = ai_stats.get("pre_score") if isinstance(ai_stats.get("pre_score"), dict) else {}
+    prescore_checked = _int_value(pre_score.get("checked")) if pre_score else None
+    prescore_passed = _int_value(pre_score.get("passed")) if pre_score else None
+    if prescore_checked is not None:
+        filter_lines.append(
+            i18n.t(lang, "SYSTEM_STATUS_PRESCORE_CHECKED_LINE", count=prescore_checked)
+        )
+    if prescore_passed is not None:
+        filter_lines.append(
+            i18n.t(lang, "SYSTEM_STATUS_PRESCORE_PASSED_LINE", count=prescore_passed)
+        )
+    if prescore_checked is not None and prescore_passed is not None:
+        filter_lines.append(
+            i18n.t(
+                lang,
+                "SYSTEM_STATUS_PRESCORE_FILTERED_LINE",
+                count=max(0, prescore_checked - prescore_passed),
+            )
+        )
+
+    if signals_sent_cycle is not None:
+        suffix = ""
+        if signals_sent_cycle == 0:
+            suffix = f" {i18n.t(lang, 'SYSTEM_STATUS_SIGNALS_SENT_NONE')}"
+        filter_lines.append(
+            i18n.t(
+                lang,
+                "SYSTEM_STATUS_SIGNALS_SENT_LINE",
+                count=signals_sent_cycle,
+                suffix=suffix,
+            )
+        )
+
+    if filter_lines:
+        lines.append(i18n.t(lang, "SYSTEM_STATUS_SECTION_FILTERING"))
+        lines.extend(filter_lines)
+        lines.append("")
+
+    last_signal_symbol, last_signal_side, last_signal_dt = _format_last_ai_signal_parts()
+    lines.append(i18n.t(lang, "SYSTEM_STATUS_SECTION_LAST_SIGNAL"))
+    if last_signal_symbol and last_signal_side and last_signal_dt:
+        lines.append(
+            i18n.t(
+                lang,
+                "SYSTEM_STATUS_LAST_SIGNAL_LINE",
+                symbol=last_signal_symbol,
+                side=last_signal_side,
+                datetime=last_signal_dt,
+            )
+        )
     else:
-        market_mode_text = i18n.t(lang, "SYSTEM_STATUS_MARKET_AUTO")
+        lines.append(i18n.t(lang, "SYSTEM_STATUS_LAST_SIGNAL_NONE"))
+    lines.append("")
 
-    ai_total = ai.total_symbols if ai else 0
-    if ai_total == 0 and ai and ai.extra:
-        extra_total = _extract_from_extra(ai.extra, "universe")
-        if extra_total is not None:
-            ai_total = extra_total
-    market_symbols_total = ai_total if ai_total else "—"
-    ai_chunk = ai.checked_last_cycle if ai else 0
-    if (not ai_chunk) and ai and ai.extra:
-        extra_chunk = _extract_from_extra(ai.extra, "chunk")
-        if extra_chunk is not None:
-            ai_chunk = extra_chunk
-    ai_chunk_size = ai_chunk if ai_chunk else "—"
+    pump_lines = [
+        i18n.t(
+            lang,
+            "SYSTEM_STATUS_PUMP_STATUS_LINE",
+            status=(
+                i18n.t(lang, "SYSTEM_STATUS_PUMP_ACTIVE")
+                if pd and pd.last_tick
+                else i18n.t(lang, "SYSTEM_STATUS_PUMP_PAUSED")
+            ),
+        ),
+        i18n.t(lang, "SYSTEM_STATUS_PUMP_IMPULSE_LINE"),
+    ]
+    lines.append(i18n.t(lang, "SYSTEM_STATUS_SECTION_PUMP"))
+    lines.extend(pump_lines)
 
-    ai_cycle_sec = "—"
-    if ai and ai.extra:
-        extra_cycle = _extract_from_extra(ai.extra, "cycle")
-        if extra_cycle is not None:
-            ai_cycle_sec = str(extra_cycle)
-
-    ai_safe_mode = False
-    if ai and isinstance(ai.state, dict):
-        ai_safe_mode = bool(ai.state.get("ai_safe_mode", False))
-    ai_safe_mode_text = (
-        i18n.t(lang, "SYSTEM_STATUS_SAFE_MODE_ON")
-        if ai_safe_mode
-        else i18n.t(lang, "SYSTEM_STATUS_SAFE_MODE_OFF")
-    )
-
-    market_context_state, market_context_direction, market_context_activity = _format_context(regime)
-    pending_confirmations = 0
-    if ai and isinstance(ai.state, dict):
-        confirm_retry = ai.state.get("confirm_retry")
-        if isinstance(confirm_retry, dict):
-            pending_confirmations = int(confirm_retry.get("pending", 0) or 0)
-
-    if pending_confirmations > 0:
-        signals_status_text = i18n.t(lang, "SYSTEM_STATUS_SIGNALS_PENDING")
-    elif ai and ai.last_tick:
-        signals_status_text = i18n.t(lang, "SYSTEM_STATUS_SIGNALS_RUNNING")
-    else:
-        signals_status_text = i18n.t(lang, "SYSTEM_STATUS_SIGNALS_PAUSED")
-
-    ideas_found_today = "—"
-    ideas_passed_today = "—"
-    ideas_rejected_today = "—"
-    signals_sent_today = "—"
-    ai_stats = ai.last_stats if ai else None
-    if isinstance(ai_stats, dict):
-        pre_score = ai_stats.get("pre_score") if isinstance(ai_stats.get("pre_score"), dict) else {}
-        if pre_score:
-            ideas_found_today = pre_score.get("checked", "—")
-            ideas_passed_today = pre_score.get("passed", "—")
-            ideas_rejected_today = pre_score.get("failed", "—")
-        signals_found = ai_stats.get("signals_found")
-        if isinstance(signals_found, int):
-            signals_sent_today = signals_found
-    if ai and ai.extra:
-        extra_sent = _extract_from_extra(ai.extra, "sent")
-        if extra_sent is not None:
-            signals_sent_today = extra_sent
-
-    last_signal_symbol_or_dash, last_signal_side_or_dash, last_signal_dt_or_dash = (
-        _format_last_ai_signal_parts()
-    )
-
-    pump_status_text = (
-        i18n.t(lang, "SYSTEM_STATUS_PUMP_ACTIVE")
-        if pd and pd.last_tick
-        else i18n.t(lang, "SYSTEM_STATUS_PUMP_PAUSED")
-    )
-    pump_impulse_text = _format_pump_impulse(pd.last_stats if pd else None)
-    return i18n.t(
-        lang,
-        "SYSTEM_STATUS_TEXT",
-        binance_ok_emoji=binance_ok_emoji,
-        binance_status_text=binance_status_text,
-        last_ok_age_sec=last_ok_age_sec,
-        market_mode_text=market_mode_text,
-        market_context_state=market_context_state,
-        market_context_direction=market_context_direction,
-        market_context_activity=market_context_activity,
-        market_symbols_total=market_symbols_total,
-        ai_chunk_size=ai_chunk_size,
-        ai_cycle_sec=ai_cycle_sec,
-        ai_safe_mode_text=ai_safe_mode_text,
-        signals_status_text=signals_status_text,
-        ideas_found_today=ideas_found_today,
-        ideas_passed_today=ideas_passed_today,
-        ideas_rejected_today=ideas_rejected_today,
-        signals_sent_today=signals_sent_today,
-        last_signal_symbol_or_dash=last_signal_symbol_or_dash,
-        last_signal_side_or_dash=last_signal_side_or_dash,
-        last_signal_dt_or_dash=last_signal_dt_or_dash,
-        pump_status_text=pump_status_text,
-        pump_impulse_text=pump_impulse_text,
-    )
+    return "\n".join(lines)
 
 
 @dp.message(Command("status"))
