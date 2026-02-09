@@ -108,7 +108,6 @@ from db import (
     update_signal_event_refresh,
     update_signal_event_status_by_id,
     mark_signal_result_notified,
-    get_last_pumpdump_signal,
     set_last_pumpdump_signal,
     purge_test_signals,
 )
@@ -120,6 +119,7 @@ from message_templates import format_scenario_message
 from signal_audit_db import (
     get_public_stats,
     get_last_signal_audit,
+    count_signals_sent_since,
     init_signal_audit_tables,
     insert_signal_audit,
 )
@@ -3015,172 +3015,112 @@ def _format_user_bot_status(chat_id: int) -> str:
         match = re.search(rf"{key}=(\\d+)", extra)
         return int(match.group(1)) if match else None
 
-    def _extract_progress(extra: str) -> tuple[int, int] | None:
-        match = re.search(r"progress=(\\d+)/(\\d+)", extra)
-        if match:
-            return int(match.group(1)), int(match.group(2))
-        return None
-
-    def _extract_cycle(extra: str) -> int | None:
-        match = re.search(r"cycle=(\\d+)s", extra)
-        return int(match.group(1)) if match else None
-
-    def _format_last_ai_signal() -> str:
+    def _format_last_ai_signal_parts() -> tuple[str, str, str]:
         row = get_last_signal_audit("ai_signals")
         if not row:
-            return i18n.t(
-                lang,
-                "SYSTEM_STATUS_LAST_SIGNAL_LINE",
-                text=i18n.t(lang, "SYSTEM_STATUS_LAST_SIGNAL_NONE"),
-            )
-        symbol = str(row.get("symbol", "-"))
+            return "—", "—", "—"
+        symbol = str(row.get("symbol") or "—")
         direction = str(row.get("direction", "")).upper()
         side = "LONG" if direction == "LONG" else "SHORT" if direction == "SHORT" else direction
-        score_raw = row.get("score", 0)
-        try:
-            score = int(round(float(score_raw)))
-        except (TypeError, ValueError):
-            score = 0
+        if not side:
+            side = "—"
         sent_at = int(row.get("sent_at", 0) or 0)
-        stamp = _format_event_time(sent_at) if sent_at else "-"
-        return i18n.t(
-            lang,
-            "SYSTEM_STATUS_LAST_SIGNAL_LINE",
-            text=f"{symbol} {side} (Score {score}) — {stamp}",
-        )
-
-    def _format_last_pumpdump() -> str:
-        payload = get_last_pumpdump_signal()
-        if not payload:
-            return i18n.t(
-                lang,
-                "SYSTEM_STATUS_LAST_SIGNAL_LINE",
-                text=i18n.t(lang, "SYSTEM_STATUS_LAST_SIGNAL_NONE_PD"),
-            )
-        symbol = str(payload.get("symbol", "-"))
-        direction = str(payload.get("direction", "")).upper()
-        direction_text = "PUMP" if direction == "PUMP" else "DUMP" if direction == "DUMP" else direction
-        change_raw = payload.get("change_5m")
-        change_text = ""
-        if change_raw is not None:
-            try:
-                change_val = float(change_raw)
-                change_text = f" ({change_val:+.1f}%)"
-            except (TypeError, ValueError):
-                change_text = ""
-        ts = int(payload.get("ts", 0) or 0)
-        stamp = _format_event_time(ts) if ts else "-"
-        if direction_text:
-            line_text = f"{symbol} {direction_text}{change_text} — {stamp}"
-        else:
-            line_text = f"{symbol} — {stamp}"
-        return i18n.t(lang, "SYSTEM_STATUS_LAST_SIGNAL_LINE", text=line_text)
-
-    def _seconds_ago_label(seconds: int) -> str:
-        return i18n.t(lang, "SYSTEM_STATUS_SECONDS_AGO", seconds=seconds)
+        stamp = _format_event_time(sent_at) if sent_at else "—"
+        return symbol or "—", side, stamp
 
     binance_ts = max(
         (st.binance_last_success_ts for st in MODULES.values() if st.binance_last_success_ts),
         default=0,
     )
-    if binance_ts:
-        binance_line = i18n.t(
-            lang,
-            "SYSTEM_STATUS_BINANCE_OK",
-            seconds_ago=_seconds_ago_label(_sec_ago(binance_ts)),
-        )
-    else:
-        binance_line = i18n.t(lang, "SYSTEM_STATUS_BINANCE_NO_DATA")
+    last_cycle_ts = max(
+        (st.last_tick for st in MODULES.values() if st.last_tick),
+        default=0,
+    )
+    reference_ts = binance_ts or last_cycle_ts
+    last_ok_age_sec = str(_sec_ago(reference_ts)) if reference_ts else "—"
 
-    ai_status_line = (
-        i18n.t(lang, "SYSTEM_STATUS_AI_RUNNING_LINE")
-        if ai and ai.last_tick
-        else i18n.t(lang, "SYSTEM_STATUS_AI_STOPPED_LINE")
-    )
-    ai_last_cycle = (
-        i18n.t(
-            lang,
-            "SYSTEM_STATUS_LAST_CYCLE_LINE",
-            seconds_ago=_seconds_ago_label(_sec_ago(ai.last_tick)),
-        )
-        if ai and ai.last_tick
-        else i18n.t(lang, "SYSTEM_STATUS_LAST_CYCLE_NO_DATA")
-    )
-    ai_cursor = ai.cursor if ai else 0
+    if binance_ts:
+        age = _sec_ago(binance_ts)
+        if age <= 60:
+            binance_ok_emoji = "✅"
+            binance_status_text = i18n.t(lang, "SYSTEM_STATUS_BINANCE_ACTIVE")
+        else:
+            binance_ok_emoji = "⚠️"
+            binance_status_text = i18n.t(lang, "SYSTEM_STATUS_BINANCE_DOWN")
+    else:
+        binance_ok_emoji = "❌"
+        binance_status_text = i18n.t(lang, "SYSTEM_STATUS_BINANCE_DOWN")
+
+    regime = None
+    if ai and isinstance(ai.state, dict):
+        regime = ai.state.get("market_regime")
+    if regime == "risk_off":
+        market_mode_text = i18n.t(lang, "SYSTEM_STATUS_MARKET_RISK_OFF")
+    elif regime == "risk_on":
+        market_mode_text = i18n.t(lang, "SYSTEM_STATUS_MARKET_RISK_ON")
+    elif regime == "neutral":
+        market_mode_text = i18n.t(lang, "SYSTEM_STATUS_MARKET_NEUTRAL")
+    else:
+        market_mode_text = i18n.t(lang, "SYSTEM_STATUS_MARKET_AUTO")
+
     ai_total = ai.total_symbols if ai else 0
-    if (ai_cursor == 0 and ai_total == 0) and ai and ai.extra:
-        extra_cursor = _extract_from_extra(ai.extra, "cursor")
+    if ai_total == 0 and ai and ai.extra:
         extra_total = _extract_from_extra(ai.extra, "universe")
-        if extra_cursor is not None:
-            ai_cursor = extra_cursor
         if extra_total is not None:
             ai_total = extra_total
-    ai_scan_line = (
-        i18n.t(lang, "SYSTEM_STATUS_SCAN_LINE", current=ai_cursor, total=ai_total)
-        if ai_cursor or ai_total
-        else i18n.t(lang, "SYSTEM_STATUS_SCAN_NO_DATA")
-    )
-    ai_current = ai.current_symbol if ai else None
-    ai_current_line = (
-        i18n.t(lang, "SYSTEM_STATUS_CURRENT_LINE", symbol=ai_current)
-        if ai_current
-        else i18n.t(lang, "SYSTEM_STATUS_CURRENT_NO_DATA")
-    )
-    ai_cycle = _extract_cycle(ai.extra) if ai and ai.extra else None
-    ai_cycle_line = (
-        i18n.t(lang, "SYSTEM_STATUS_CYCLE_LINE", seconds=ai_cycle)
-        if ai_cycle
-        else None
+    market_symbols_total = ai_total if ai_total else "—"
+    current_symbol_or_dash = ai.current_symbol if ai and ai.current_symbol else "—"
+
+    pending_confirmations = 0
+    if ai and isinstance(ai.state, dict):
+        confirm_retry = ai.state.get("confirm_retry")
+        if isinstance(confirm_retry, dict):
+            pending_confirmations = int(confirm_retry.get("pending", 0) or 0)
+
+    if pending_confirmations > 0:
+        signals_status_text = i18n.t(lang, "SYSTEM_STATUS_SIGNALS_PENDING")
+    elif ai and ai.last_tick:
+        signals_status_text = i18n.t(lang, "SYSTEM_STATUS_SIGNALS_RUNNING")
+    else:
+        signals_status_text = i18n.t(lang, "SYSTEM_STATUS_SIGNALS_PAUSED")
+
+    ideas_found_today = "—"
+    dropped_no_confirm_today = "—"
+    signals_sent_today = "—"
+    try:
+        start_of_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        signals_sent_today = count_signals_sent_since(int(start_of_day.timestamp()), module="ai_signals")
+    except Exception:
+        signals_sent_today = "—"
+
+    last_signal_symbol_or_dash, last_signal_side_or_dash, last_signal_dt_or_dash = (
+        _format_last_ai_signal_parts()
     )
 
-    pd_status_line = (
-        i18n.t(lang, "SYSTEM_STATUS_PD_RUNNING_LINE")
+    pump_status_text = (
+        i18n.t(lang, "SYSTEM_STATUS_PUMP_ACTIVE")
         if pd and pd.last_tick
-        else i18n.t(lang, "SYSTEM_STATUS_PD_STOPPED_LINE")
+        else i18n.t(lang, "SYSTEM_STATUS_PUMP_PAUSED")
     )
-    pd_last_cycle = (
-        i18n.t(
-            lang,
-            "SYSTEM_STATUS_LAST_CYCLE_LINE",
-            seconds_ago=_seconds_ago_label(_sec_ago(pd.last_tick)),
-        )
-        if pd and pd.last_tick
-        else i18n.t(lang, "SYSTEM_STATUS_LAST_CYCLE_NO_DATA")
-    )
-    pd_checked = pd.checked_last_cycle if pd else 0
-    pd_total = pd.total_symbols if pd else 0
-    if (pd_checked == 0 and pd_total == 0) and pd and pd.extra:
-        progress = _extract_progress(pd.extra)
-        if progress:
-            pd_checked, pd_total = progress
-    pd_progress_line = (
-        i18n.t(lang, "SYSTEM_STATUS_PROGRESS_LINE", current=pd_checked, total=pd_total)
-        if pd_checked or pd_total
-        else i18n.t(lang, "SYSTEM_STATUS_PROGRESS_NO_DATA")
-    )
-    pd_current = pd.current_symbol if pd else None
-    pd_current_line = (
-        i18n.t(lang, "SYSTEM_STATUS_CURRENT_LINE", symbol=pd_current)
-        if pd_current
-        else i18n.t(lang, "SYSTEM_STATUS_CURRENT_NO_DATA")
-    )
-
-    ai_cycle_line = f"{ai_cycle_line}\n" if ai_cycle_line else ""
+    pump_current_symbol_or_dash = pd.current_symbol if pd and pd.current_symbol else "—"
     return i18n.t(
         lang,
         "SYSTEM_STATUS_TEXT",
-        binance_line=binance_line,
-        ai_status_line=ai_status_line,
-        ai_last_cycle=ai_last_cycle,
-        ai_scan_line=ai_scan_line,
-        ai_current_line=ai_current_line,
-        ai_cycle_line=ai_cycle_line,
-        ai_last_signal=_format_last_ai_signal(),
-        pd_status_line=pd_status_line,
-        pd_last_cycle=pd_last_cycle,
-        pd_progress_line=pd_progress_line,
-        pd_current_line=pd_current_line,
-        pd_last_signal=_format_last_pumpdump(),
+        binance_ok_emoji=binance_ok_emoji,
+        binance_status_text=binance_status_text,
+        last_ok_age_sec=last_ok_age_sec,
+        market_mode_text=market_mode_text,
+        market_symbols_total=market_symbols_total,
+        current_symbol_or_dash=current_symbol_or_dash,
+        signals_status_text=signals_status_text,
+        ideas_found_today=ideas_found_today,
+        dropped_no_confirm_today=dropped_no_confirm_today,
+        signals_sent_today=signals_sent_today,
+        last_signal_symbol_or_dash=last_signal_symbol_or_dash,
+        last_signal_side_or_dash=last_signal_side_or_dash,
+        last_signal_dt_or_dash=last_signal_dt_or_dash,
+        pump_status_text=pump_status_text,
+        pump_current_symbol_or_dash=pump_current_symbol_or_dash,
     )
 
 
