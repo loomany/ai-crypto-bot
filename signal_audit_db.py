@@ -207,6 +207,7 @@ def fetch_open_signals(max_age_sec: int = 86400) -> list[dict]:
 
 def get_public_stats(days: int = 30) -> dict:
     since_ts = int(time.time()) - days * 86400
+    min_score = 80.0
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
     try:
@@ -217,6 +218,7 @@ def get_public_stats(days: int = 30) -> dict:
             SELECT COUNT(*) AS total
             FROM signal_audit
             WHERE sent_at >= ?
+              AND score >= ?
               AND NOT (
                 symbol LIKE 'TEST%' OR
                 LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
@@ -228,7 +230,7 @@ def get_public_stats(days: int = 30) -> dict:
               )
               {blocked_clause}
             """,
-            [since_ts, *blocked_params],
+            [since_ts, min_score, *blocked_params],
         )
         total = int(cur.fetchone()["total"])
 
@@ -237,6 +239,7 @@ def get_public_stats(days: int = 30) -> dict:
             SELECT outcome, pnl_r
             FROM signal_audit
             WHERE status = 'closed' AND sent_at >= ?
+              AND score >= ?
               AND NOT (
                 symbol LIKE 'TEST%' OR
                 LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
@@ -248,7 +251,7 @@ def get_public_stats(days: int = 30) -> dict:
               )
               {blocked_clause}
             """,
-            [since_ts, *blocked_params],
+            [since_ts, min_score, *blocked_params],
         )
         closed_rows = cur.fetchall()
         closed = len(closed_rows)
@@ -275,6 +278,7 @@ def get_public_stats(days: int = 30) -> dict:
             SELECT symbol, direction, outcome, pnl_r
             FROM signal_audit
             WHERE sent_at >= ?
+              AND score >= ?
               AND NOT (
                 symbol LIKE 'TEST%' OR
                 LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
@@ -288,7 +292,7 @@ def get_public_stats(days: int = 30) -> dict:
             ORDER BY sent_at DESC
             LIMIT 10
             """,
-            [since_ts, *blocked_params],
+            [since_ts, min_score, *blocked_params],
         )
         last10 = [dict(row) for row in cur.fetchall()]
 
@@ -297,6 +301,7 @@ def get_public_stats(days: int = 30) -> dict:
             SELECT outcome
             FROM signal_audit
             WHERE status = 'closed' AND sent_at >= ?
+              AND score >= ?
               AND NOT (
                 symbol LIKE 'TEST%' OR
                 LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
@@ -309,7 +314,7 @@ def get_public_stats(days: int = 30) -> dict:
               {blocked_clause}
             ORDER BY closed_at DESC
             """,
-            [since_ts, *blocked_params],
+            [since_ts, min_score, *blocked_params],
         )
         streak_rows = [row["outcome"] for row in cur.fetchall() if row["outcome"] not in excluded_outcomes]
         streak = "-"
@@ -419,7 +424,7 @@ def count_signals_sent_since(
 
 def get_ai_signal_stats(days: int | None) -> dict:
     now = int(time.time())
-    params: list[Any] = ["TP1", "TP2", "SL", "EXPIRED"]
+    params: list[Any] = ["TP1", "TP2", "SL", "EXPIRED", 80.0]
     since_clause = ""
     if days is not None:
         since_clause = " AND sent_at >= ?"
@@ -437,6 +442,7 @@ def get_ai_signal_stats(days: int | None) -> dict:
             FROM signal_audit
             WHERE status = 'closed'
               AND outcome IN (?, ?, ?, ?)
+              AND score >= ?
               AND NOT (
                 symbol LIKE 'TEST%' OR
                 LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR

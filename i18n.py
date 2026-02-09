@@ -191,6 +191,39 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "STATUS_ON": "✅ включено",
         "STATUS_OFF": "⛔ выключено",
         "STATS_PICK_TEXT": "📊 История сигналов\nВыбери период:",
+        "STATS_PRO_TITLE": "📊 Статистика сигналов (PRO)",
+        "STATS_PRO_RECOMMENDED_HEADER": "🔥 Рекомендуемые сигналы",
+        "STATS_PRO_RECOMMENDED_SUB": "(основной рабочий диапазон)",
+        "STATS_PRO_SCORE_RANGE_90_100": "Score 90–100",
+        "STATS_PRO_WINRATE_LINE": "• Winrate: {winrate}%",
+        "STATS_PRO_AVG_RR_LINE": "• Средний RR: {avg_rr}",
+        "STATS_PRO_TOTAL_SIGNALS_LINE": "• Всего сигналов: {count}",
+        "STATS_PRO_STATUS_PRIMARY": "• Статус: 🟢 Основной фокус",
+        "STATS_PRO_RR_NOTE": "ℹ️ При RR > 2 даже 40–45% дают положительное ожидание.",
+        "STATS_PRO_DIVIDER": "────────────────────",
+        "STATS_PRO_HIGH_RISK_HEADER": "⚠️ Повышенный риск",
+        "STATS_PRO_HIGH_RISK_SUB": "(только для опытных трейдеров)",
+        "STATS_PRO_SCORE_RANGE_80_89": "Score 80–89",
+        "STATS_PRO_STATUS_SELECTIVE": "• Статус: 🟡 Использовать выборочно",
+        "STATS_PRO_BELOW_THRESHOLD_HEADER": "🚫 Ниже порога качества",
+        "STATS_PRO_BELOW_THRESHOLD_SUB": "(не рекомендуется к торговле)",
+        "STATS_PRO_BELOW_THRESHOLD_SCORE": "Score < 80",
+        "STATS_PRO_BELOW_THRESHOLD_LINE1": "• В статистике не учитывается",
+        "STATS_PRO_BELOW_THRESHOLD_LINE2": "• Используется только для анализа рынка",
+        "STATS_PRO_SUMMARY_HEADER": "📈 Итоги по сделкам",
+        "STATS_PRO_SUMMARY_SUB": "(за всё время)",
+        "STATS_PRO_TP_TOTAL": "🟢 Успешные (TP): {tp_total}",
+        "STATS_PRO_SL_TOTAL": "🔴 По стопу (SL): {sl_total}",
+        "STATS_PRO_NEUTRAL_TOTAL": "⏳ Neutral: {neutral_total}",
+        "STATS_PRO_IN_PROGRESS_TOTAL": "🕒 В процессе: {in_progress_total}",
+        "STATS_PRO_NEUTRAL_NOTE": "ℹ️ Neutral — сценарий не дошёл ни до TP, ни до SL",
+        "STATS_PRO_NEUTRAL_NOTE_2": "(флет, отмена по времени или ручное закрытие).",
+        "STATS_PRO_USAGE_HEADER": "🧠 Как использовать сигналы",
+        "STATS_PRO_USAGE_PRIMARY": "• Основной фокус: Score 90–100",
+        "STATS_PRO_USAGE_HIGH_RISK": "• 80–89 — повышенный риск",
+        "STATS_PRO_USAGE_AVOID": "• Ниже 80 — не торговать",
+        "STATS_PRO_RISK_NOTE": "⚠️ Рекомендуемый риск: 0.5–1% депозита на сделку",
+        "STATS_PRO_LEVERAGE_NOTE": "ℹ️ Плечо выбирается трейдером",
         "SYSTEM_SECTION_TEXT": "ℹ️ Раздел: О системе",
         "BACK_TO_MAIN_TEXT": "Возвращаемся в главное меню.",
         "ALREADY_ON": "Уже включено.",
@@ -358,6 +391,21 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SCENARIO_CONTEXT_RSI": "• RSI 1H: {rsi} ({zone})",
         "SCENARIO_CONTEXT_VOLUME": "• Объём: {volume}x к среднему",
         "SCENARIO_CONTEXT_RR": "• RR ≈ 1 : {rr}",
+        "SIGNAL_QUALITY_RECOMMENDED": (
+            "🔥 РЕКОМЕНДУЕМЫЙ СИГНАЛ\n"
+            "Основной рабочий диапазон (Score 90–100)\n"
+            "Используется для торговли"
+        ),
+        "SIGNAL_QUALITY_HIGH_RISK": (
+            "⚠️ ПОВЫШЕННЫЙ РИСК\n"
+            "Только для опытных трейдеров (Score 80–89)\n"
+            "Использовать выборочно"
+        ),
+        "SIGNAL_QUALITY_ANALYSIS_ONLY": (
+            "🚫 СИГНАЛ ДЛЯ АНАЛИЗА\n"
+            "Ниже порога качества (Score < 80)\n"
+            "Не рекомендуется к торговле"
+        ),
         "SCENARIO_SCORE_LINE": "🧠 Score: {score} / 100",
         "SCENARIO_BREAKDOWN_HEADER": "🧩 Детали Score (сумма баллов):",
         "SCENARIO_BREAKDOWN_TOTAL": "= Итоговая оценка: {score}",
@@ -726,6 +774,39 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "STATUS_ON": "✅ enabled",
         "STATUS_OFF": "⛔ disabled",
         "STATS_PICK_TEXT": "📊 Signal history\nChoose a period:",
+        "STATS_PRO_TITLE": "📊 Signal statistics (PRO)",
+        "STATS_PRO_RECOMMENDED_HEADER": "🔥 Recommended signals",
+        "STATS_PRO_RECOMMENDED_SUB": "(primary working range)",
+        "STATS_PRO_SCORE_RANGE_90_100": "Score 90–100",
+        "STATS_PRO_WINRATE_LINE": "• Winrate: {winrate}%",
+        "STATS_PRO_AVG_RR_LINE": "• Avg RR: {avg_rr}",
+        "STATS_PRO_TOTAL_SIGNALS_LINE": "• Total signals: {count}",
+        "STATS_PRO_STATUS_PRIMARY": "• Status: 🟢 Primary focus",
+        "STATS_PRO_RR_NOTE": "ℹ️ With RR > 2, even a 40–45% winrate can be positive expectancy.",
+        "STATS_PRO_DIVIDER": "────────────────────",
+        "STATS_PRO_HIGH_RISK_HEADER": "⚠️ Higher risk",
+        "STATS_PRO_HIGH_RISK_SUB": "(experienced traders only)",
+        "STATS_PRO_SCORE_RANGE_80_89": "Score 80–89",
+        "STATS_PRO_STATUS_SELECTIVE": "• Status: 🟡 Use selectively",
+        "STATS_PRO_BELOW_THRESHOLD_HEADER": "🚫 Below quality threshold",
+        "STATS_PRO_BELOW_THRESHOLD_SUB": "(not recommended for trading)",
+        "STATS_PRO_BELOW_THRESHOLD_SCORE": "Score < 80",
+        "STATS_PRO_BELOW_THRESHOLD_LINE1": "• Not included in statistics",
+        "STATS_PRO_BELOW_THRESHOLD_LINE2": "• Used for market analysis only",
+        "STATS_PRO_SUMMARY_HEADER": "📈 Trade summary",
+        "STATS_PRO_SUMMARY_SUB": "(all time)",
+        "STATS_PRO_TP_TOTAL": "🟢 Successful (TP): {tp_total}",
+        "STATS_PRO_SL_TOTAL": "🔴 Stopped (SL): {sl_total}",
+        "STATS_PRO_NEUTRAL_TOTAL": "⏳ Neutral: {neutral_total}",
+        "STATS_PRO_IN_PROGRESS_TOTAL": "🕒 In progress: {in_progress_total}",
+        "STATS_PRO_NEUTRAL_NOTE": "ℹ️ Neutral — scenario reached neither TP nor SL",
+        "STATS_PRO_NEUTRAL_NOTE_2": "(range, time-based cancel, or manual close).",
+        "STATS_PRO_USAGE_HEADER": "🧠 How to use signals",
+        "STATS_PRO_USAGE_PRIMARY": "• Primary focus: Score 90–100",
+        "STATS_PRO_USAGE_HIGH_RISK": "• 80–89 — higher risk",
+        "STATS_PRO_USAGE_AVOID": "• Below 80 — do not trade",
+        "STATS_PRO_RISK_NOTE": "⚠️ Recommended risk: 0.5–1% of equity per trade",
+        "STATS_PRO_LEVERAGE_NOTE": "ℹ️ Leverage is chosen by the trader",
         "SYSTEM_SECTION_TEXT": "ℹ️ Section: System",
         "BACK_TO_MAIN_TEXT": "Returning to the main menu.",
         "ALREADY_ON": "Already enabled.",
@@ -893,6 +974,21 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SCENARIO_CONTEXT_RSI": "• RSI 1H: {rsi} ({zone})",
         "SCENARIO_CONTEXT_VOLUME": "• Volume: {volume}x vs average",
         "SCENARIO_CONTEXT_RR": "• RR ≈ 1 : {rr}",
+        "SIGNAL_QUALITY_RECOMMENDED": (
+            "🔥 RECOMMENDED SIGNAL\n"
+            "Primary working range (Score 90–100)\n"
+            "Suitable for trading"
+        ),
+        "SIGNAL_QUALITY_HIGH_RISK": (
+            "⚠️ HIGHER RISK\n"
+            "Experienced traders only (Score 80–89)\n"
+            "Use selectively"
+        ),
+        "SIGNAL_QUALITY_ANALYSIS_ONLY": (
+            "🚫 ANALYSIS ONLY\n"
+            "Below quality threshold (Score < 80)\n"
+            "Not recommended for trading"
+        ),
         "SCENARIO_SCORE_LINE": "🧠 Score: {score} / 100",
         "SCENARIO_BREAKDOWN_HEADER": "🧩 Score details (sum of points):",
         "SCENARIO_BREAKDOWN_TOTAL": "= Final score: {score}",

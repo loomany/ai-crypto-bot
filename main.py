@@ -104,6 +104,7 @@ from db import (
     count_signal_events,
     get_signal_outcome_counts,
     get_signal_score_bucket_counts,
+    get_signal_avg_rr,
     get_signal_event,
     get_signal_by_id,
     update_signal_event_refresh,
@@ -774,69 +775,87 @@ def _format_archive_list(
     pages: int,
     outcome_counts: dict,
     score_bucket_counts: dict[str, dict[str, int]],
+    avg_rr_90_100: float,
 ) -> str:
-    period_label = _period_label(time_window, lang)
-    title = i18n.t(lang, "HISTORY_TITLE", period=period_label)
-    lines = [title]
-    lines.append("")
-    lines.append(
-        i18n.t(
-            lang,
-            "HISTORY_SUMMARY",
-            passed=outcome_counts.get("passed", 0),
-            failed=outcome_counts.get("failed", 0),
-            neutral=outcome_counts.get("neutral", 0),
-            in_progress=outcome_counts.get("in_progress", 0),
-        )
-    )
-    def _score_bucket_line(bucket_key: str, label: str) -> str:
+    def _bucket_stats(bucket_key: str) -> tuple[int, int, int, int]:
         bucket = score_bucket_counts.get(bucket_key, {})
         passed = int(bucket.get("passed", 0))
         failed = int(bucket.get("failed", 0))
         neutral = int(bucket.get("neutral", 0))
         in_progress = int(bucket.get("in_progress", 0))
-        total = passed + failed
-        percent = round((passed / total) * 100) if total > 0 else 0
-        return i18n.t(
-            lang,
-            "HISTORY_SCORE_BUCKET_LINE",
-            label=label,
-            passed=passed,
-            failed=failed,
-            neutral=neutral,
-            in_progress=in_progress,
-            percent=percent,
-        )
+        return passed, failed, neutral, in_progress
 
-    tp1_total = outcome_counts.get("tp1", 0) + outcome_counts.get("tp2", 0)
-    lines.extend(
-        [
-            "",
-            i18n.t(
-                lang,
-                "HISTORY_STATS_TITLE",
-                period=period_label,
-            ),
-            _score_bucket_line("90-100", "90–100"),
-            _score_bucket_line("80-89", "80–89"),
-            _score_bucket_line("70-79", "70–79"),
-            _score_bucket_line("60-69", "60–69"),
-            "",
-            i18n.t(
-                lang,
-                "SCORE_EXPLANATION",
-                tp1=tp1_total,
-                be=outcome_counts.get("be", 0),
-                sl=outcome_counts.get("sl", 0),
-                exp=outcome_counts.get("exp", 0),
-                nf=outcome_counts.get("no_fill", 0),
-            ),
-        ]
+    b90_passed, b90_failed, b90_neutral, b90_in_progress = _bucket_stats("90-100")
+    b80_passed, b80_failed, b80_neutral, b80_in_progress = _bucket_stats("80-89")
+
+    count_90_100 = b90_passed + b90_failed + b90_neutral + b90_in_progress
+    count_80_89 = b80_passed + b80_failed + b80_neutral + b80_in_progress
+    winrate_90_100 = (
+        (b90_passed / (b90_passed + b90_failed)) * 100 if (b90_passed + b90_failed) else 0.0
     )
-    lines.append("")
+    winrate_80_89 = (
+        (b80_passed / (b80_passed + b80_failed)) * 100 if (b80_passed + b80_failed) else 0.0
+    )
+
+    lines = [
+        i18n.t(lang, "STATS_PRO_TITLE"),
+        "",
+        i18n.t(lang, "STATS_PRO_RECOMMENDED_HEADER"),
+        i18n.t(lang, "STATS_PRO_RECOMMENDED_SUB"),
+        "",
+        i18n.t(lang, "STATS_PRO_SCORE_RANGE_90_100"),
+        i18n.t(lang, "STATS_PRO_WINRATE_LINE", winrate=f"{winrate_90_100:.1f}"),
+        i18n.t(lang, "STATS_PRO_AVG_RR_LINE", avg_rr=f"{avg_rr_90_100:.2f}"),
+        i18n.t(lang, "STATS_PRO_TOTAL_SIGNALS_LINE", count=count_90_100),
+        i18n.t(lang, "STATS_PRO_STATUS_PRIMARY"),
+        "",
+        i18n.t(lang, "STATS_PRO_RR_NOTE"),
+        "",
+        i18n.t(lang, "STATS_PRO_DIVIDER"),
+        "",
+        i18n.t(lang, "STATS_PRO_HIGH_RISK_HEADER"),
+        i18n.t(lang, "STATS_PRO_HIGH_RISK_SUB"),
+        "",
+        i18n.t(lang, "STATS_PRO_SCORE_RANGE_80_89"),
+        i18n.t(lang, "STATS_PRO_WINRATE_LINE", winrate=f"{winrate_80_89:.1f}"),
+        i18n.t(lang, "STATS_PRO_TOTAL_SIGNALS_LINE", count=count_80_89),
+        i18n.t(lang, "STATS_PRO_STATUS_SELECTIVE"),
+        "",
+        i18n.t(lang, "STATS_PRO_DIVIDER"),
+        "",
+        i18n.t(lang, "STATS_PRO_BELOW_THRESHOLD_HEADER"),
+        i18n.t(lang, "STATS_PRO_BELOW_THRESHOLD_SUB"),
+        "",
+        i18n.t(lang, "STATS_PRO_BELOW_THRESHOLD_SCORE"),
+        i18n.t(lang, "STATS_PRO_BELOW_THRESHOLD_LINE1"),
+        i18n.t(lang, "STATS_PRO_BELOW_THRESHOLD_LINE2"),
+        "",
+        i18n.t(lang, "STATS_PRO_DIVIDER"),
+        "",
+        i18n.t(lang, "STATS_PRO_SUMMARY_HEADER"),
+        i18n.t(lang, "STATS_PRO_SUMMARY_SUB"),
+        "",
+        i18n.t(lang, "STATS_PRO_TP_TOTAL", tp_total=outcome_counts.get("tp1", 0) + outcome_counts.get("tp2", 0)),
+        i18n.t(lang, "STATS_PRO_SL_TOTAL", sl_total=outcome_counts.get("sl", 0)),
+        i18n.t(lang, "STATS_PRO_NEUTRAL_TOTAL", neutral_total=outcome_counts.get("neutral", 0)),
+        i18n.t(lang, "STATS_PRO_IN_PROGRESS_TOTAL", in_progress_total=outcome_counts.get("in_progress", 0)),
+        "",
+        i18n.t(lang, "STATS_PRO_NEUTRAL_NOTE"),
+        i18n.t(lang, "STATS_PRO_NEUTRAL_NOTE_2"),
+        "",
+        i18n.t(lang, "STATS_PRO_DIVIDER"),
+        "",
+        i18n.t(lang, "STATS_PRO_USAGE_HEADER"),
+        i18n.t(lang, "STATS_PRO_USAGE_PRIMARY"),
+        i18n.t(lang, "STATS_PRO_USAGE_HIGH_RISK"),
+        i18n.t(lang, "STATS_PRO_USAGE_AVOID"),
+        "",
+        i18n.t(lang, "STATS_PRO_RISK_NOTE"),
+        i18n.t(lang, "STATS_PRO_LEVERAGE_NOTE"),
+    ]
     if not events:
-        lines.append(i18n.t(lang, "HISTORY_NO_SIGNALS", period=period_label))
-        return "\n".join(lines)
+        lines.append("")
+        lines.append(i18n.t(lang, "HISTORY_NO_SIGNALS", period=_period_label(time_window, lang)))
     return "\n".join(lines)
 
 
@@ -872,21 +891,21 @@ def _get_history_page(
     *,
     time_window: str,
     page: int,
-) -> tuple[int, int, list[dict], dict, dict[str, dict[str, int]]]:
+) -> tuple[int, int, list[dict], dict, dict[str, dict[str, int]], float]:
     enforce_signal_ttl()
     now_ts = int(time.time())
     since_ts = window_since(time_window, now_ts)
     total = count_signal_events(
         user_id=None,
         since_ts=since_ts,
-        min_score=None,
+        min_score=80,
     )
     pages = max(1, (total + 9) // 10)
     page = max(0, min(page, pages - 1))
     events_rows = list_signal_events(
         user_id=None,
         since_ts=since_ts,
-        min_score=None,
+        min_score=80,
         limit=10,
         offset=page * 10,
     )
@@ -894,14 +913,22 @@ def _get_history_page(
     outcome_counts = get_signal_outcome_counts(
         user_id=None,
         since_ts=since_ts,
-        min_score=None,
+        min_score=80,
     )
     score_bucket_counts = get_signal_score_bucket_counts(
         user_id=None,
         since_ts=since_ts,
-        min_score=None,
+        min_score=80,
     )
-    return page, pages, events, outcome_counts, score_bucket_counts
+    rr_stats = get_signal_avg_rr(
+        user_id=None,
+        since_ts=since_ts,
+        min_score=80,
+        score_min=90,
+        score_max=100,
+    )
+    avg_rr_90_100 = float(rr_stats.get("avg_rr", 0.0))
+    return page, pages, events, outcome_counts, score_bucket_counts, avg_rr_90_100
 
 
 async def _render_history(
@@ -912,7 +939,7 @@ async def _render_history(
 ) -> None:
     if callback.message is None or callback.from_user is None:
         return
-    page, pages, events, outcome_counts, score_bucket_counts = _get_history_page(
+    page, pages, events, outcome_counts, score_bucket_counts, avg_rr_90_100 = _get_history_page(
         time_window=time_window,
         page=page,
     )
@@ -929,6 +956,7 @@ async def _render_history(
             pages,
             outcome_counts,
             score_bucket_counts,
+            avg_rr_90_100,
         ),
         reply_markup=_archive_inline_kb(
             lang,
@@ -1703,7 +1731,7 @@ async def sig_refresh(callback: CallbackQuery):
             context = _get_history_context(callback.from_user.id)
             if context:
                 time_window, page = context
-                page, pages, events, outcome_counts, score_bucket_counts = _get_history_page(
+                page, pages, events, outcome_counts, score_bucket_counts, avg_rr_90_100 = _get_history_page(
                     time_window=time_window,
                     page=page,
                 )
@@ -1716,6 +1744,7 @@ async def sig_refresh(callback: CallbackQuery):
                         pages,
                         outcome_counts,
                         score_bucket_counts,
+                        avg_rr_90_100,
                     ),
                     reply_markup=_archive_inline_kb(
                         lang,
