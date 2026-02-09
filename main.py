@@ -818,6 +818,7 @@ def _format_archive_list(
             _score_bucket_line("90-100", "90–100"),
             _score_bucket_line("80-89", "80–89"),
             _score_bucket_line("70-79", "70–79"),
+            _score_bucket_line("60-69", "60–69"),
             "",
             i18n.t(
                 lang,

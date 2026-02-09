@@ -811,7 +811,22 @@ def get_signal_score_bucket_counts(
                 SUM(CASE
                     WHEN score BETWEEN 70 AND 79
                      AND status IN ('EXP', 'EXPIRED', 'NO_FILL', 'NF')
-                    THEN 1 ELSE 0 END) AS b70_neutral
+                    THEN 1 ELSE 0 END) AS b70_neutral,
+                SUM(CASE
+                    WHEN score BETWEEN 60 AND 69
+                    THEN 1 ELSE 0 END) AS b60_total,
+                SUM(CASE
+                    WHEN score BETWEEN 60 AND 69
+                     AND status IN ('TP1', 'TP2', 'BE')
+                    THEN 1 ELSE 0 END) AS b60_passed,
+                SUM(CASE
+                    WHEN score BETWEEN 60 AND 69
+                     AND status = 'SL'
+                    THEN 1 ELSE 0 END) AS b60_failed,
+                SUM(CASE
+                    WHEN score BETWEEN 60 AND 69
+                     AND status IN ('EXP', 'EXPIRED', 'NO_FILL', 'NF')
+                    THEN 1 ELSE 0 END) AS b60_neutral
             FROM signal_events
             WHERE {where_clause}
             """,
@@ -821,15 +836,19 @@ def get_signal_score_bucket_counts(
         b90_total = int(row["b90_total"] or 0)
         b80_total = int(row["b80_total"] or 0)
         b70_total = int(row["b70_total"] or 0)
+        b60_total = int(row["b60_total"] or 0)
         b90_passed = int(row["b90_passed"] or 0)
         b80_passed = int(row["b80_passed"] or 0)
         b70_passed = int(row["b70_passed"] or 0)
+        b60_passed = int(row["b60_passed"] or 0)
         b90_failed = int(row["b90_failed"] or 0)
         b80_failed = int(row["b80_failed"] or 0)
         b70_failed = int(row["b70_failed"] or 0)
+        b60_failed = int(row["b60_failed"] or 0)
         b90_neutral = int(row["b90_neutral"] or 0)
         b80_neutral = int(row["b80_neutral"] or 0)
         b70_neutral = int(row["b70_neutral"] or 0)
+        b60_neutral = int(row["b60_neutral"] or 0)
         return {
             "90-100": {
                 "passed": b90_passed,
@@ -848,6 +867,12 @@ def get_signal_score_bucket_counts(
                 "failed": b70_failed,
                 "neutral": b70_neutral,
                 "in_progress": max(b70_total - b70_passed - b70_failed - b70_neutral, 0),
+            },
+            "60-69": {
+                "passed": b60_passed,
+                "failed": b60_failed,
+                "neutral": b60_neutral,
+                "in_progress": max(b60_total - b60_passed - b60_failed - b60_neutral, 0),
             },
         }
     finally:
