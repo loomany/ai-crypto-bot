@@ -785,7 +785,7 @@ def _format_archive_list(
     pages: int,
     outcome_counts: dict,
     score_bucket_counts: dict[str, dict[str, int]],
-    avg_rr_90_100: float,
+    avg_rr_90_100: float | None,
 ) -> str:
     def _bucket_stats(bucket_key: str) -> tuple[int, int, int, int]:
         bucket = score_bucket_counts.get(bucket_key, {})
@@ -801,11 +801,14 @@ def _format_archive_list(
     count_90_100 = b90_passed + b90_failed + b90_neutral + b90_in_progress
     count_80_89 = b80_passed + b80_failed + b80_neutral + b80_in_progress
     winrate_90_100 = (
-        (b90_passed / (b90_passed + b90_failed)) * 100 if (b90_passed + b90_failed) else 0.0
+        (b90_passed / (b90_passed + b90_failed)) * 100 if (b90_passed + b90_failed) else None
     )
     winrate_80_89 = (
-        (b80_passed / (b80_passed + b80_failed)) * 100 if (b80_passed + b80_failed) else 0.0
+        (b80_passed / (b80_passed + b80_failed)) * 100 if (b80_passed + b80_failed) else None
     )
+    winrate_90_text = f"{winrate_90_100:.1f}%" if winrate_90_100 is not None else "—"
+    winrate_80_text = f"{winrate_80_89:.1f}%" if winrate_80_89 is not None else "—"
+    avg_rr_text = f"{avg_rr_90_100:.2f}" if avg_rr_90_100 is not None else "—"
 
     lines = [
         i18n.t(lang, "STATS_PRO_TITLE"),
@@ -814,8 +817,8 @@ def _format_archive_list(
         i18n.t(lang, "STATS_PRO_RECOMMENDED_SUB"),
         "",
         i18n.t(lang, "STATS_PRO_SCORE_RANGE_90_100"),
-        i18n.t(lang, "STATS_PRO_WINRATE_LINE", winrate=f"{winrate_90_100:.1f}"),
-        i18n.t(lang, "STATS_PRO_AVG_RR_LINE", avg_rr=f"{avg_rr_90_100:.2f}"),
+        i18n.t(lang, "STATS_PRO_WINRATE_LINE", winrate=winrate_90_text),
+        i18n.t(lang, "STATS_PRO_AVG_RR_LINE", avg_rr=avg_rr_text),
         i18n.t(lang, "STATS_PRO_TOTAL_SIGNALS_LINE", count=count_90_100),
         i18n.t(lang, "STATS_PRO_STATUS_PRIMARY"),
         "",
@@ -827,7 +830,7 @@ def _format_archive_list(
         i18n.t(lang, "STATS_PRO_HIGH_RISK_SUB"),
         "",
         i18n.t(lang, "STATS_PRO_SCORE_RANGE_80_89"),
-        i18n.t(lang, "STATS_PRO_WINRATE_LINE", winrate=f"{winrate_80_89:.1f}"),
+        i18n.t(lang, "STATS_PRO_WINRATE_LINE", winrate=winrate_80_text),
         i18n.t(lang, "STATS_PRO_TOTAL_SIGNALS_LINE", count=count_80_89),
         i18n.t(lang, "STATS_PRO_STATUS_SELECTIVE"),
         "",
@@ -845,10 +848,10 @@ def _format_archive_list(
         i18n.t(lang, "STATS_PRO_SUMMARY_HEADER"),
         i18n.t(lang, "STATS_PRO_SUMMARY_SUB"),
         "",
-        i18n.t(lang, "STATS_PRO_TP_TOTAL", tp_total=outcome_counts.get("tp1", 0) + outcome_counts.get("tp2", 0)),
-        i18n.t(lang, "STATS_PRO_SL_TOTAL", sl_total=outcome_counts.get("sl", 0)),
-        i18n.t(lang, "STATS_PRO_NEUTRAL_TOTAL", neutral_total=outcome_counts.get("neutral", 0)),
-        i18n.t(lang, "STATS_PRO_IN_PROGRESS_TOTAL", in_progress_total=outcome_counts.get("in_progress", 0)),
+        i18n.t(lang, "STATS_PRO_TP_TOTAL", tp_total=outcome_counts.get("tp_count", 0)),
+        i18n.t(lang, "STATS_PRO_SL_TOTAL", sl_total=outcome_counts.get("sl_count", 0)),
+        i18n.t(lang, "STATS_PRO_NEUTRAL_TOTAL", neutral_total=outcome_counts.get("neutral_count", 0)),
+        i18n.t(lang, "STATS_PRO_IN_PROGRESS_TOTAL", in_progress_total=outcome_counts.get("in_progress_count", 0)),
         "",
         i18n.t(lang, "STATS_PRO_NEUTRAL_NOTE"),
         i18n.t(lang, "STATS_PRO_NEUTRAL_NOTE_2"),
@@ -865,7 +868,7 @@ def _format_archive_list(
     ]
     if not events:
         lines.append("")
-        lines.append(i18n.t(lang, "HISTORY_NO_SIGNALS", period=_period_label(time_window, lang)))
+        lines.append(i18n.t(lang, "HISTORY_EMPTY_PERIOD"))
     return "\n".join(lines)
 
 
@@ -934,7 +937,7 @@ def _get_history_page(
     *,
     time_window: str,
     page: int,
-) -> tuple[int, int, list[dict], dict, dict[str, dict[str, int]], float]:
+) -> tuple[int, int, list[dict], dict, dict[str, dict[str, int]], float | None]:
     try:
         enforce_signal_ttl()
         now_ts = int(time.time())
@@ -954,11 +957,17 @@ def _get_history_page(
             offset=page * 10,
         )
         events = [dict(row) for row in events_rows]
-        outcome_counts = get_signal_outcome_counts(
+        raw_outcomes = get_signal_outcome_counts(
             user_id=None,
             since_ts=since_ts,
             min_score=80,
         )
+        outcome_counts = {
+            "tp_count": raw_outcomes.get("tp1", 0) + raw_outcomes.get("tp2", 0),
+            "sl_count": raw_outcomes.get("sl", 0),
+            "neutral_count": raw_outcomes.get("neutral", 0),
+            "in_progress_count": raw_outcomes.get("in_progress", 0),
+        }
         score_bucket_counts = get_signal_score_bucket_counts(
             user_id=None,
             since_ts=since_ts,
@@ -971,11 +980,12 @@ def _get_history_page(
             score_min=90,
             score_max=100,
         )
-        avg_rr_90_100 = float(rr_stats.get("avg_rr", 0.0))
+        avg_rr_samples = int(rr_stats.get("samples", 0) or 0)
+        avg_rr_90_100 = float(rr_stats.get("avg_rr", 0.0)) if avg_rr_samples > 0 else None
         return page, pages, events, outcome_counts, score_bucket_counts, avg_rr_90_100
     except Exception as exc:
         logger.exception("history page load failed: %s", exc)
-        return 0, 1, [], {}, {}, 0.0
+        return 0, 1, [], {}, {}, None
 
 
 async def _render_history(
@@ -1571,6 +1581,41 @@ async def stats_menu(message: Message):
     )
 
 
+@dp.callback_query(F.data.regexp(r"^stats:(1d|7d|30d|all)$"))
+async def stats_period_callback(callback: CallbackQuery):
+    if callback.message is None or callback.from_user is None:
+        return
+    _, time_window = callback.data.split(":")
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    try:
+        await _render_history(callback=callback, time_window=time_window, page=0)
+    except Exception as exc:
+        user_id = callback.from_user.id if callback.from_user else None
+        mark_error("stats_period_callback", str(exc))
+        logger.exception(
+            "stats_period_callback failed: window=%s user_id=%s err=%s",
+            time_window,
+            user_id,
+            exc,
+        )
+        lang = get_user_lang(user_id) or "ru"
+        with suppress(Exception):
+            await callback.message.answer(i18n.t(lang, "HISTORY_LOAD_ERROR"))
+
+
+@dp.callback_query(F.data.regexp(r"^stats:"))
+async def stats_unknown_period(callback: CallbackQuery):
+    if callback.message is None or callback.from_user is None:
+        return
+    user_id = callback.from_user.id
+    logger.warning("stats_unknown_period: data=%s user_id=%s", callback.data, user_id)
+    lang = get_user_lang(user_id) or "ru"
+    await callback.answer(i18n.t(lang, "UNKNOWN_PERIOD"), show_alert=True)
+
+
 @dp.callback_query(F.data.regexp(r"^hist:(1d|7d|30d|all):\d+$"))
 async def history_callback(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
@@ -1585,10 +1630,15 @@ async def history_callback(callback: CallbackQuery):
     try:
         await _render_history(callback=callback, time_window=time_window, page=page_value)
     except Exception as exc:
+        user_id = callback.from_user.id if callback.from_user else None
         mark_error("history_callback", str(exc))
-        logger.exception("history_callback failed: %s", exc)
-        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-        lang = lang or "ru"
+        logger.exception(
+            "history_callback failed: window=%s user_id=%s err=%s",
+            time_window,
+            user_id,
+            exc,
+        )
+        lang = get_user_lang(user_id) or "ru"
         with suppress(Exception):
             await callback.message.answer(i18n.t(lang, "HISTORY_LOAD_ERROR"))
 
