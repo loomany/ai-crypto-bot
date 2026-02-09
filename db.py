@@ -11,8 +11,16 @@ TRIAL_PUMP_LIMIT = 7
 
 
 def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(get_db_path(), check_same_thread=False)
+    conn = sqlite3.connect(get_db_path(), check_same_thread=False, timeout=5.0)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.Error:
+        pass
+    try:
+        conn.execute("PRAGMA busy_timeout=3000")
+    except sqlite3.Error:
+        pass
     return conn
 
 
