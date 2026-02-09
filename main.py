@@ -1019,9 +1019,26 @@ def _format_short_result_message(event: dict) -> str | None:
     symbol = str(event.get("symbol", "")).upper()
     side = str(event.get("side", "")).upper()
     score = int(event.get("score", 0))
+    entry_from = float(event.get("poi_low", 0.0))
+    entry_to = float(event.get("poi_high", 0.0))
+    tp1 = float(event.get("tp1", 0.0))
+    tp2 = float(event.get("tp2", 0.0))
     header = ""
     subtitle = ""
     detail_lines: list[str] = []
+    extra_lines: list[str] = []
+
+    if entry_from or entry_to:
+        if entry_from and entry_to:
+            extra_lines.append(
+                f"Вход: {_format_price(entry_from)}–{_format_price(entry_to)}"
+            )
+        else:
+            extra_lines.append(f"Вход: {_format_price(entry_from or entry_to)}")
+    if tp1:
+        extra_lines.append(f"TP1: {_format_price(tp1)}")
+    if tp2:
+        extra_lines.append(f"TP2: {_format_price(tp2)}")
 
     if status == "TP1":
         header = "✅ TP1"
@@ -1074,6 +1091,7 @@ def _format_short_result_message(event: dict) -> str | None:
     else:
         return None
 
+    detail_lines.extend(extra_lines)
     return "\n".join([header, subtitle, "", *detail_lines])
 
 
