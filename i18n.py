@@ -65,7 +65,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "MENU_STATS": "📊 Статистика",
         "MENU_SYSTEM": "ℹ️ О системе",
         "MENU_BACK": "⬅️ Назад",
-        "SYS_STATUS": "🛰 Статус системы",
+        "SYS_STATUS": "🧠 Статус анализ рынка",
         "SYS_DIAG_ADMIN": "🧪 Диагностика (админ)",
         "SYS_TEST_AI": "🧪 Тест AI (всем)",
         "SYS_TEST_PD": "🧪 Тест Pump/Dump (всем)",
@@ -73,39 +73,35 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SYS_PAY": "💳 Оплатить подписку",
         "SYS_DIAG": "🧪 Диагностика",
         "SYSTEM_STATUS_TEXT": (
-            "📡 Статус системы\n\n"
-            "{binance_line}\n\n"
-            "{ai_status_line}\n"
-            "{ai_last_cycle}\n"
-            "{ai_scan_line}\n"
-            "{ai_current_line}\n"
-            "{ai_cycle_line}"
-            "{ai_last_signal}\n\n"
-            "{pd_status_line}\n"
-            "{pd_last_cycle}\n"
-            "{pd_progress_line}\n"
-            "{pd_current_line}\n"
-            "{pd_last_signal}"
+            "🧠 Статус анализа рынка\n\n"
+            "🔌 Связь с Binance: {binance_ok_emoji} {binance_status_text}\n"
+            "⏱ последний анализ: {last_ok_age_sec} сек назад\n\n"
+            "📊 Режим рынка: {market_mode_text}\n\n"
+            "🎯 AI-анализ:\n"
+            "• рынок анализируется: {market_symbols_total} монет\n"
+            "• сейчас проверяю: {current_symbol_or_dash}\n"
+            "• сигналы: {signals_status_text}\n\n"
+            "🧪 Сегодня:\n"
+            "• найдено идей: {ideas_found_today}\n"
+            "• отброшено без подтверждения: {dropped_no_confirm_today}\n"
+            "• отправлено сигналов: {signals_sent_today}\n\n"
+            "📉 Последний подтверждённый сценарий:\n"
+            "{last_signal_symbol_or_dash} — {last_signal_side_or_dash} | {last_signal_dt_or_dash}\n\n"
+            "⚡ Pump / Dump монитор:\n"
+            "• {pump_status_text}\n"
+            "• сейчас проверяю: {pump_current_symbol_or_dash}"
         ),
-        "SYSTEM_STATUS_BINANCE_OK": "🔌 Связь с Binance: ✅ есть ({seconds_ago})",
-        "SYSTEM_STATUS_BINANCE_NO_DATA": "🔌 Связь с Binance: ⛔ нет свежих данных",
-        "SYSTEM_STATUS_AI_RUNNING_LINE": "🎯 AI-сигналы: ✅ работают",
-        "SYSTEM_STATUS_AI_STOPPED_LINE": "🎯 AI-сигналы: ⛔ не запущены",
-        "SYSTEM_STATUS_PD_RUNNING_LINE": "⚡ Pump / Dump: ✅ работает",
-        "SYSTEM_STATUS_PD_STOPPED_LINE": "⚡ Pump / Dump: ⛔ не запущен",
-        "SYSTEM_STATUS_LAST_CYCLE_LINE": "• последний цикл: {seconds_ago}",
-        "SYSTEM_STATUS_LAST_CYCLE_NO_DATA": "• последний цикл: нет данных",
-        "SYSTEM_STATUS_SCAN_LINE": "• скан рынка: {current} / {total}",
-        "SYSTEM_STATUS_SCAN_NO_DATA": "• скан рынка: нет данных",
-        "SYSTEM_STATUS_CURRENT_LINE": "• сейчас проверяю: {symbol}",
-        "SYSTEM_STATUS_CURRENT_NO_DATA": "• сейчас проверяю: нет данных",
-        "SYSTEM_STATUS_PROGRESS_LINE": "• прогресс: {current} / {total}",
-        "SYSTEM_STATUS_PROGRESS_NO_DATA": "• прогресс: нет данных",
-        "SYSTEM_STATUS_LAST_SIGNAL_LINE": "• последний сигнал: {text}",
-        "SYSTEM_STATUS_LAST_SIGNAL_NONE": "нет",
-        "SYSTEM_STATUS_LAST_SIGNAL_NONE_PD": "—",
-        "SYSTEM_STATUS_SECONDS_AGO": "{seconds} сек назад",
-        "SYSTEM_STATUS_CYCLE_LINE": "• скорость: ~{seconds} сек / цикл",
+        "SYSTEM_STATUS_BINANCE_ACTIVE": "активна",
+        "SYSTEM_STATUS_BINANCE_DOWN": "нет связи",
+        "SYSTEM_STATUS_MARKET_RISK_OFF": "осторожный (приоритет SHORT)",
+        "SYSTEM_STATUS_MARKET_NEUTRAL": "нейтральный",
+        "SYSTEM_STATUS_MARKET_RISK_ON": "бычий (приоритет LONG)",
+        "SYSTEM_STATUS_MARKET_AUTO": "по рынку",
+        "SYSTEM_STATUS_SIGNALS_PENDING": "ожидаю подтверждение",
+        "SYSTEM_STATUS_SIGNALS_RUNNING": "работаю",
+        "SYSTEM_STATUS_SIGNALS_PAUSED": "пауза/ошибка",
+        "SYSTEM_STATUS_PUMP_ACTIVE": "монитор активен",
+        "SYSTEM_STATUS_PUMP_PAUSED": "пауза/ошибка",
         "BTN_AI_ON": "🔔 Включить AI-уведомления",
         "BTN_AI_OFF": "🚫 Отключить AI-уведомления",
         "BTN_PD_ON": "🔔 Включить Pump/Dump-уведомления",
@@ -556,7 +552,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "MENU_STATS": "📊 Stats",
         "MENU_SYSTEM": "ℹ️ System",
         "MENU_BACK": "⬅️ Back",
-        "SYS_STATUS": "🛰 System status",
+        "SYS_STATUS": "🧠 Market Analysis Status",
         "SYS_DIAG_ADMIN": "🧪 Diagnostics (admin)",
         "SYS_TEST_AI": "🧪 Test AI (all)",
         "SYS_TEST_PD": "🧪 Test Pump/Dump (all)",
@@ -596,39 +592,35 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "The bot will now send alerts on sharp market movements."
         ),
         "SYSTEM_STATUS_TEXT": (
-            "📡 System Status\n\n"
-            "{binance_line}\n\n"
-            "{ai_status_line}\n"
-            "{ai_last_cycle}\n"
-            "{ai_scan_line}\n"
-            "{ai_current_line}\n"
-            "{ai_cycle_line}"
-            "{ai_last_signal}\n\n"
-            "{pd_status_line}\n"
-            "{pd_last_cycle}\n"
-            "{pd_progress_line}\n"
-            "{pd_current_line}\n"
-            "{pd_last_signal}"
+            "🧠 Market Analysis Status\n\n"
+            "🔌 Binance connection: {binance_ok_emoji} {binance_status_text}\n"
+            "⏱ last analysis: {last_ok_age_sec} sec ago\n\n"
+            "📊 Market mode: {market_mode_text}\n\n"
+            "🎯 AI analysis:\n"
+            "• market coverage: {market_symbols_total} coins\n"
+            "• currently scanning: {current_symbol_or_dash}\n"
+            "• signals: {signals_status_text}\n\n"
+            "🧪 Today:\n"
+            "• ideas found: {ideas_found_today}\n"
+            "• dropped without confirmation: {dropped_no_confirm_today}\n"
+            "• signals sent: {signals_sent_today}\n\n"
+            "📉 Last confirmed scenario:\n"
+            "{last_signal_symbol_or_dash} — {last_signal_side_or_dash} | {last_signal_dt_or_dash}\n\n"
+            "⚡ Pump / Dump monitor:\n"
+            "• {pump_status_text}\n"
+            "• currently scanning: {pump_current_symbol_or_dash}"
         ),
-        "SYSTEM_STATUS_BINANCE_OK": "🔌 Binance connection: ✅ connected ({seconds_ago})",
-        "SYSTEM_STATUS_BINANCE_NO_DATA": "🔌 Binance connection: ⛔ no fresh data",
-        "SYSTEM_STATUS_AI_RUNNING_LINE": "🎯 AI signals: ✅ running",
-        "SYSTEM_STATUS_AI_STOPPED_LINE": "🎯 AI signals: ⛔ stopped",
-        "SYSTEM_STATUS_PD_RUNNING_LINE": "⚡ Pump / Dump: ✅ running",
-        "SYSTEM_STATUS_PD_STOPPED_LINE": "⚡ Pump / Dump: ⛔ stopped",
-        "SYSTEM_STATUS_LAST_CYCLE_LINE": "• last cycle: {seconds_ago}",
-        "SYSTEM_STATUS_LAST_CYCLE_NO_DATA": "• last cycle: no data",
-        "SYSTEM_STATUS_SCAN_LINE": "• market scan: {current} / {total}",
-        "SYSTEM_STATUS_SCAN_NO_DATA": "• market scan: no data",
-        "SYSTEM_STATUS_CURRENT_LINE": "• currently scanning: {symbol}",
-        "SYSTEM_STATUS_CURRENT_NO_DATA": "• currently scanning: no data",
-        "SYSTEM_STATUS_PROGRESS_LINE": "• progress: {current} / {total}",
-        "SYSTEM_STATUS_PROGRESS_NO_DATA": "• progress: no data",
-        "SYSTEM_STATUS_LAST_SIGNAL_LINE": "• last signal: {text}",
-        "SYSTEM_STATUS_LAST_SIGNAL_NONE": "none",
-        "SYSTEM_STATUS_LAST_SIGNAL_NONE_PD": "—",
-        "SYSTEM_STATUS_SECONDS_AGO": "{seconds} seconds ago",
-        "SYSTEM_STATUS_CYCLE_LINE": "• speed: ~{seconds} sec / cycle",
+        "SYSTEM_STATUS_BINANCE_ACTIVE": "connected",
+        "SYSTEM_STATUS_BINANCE_DOWN": "no connection",
+        "SYSTEM_STATUS_MARKET_RISK_OFF": "cautious (SHORT priority)",
+        "SYSTEM_STATUS_MARKET_NEUTRAL": "neutral",
+        "SYSTEM_STATUS_MARKET_RISK_ON": "bullish (LONG priority)",
+        "SYSTEM_STATUS_MARKET_AUTO": "by market",
+        "SYSTEM_STATUS_SIGNALS_PENDING": "awaiting confirmation",
+        "SYSTEM_STATUS_SIGNALS_RUNNING": "running",
+        "SYSTEM_STATUS_SIGNALS_PAUSED": "paused/error",
+        "SYSTEM_STATUS_PUMP_ACTIVE": "monitor active",
+        "SYSTEM_STATUS_PUMP_PAUSED": "paused/error",
         "PAYWALL_AI": (
             "🔒 AI signals are available by subscription.\n"
             "Tap “Buy subscription” — I’ll show the instructions."
