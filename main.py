@@ -976,7 +976,6 @@ async def _render_history(
         time_window=time_window,
         page=page,
     )
-    await callback.answer()
     lang = get_user_lang(callback.from_user.id) if callback.from_user else None
     lang = lang or "ru"
     _set_history_context(callback.from_user.id, time_window, page)
@@ -1565,7 +1564,19 @@ async def history_callback(callback: CallbackQuery):
     _, time_window, page_raw = callback.data.split(":")
     page_value = max(0, int(page_raw))
     print(f"[history] window={time_window} page={page_value}")
-    await _render_history(callback=callback, time_window=time_window, page=page_value)
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    try:
+        await _render_history(callback=callback, time_window=time_window, page=page_value)
+    except Exception as exc:
+        mark_error("history_callback", str(exc))
+        logger.exception("history_callback failed: %s", exc)
+        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+        lang = lang or "ru"
+        with suppress(Exception):
+            await callback.message.answer(i18n.t(lang, "HISTORY_LOAD_ERROR"))
 
 
 def _archive_inline_kb(
