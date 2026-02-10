@@ -5871,18 +5871,26 @@ async def ai_scan_once() -> None:
             if time.time() - start > BUDGET:
                 print("[AI] budget exceeded during confirm retry sends")
                 break
-            update_current_symbol("ai_signals", signal.get("symbol", ""))
-            print(
-                "[ai_signals] RETRY SEND "
-                f"{signal.get('symbol', '')} {signal.get('direction', '')} "
-                f"score={signal.get('score', 0)}"
-            )
-            await send_signal_to_all(signal)
-            meta = signal.get("meta") if isinstance(signal, dict) else None
-            setup_id = meta.get("setup_id") if isinstance(meta, dict) else None
-            if setup_id:
-                await register_confirm_retry_sent(setup_id)
-            retry_sent += 1
+            try:
+                update_current_symbol("ai_signals", signal.get("symbol", ""))
+                print(
+                    "[ai_signals] RETRY SEND "
+                    f"{signal.get('symbol', '')} {signal.get('direction', '')} "
+                    f"score={signal.get('score', 0)}"
+                )
+                await send_signal_to_all(signal)
+                meta = signal.get("meta") if isinstance(signal, dict) else None
+                setup_id = meta.get("setup_id") if isinstance(meta, dict) else None
+                if setup_id:
+                    await register_confirm_retry_sent(setup_id)
+                retry_sent += 1
+            except Exception:
+                logger.exception("[ai_signals] retry send failed for symbol=%s", signal.get("symbol", "-"))
+                if module_state:
+                    fails = module_state.state.get("fails") if isinstance(module_state.state.get("fails"), dict) else {}
+                    fails["fail_retry_send"] = int(fails.get("fail_retry_send", 0) or 0) + 1
+                    module_state.state["fails"] = fails
+                continue
 
         with binance_request_context("ai_signals"):
             symbols = await _get_ai_universe()
@@ -6037,14 +6045,22 @@ async def ai_scan_once() -> None:
             score = signal.get("score", 0)
             if score < FREE_MIN_SCORE:
                 continue
-            update_current_symbol("ai_signals", signal.get("symbol", ""))
-            print(f"[ai_signals] DIRECT SEND {signal['symbol']} {signal['direction']} score={score}")
-            await send_signal_to_all(signal)
-            meta = signal.get("meta") if isinstance(signal, dict) else None
-            setup_id = meta.get("setup_id") if isinstance(meta, dict) else None
-            if setup_id:
-                await register_confirm_retry_sent(setup_id)
-            sent_count += 1
+            try:
+                update_current_symbol("ai_signals", signal.get("symbol", ""))
+                print(f"[ai_signals] DIRECT SEND {signal['symbol']} {signal['direction']} score={score}")
+                await send_signal_to_all(signal)
+                meta = signal.get("meta") if isinstance(signal, dict) else None
+                setup_id = meta.get("setup_id") if isinstance(meta, dict) else None
+                if setup_id:
+                    await register_confirm_retry_sent(setup_id)
+                sent_count += 1
+            except Exception:
+                logger.exception("[ai_signals] direct send failed for symbol=%s", signal.get("symbol", "-"))
+                if module_state:
+                    fails = module_state.state.get("fails") if isinstance(module_state.state.get("fails"), dict) else {}
+                    fails["fail_direct_send"] = int(fails.get("fail_direct_send", 0) or 0) + 1
+                    module_state.state["fails"] = fails
+                continue
 
         current_symbol = MODULES.get("ai_signals").current_symbol if "ai_signals" in MODULES else None
         metrics = get_binance_metrics_snapshot("ai_signals")
@@ -6061,6 +6077,10 @@ async def ai_scan_once() -> None:
             f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
             f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done}"
         )
+        module_state = MODULES.get("ai_signals")
+        if module_state:
+            module_state.last_error = None
+            module_state.state["last_exception"] = None
         mark_ok(
             "ai_signals",
             extra=(
@@ -6074,6 +6094,10 @@ async def ai_scan_once() -> None:
             ),
         )
     except Exception as e:
+        module_state = MODULES.get("ai_signals")
+        if module_state:
+            module_state.state["last_exception"] = traceback.format_exc()
+        mark_error("ai_signals", str(e))
         logger.exception("[ai_signals] cycle crash: %s", e)
         logger.error(traceback.format_exc())
     finally:

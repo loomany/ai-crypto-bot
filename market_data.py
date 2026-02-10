@@ -7,11 +7,13 @@ from binance_client import (
     fetch_klines,
 )
 from market_cache import get_spot_24h
+from utils.safe_math import EPS, safe_div, safe_pct
 
 
 # ===== ТЕХАНАЛИЗ НА СЫРЫХ ДАННЫХ =====
 
 def _rsi(closes: List[float], period: int = 14) -> float:
+    period = max(1, int(period))
     if len(closes) <= period:
         return 50.0
 
@@ -26,19 +28,21 @@ def _rsi(closes: List[float], period: int = 14) -> float:
             gains.append(0.0)
             losses.append(-diff)
 
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period if sum(losses) != 0 else 0.000001
+    avg_gain = safe_div(sum(gains), period, 0.0)
+    avg_loss = safe_div(sum(losses), period, 0.0)
 
     for i in range(period + 1, len(closes)):
         diff = closes[i] - closes[i - 1]
         gain = diff if diff > 0 else 0.0
         loss = -diff if diff < 0 else 0.0
 
-        avg_gain = (avg_gain * (period - 1) + gain) / period
-        avg_loss = (avg_loss * (period - 1) + loss) / period if avg_loss != 0 else 0.000001
+        avg_gain = safe_div((avg_gain * (period - 1) + gain), period, avg_gain)
+        avg_loss = safe_div((avg_loss * (period - 1) + loss), period, avg_loss)
 
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
+    if avg_loss <= EPS:
+        return 100.0
+    rs = safe_div(avg_gain, avg_loss, 0.0)
+    rsi = 100 - safe_div(100, (1 + rs), 0.0)
     return round(rsi, 2)
 
 
@@ -48,7 +52,7 @@ def _simple_trend(closes: List[float]) -> str:
 
     first = closes[0]
     last = closes[-1]
-    change = (last - first) / first * 100
+    change = safe_pct((last - first), first, 0.0)
 
     if change > 1.5:
         return "bullish"
@@ -70,7 +74,7 @@ def _volume_description(volumes: List[float]) -> str:
     if len(volumes) < 5:
         return "normal"
 
-    avg = sum(volumes[:-1]) / (len(volumes) - 1)
+    avg = safe_div(sum(volumes[:-1]), (len(volumes) - 1), 0.0)
     last = volumes[-1]
 
     if last > avg * 1.3:
@@ -89,8 +93,8 @@ def _macd_signal(closes: List[float]) -> str:
     short_window = closes[-12:]
     long_window = closes[-26:]
 
-    short_sma = sum(short_window) / len(short_window)
-    long_sma = sum(long_window) / len(long_window)
+    short_sma = safe_div(sum(short_window), len(short_window), 0.0)
+    long_sma = safe_div(sum(long_window), len(long_window), 0.0)
 
     if short_sma > long_sma * 1.003:
         return "bullish"

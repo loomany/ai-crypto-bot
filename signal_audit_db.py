@@ -8,6 +8,7 @@ from typing import Any, Dict
 from cutoff_config import get_effective_cutoff_ts
 from db_path import get_db_path
 from symbol_cache import get_blocked_symbols
+from utils.safe_math import safe_div, safe_pct
 
 
 def init_signal_audit_tables() -> None:
@@ -93,7 +94,7 @@ def _compute_rr(signal_dict: dict) -> float:
 
     risk = abs(entry_ref - sl)
     reward = abs(tp1 - entry_ref)
-    return reward / risk if risk > 0 else 0.0
+    return safe_div(reward, risk, 0.0) if risk > 0 else 0.0
 
 
 def insert_signal_audit(
@@ -376,16 +377,16 @@ def get_public_stats(days: int = 30, *, include_legacy: bool = False) -> dict:
         filled_closed = len(filled_rows)
 
         wins = sum(1 for row in filled_rows if row["outcome"] in ("TP1", "TP2", "BE"))
-        winrate = wins / filled_closed if filled_closed else 0.0
+        winrate = safe_div(wins, filled_closed, 0.0) if filled_closed else 0.0
 
         pnl_values = [row["pnl_r"] for row in filled_rows if row["pnl_r"] is not None]
-        avg_r = sum(pnl_values) / len(pnl_values) if pnl_values else 0.0
+        avg_r = safe_div(sum(pnl_values), len(pnl_values), 0.0) if pnl_values else 0.0
         median_r = float(median(pnl_values)) if pnl_values else 0.0
 
         positive_sum = sum(value for value in pnl_values if value > 0)
         negative_sum = sum(value for value in pnl_values if value < 0)
         profit_factor = (
-            positive_sum / abs(negative_sum) if negative_sum < 0 else None
+            safe_div(positive_sum, abs(negative_sum), 0.0) if negative_sum < 0 else None
         )
 
         cur.execute(
@@ -447,7 +448,7 @@ def get_public_stats(days: int = 30, *, include_legacy: bool = False) -> dict:
                     break
             streak = f"{'W' if is_win else 'L'}{count}"
 
-        filled_rate = filled_closed / total if total else 0.0
+        filled_rate = safe_div(filled_closed, total, 0.0) if total else 0.0
 
         return {
             "total": total,
@@ -590,7 +591,7 @@ def get_ai_signal_stats(days: int | None, *, include_legacy: bool = False) -> di
         tp1 = sum(1 for row in rows if row["outcome"] in ("TP1", "TP2"))
         sl = sum(1 for row in rows if row["outcome"] == "SL")
         exp = 0
-        winrate = (tp1 / total * 100) if total else 0.0
+        winrate = safe_pct(tp1, total, 0.0) if total else 0.0
 
         buckets = {
             "0-69": {"total": 0, "tp1plus": 0},
@@ -614,7 +615,7 @@ def get_ai_signal_stats(days: int | None, *, include_legacy: bool = False) -> di
 
         for bucket in buckets.values():
             total_bucket = bucket["total"]
-            bucket["winrate"] = (bucket["tp1plus"] / total_bucket * 100) if total_bucket else 0.0
+            bucket["winrate"] = safe_pct(bucket["tp1plus"], total_bucket, 0.0) if total_bucket else 0.0
 
         return {
             "total": total,
