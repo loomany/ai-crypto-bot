@@ -577,11 +577,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PUMP_MOVE_1M": "• за 1 мин: {change}%",
         "PUMP_MOVE_5M": "• за 5 мин: {change}%",
         "PUMP_VOLUME_LINE": "• объём: {volume:.2f}× от среднего",
+        "PUMP_BUTTON_EXPAND": "📖 Раскрыть",
+        "PUMP_BUTTON_COLLAPSE": "🔽 Скрыть",
+        "PUMP_TOGGLE_EXPANDED": "Открыто",
+        "PUMP_TOGGLE_COLLAPSED": "Скрыто",
+        "PUMP_TOGGLE_EXPIRED": "Состояние карточки недоступно",
         "PUMP_NOTE_1": "ℹ️ Это уведомление о резком импульсе цены и объёма.",
         "PUMP_NOTE_2": "Используется как сигнал внимания, а не готовая торговая идея.",
         "PUMP_RISK_1": "⚠️ Резкие импульсы высокорисковые.",
         "PUMP_RISK_2": "Бот не даёт точек входа и не управляет рисками.",
-        "PUMP_SOURCE": "Источник данных: Binance",
+        "PUMP_SOURCE": "Источник: Binance",
         "ADMIN_NEW_USER": (
             "🆕 Новый пользователь\n"
             "ID: {user_id}\n"
@@ -1281,12 +1286,17 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PUMP_MOVE_HEADER": "Move:",
         "PUMP_MOVE_1M": "• 1m: {change}%",
         "PUMP_MOVE_5M": "• 5m: {change}%",
-        "PUMP_VOLUME_LINE": "• volume: {volume:.2f}× vs average",
+        "PUMP_VOLUME_LINE": "• volume: {volume:.2f}× avg",
+        "PUMP_BUTTON_EXPAND": "📖 Expand",
+        "PUMP_BUTTON_COLLAPSE": "🔽 Collapse",
+        "PUMP_TOGGLE_EXPANDED": "Expanded",
+        "PUMP_TOGGLE_COLLAPSED": "Collapsed",
+        "PUMP_TOGGLE_EXPIRED": "Card state is unavailable",
         "PUMP_NOTE_1": "ℹ️ This is an alert about a sharp price/volume impulse.",
-        "PUMP_NOTE_2": "It is a heads-up signal, not a full trading idea.",
-        "PUMP_RISK_1": "⚠️ Sharp impulses are high risk.",
-        "PUMP_RISK_2": "The bot does not provide entries or manage risk.",
-        "PUMP_SOURCE": "Data source: Binance",
+        "PUMP_NOTE_2": "It’s an attention signal, not a ready trade idea.",
+        "PUMP_RISK_1": "⚠️ Sharp impulses are high-risk.",
+        "PUMP_RISK_2": "The bot does not provide entries and does not manage risk.",
+        "PUMP_SOURCE": "Source: Binance",
         "ADMIN_NEW_USER": (
             "🆕 New user\n"
             "ID: {user_id}\n"
