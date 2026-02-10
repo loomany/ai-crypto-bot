@@ -43,7 +43,9 @@ def init_signal_audit_tables() -> None:
                 state TEXT NOT NULL DEFAULT 'WAITING_ENTRY',
                 poi_touched_at INTEGER,
                 activated_at INTEGER,
-                entry_price REAL
+                entry_price REAL,
+                confirm_strict INTEGER NOT NULL DEFAULT 0,
+                confirm_count INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -62,6 +64,10 @@ def init_signal_audit_tables() -> None:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN activated_at INTEGER")
         if "entry_price" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN entry_price REAL")
+        if "confirm_strict" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN confirm_strict INTEGER NOT NULL DEFAULT 0")
+        if "confirm_count" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN confirm_count INTEGER NOT NULL DEFAULT 0")
         conn.execute(
             """
             UPDATE signal_audit
@@ -138,6 +144,8 @@ def insert_signal_audit(
         "open",
         int(signal_dict.get("ttl_minutes", 720) or 720),
         "WAITING_ENTRY",
+        int(bool(signal_dict.get("confirm_strict", False))),
+        int(signal_dict.get("confirm_count", 0) or 0),
     )
 
     conn = sqlite3.connect(get_db_path())
@@ -148,8 +156,8 @@ def insert_signal_audit(
                 signal_id, module, tier, symbol, direction, timeframe,
                 entry_from, entry_to, sl, tp1, tp2, score, rr,
                 reason_json, breakdown_json, sent_at, status, ttl_minutes
-                , state
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                , state, confirm_strict, confirm_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             payload,
         )
@@ -229,6 +237,7 @@ def mark_signal_state(
     poi_touched_at: int | None = None,
     activated_at: int | None = None,
     entry_price: float | None = None,
+    confirm_count: int | None = None,
 ) -> int:
     if not from_states:
         return 0
@@ -245,6 +254,9 @@ def mark_signal_state(
     if entry_price is not None:
         set_clauses.append("entry_price = COALESCE(entry_price, ?)")
         params.append(float(entry_price))
+    if confirm_count is not None:
+        set_clauses.append("confirm_count = ?")
+        params.append(int(confirm_count))
     params.extend([signal_id, *from_states])
 
     conn = sqlite3.connect(get_db_path())
