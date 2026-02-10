@@ -218,7 +218,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "STATS_PRO_SUMMARY_SUB": "(за {period})",
         "STATS_PRO_TP_TOTAL": "🟢 Успешные (TP): {tp_total}",
         "STATS_PRO_SL_TOTAL": "🔴 По стопу (SL): {sl_total}",
-        "STATS_PRO_NEUTRAL_TOTAL": "⏳ Без входа: {neutral_total}",
+        "STATS_PRO_NEUTRAL_TOTAL": "⚪ Без входа: {neutral_total}",
         "STATS_PRO_IN_PROGRESS_TOTAL": "🕒 В процессе: {in_progress_total}",
         "STATS_PRO_NEUTRAL_NOTE": "ℹ️ Neutral — сценарий не дошёл ни до TP, ни до SL",
         "STATS_PRO_NEUTRAL_NOTE_2": "(флет, отмена по времени или ручное закрытие).",
@@ -261,12 +261,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "HISTORY_SUMMARY": (
             "✅ Прошло: {passed}\n"
             "❌ Не прошло: {failed}\n"
-            "⏳ Neutral: {neutral}\n"
+            "⚪ Neutral: {neutral}\n"
             "⏰ В процессе: {in_progress}"
         ),
         "HISTORY_STATS_TITLE": "📊 Статистика ({period}) — по Score",
         "HISTORY_SCORE_BUCKET_LINE": (
-            "{label}: ✅ {passed} / ❌ {failed} / ⏳ {neutral} / ⏰ {in_progress}  ({percent}%)"
+            "{label}: ✅ {passed} / ❌ {failed} / ⚪ {neutral} / ⏰ {in_progress}  ({percent}%)"
         ),
         "HISTORY_NO_SIGNALS": "Нет сигналов за период ({period}).",
         "HISTORY_EMPTY_PERIOD": "За выбранный период сигналов нет.",
@@ -292,7 +292,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "totals_title": "📈 Итоги",
         "totals_tp": "🟢 TP: {value}",
         "totals_sl": "🔴 SL: {value}",
-        "totals_expired_no_entry": "⏳ Без входа (истёк): {value}",
+        "totals_expired_no_entry": "⚪ Без входа (истёк): {value}",
         "totals_no_confirmation": "🔵 Без подтверждения: {value}",
         "totals_in_progress": "🟡 В процессе: {value}",
         "explanation_title": "ℹ️ Пояснение",
@@ -355,7 +355,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "totals_no_entry_label": "Без входа",
         "history_status_tp": "🟢 TP",
         "history_status_sl": "🔴 SL",
-        "history_status_expired_no_entry": "⏳ Без входа",
+        "history_status_expired_no_entry": "⚪ Без входа",
         "history_status_no_confirmation": "🔵 Без подтверждения",
         "history_status_in_progress": "🟡 В процессе",
         "history_score_label_short": "Score {value}",
@@ -935,7 +935,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "STATS_PRO_SUMMARY_SUB": "(for {period})",
         "STATS_PRO_TP_TOTAL": "🟢 Successful (TP): {tp_total}",
         "STATS_PRO_SL_TOTAL": "🔴 Stopped (SL): {sl_total}",
-        "STATS_PRO_NEUTRAL_TOTAL": "⏳ No entry: {neutral_total}",
+        "STATS_PRO_NEUTRAL_TOTAL": "⚪ No entry: {neutral_total}",
         "STATS_PRO_IN_PROGRESS_TOTAL": "🕒 In progress: {in_progress_total}",
         "STATS_PRO_NEUTRAL_NOTE": "ℹ️ Neutral — scenario reached neither TP nor SL",
         "STATS_PRO_NEUTRAL_NOTE_2": "(range, time-based cancel, or manual close).",
@@ -978,12 +978,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "HISTORY_SUMMARY": (
             "✅ Success: {passed}\n"
             "❌ Fail: {failed}\n"
-            "⏳ Neutral: {neutral}\n"
+            "⚪ Neutral: {neutral}\n"
             "⏰ In progress: {in_progress}"
         ),
         "HISTORY_STATS_TITLE": "📊 Stats ({period}) — by Score",
         "HISTORY_SCORE_BUCKET_LINE": (
-            "{label}: ✅ {passed} / ❌ {failed} / ⏳ {neutral} / ⏰ {in_progress}  ({percent}%)"
+            "{label}: ✅ {passed} / ❌ {failed} / ⚪ {neutral} / ⏰ {in_progress}  ({percent}%)"
         ),
         "HISTORY_NO_SIGNALS": "No signals for the period ({period}).",
         "HISTORY_EMPTY_PERIOD": "No signals for the selected period.",
@@ -1009,7 +1009,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "totals_title": "📈 Summary",
         "totals_tp": "🟢 TP: {value}",
         "totals_sl": "🔴 SL: {value}",
-        "totals_expired_no_entry": "⏳ Expired (no entry): {value}",
+        "totals_expired_no_entry": "⚪ Expired (no entry): {value}",
         "totals_no_confirmation": "🔵 No confirmation: {value}",
         "totals_in_progress": "🟡 In progress: {value}",
         "explanation_title": "ℹ️ Explanation",
@@ -1041,7 +1041,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "📈 Trade summary\n\n"
             "🟢 TP: {tp_total}\n"
             "🔴 SL: {sl_total}\n"
-            "⏳ Neutral: {neutral_total}\n"
+            "⚪ Neutral: {neutral_total}\n"
             "🕒 In progress: {in_progress_total}"
         ),
         "HISTORY_LOAD_ERROR": "History loading error. Try later.",
@@ -1067,7 +1067,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "totals_no_entry_label": "No entry",
         "history_status_tp": "🟢 TP",
         "history_status_sl": "🔴 SL",
-        "history_status_expired_no_entry": "⏳ Expired (no entry)",
+        "history_status_expired_no_entry": "⚪ Expired (no entry)",
         "history_status_no_confirmation": "🔵 No confirmation",
         "history_status_in_progress": "🟡 In progress",
         "history_score_label_short": "Score {value}",
