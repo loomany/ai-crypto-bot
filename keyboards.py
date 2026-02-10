@@ -102,21 +102,21 @@ def stats_inline_kb(lang: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text=i18n.t(lang, "PERIOD_1D"),
-                    callback_data="history:1d:page=1",
+                    callback_data="hist:1d:0",
                 ),
                 InlineKeyboardButton(
                     text=i18n.t(lang, "PERIOD_7D"),
-                    callback_data="history:7d:page=1",
+                    callback_data="hist:7d:0",
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text=i18n.t(lang, "PERIOD_30D"),
-                    callback_data="history:30d:page=1",
+                    callback_data="hist:30d:0",
                 ),
                 InlineKeyboardButton(
                     text=i18n.t(lang, "PERIOD_ALL"),
-                    callback_data="history:all:page=1",
+                    callback_data="hist:all:0",
                 ),
             ],
         ]
