@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Awaitable
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -3142,45 +3143,40 @@ async def test_ai_signal_all(message: Message):
         return
     signal_dict = {
         "symbol": "TESTUSDT",
-        "direction": "long",
-        "entry_zone": (100.0, 101.0),
-        "sl": 98.0,
-        "tp1": 104.0,
-        "tp2": 108.0,
-        "score": 75,
         "is_test": True,
-        "reason": {
-            "trend_1d": "up",
-            "trend_4h": "up",
-            "rsi_1h": 55.0,
-            "volume_ratio": 1.5,
-            "rr": 2.0,
-        },
-        "title_prefix": {
-            "ru": i18n.t("ru", "TEST_AI_PREFIX"),
-            "en": i18n.t("en", "TEST_AI_PREFIX"),
-        },
     }
     stats = await send_signal_to_all(
         signal_dict,
-        allow_admin_bypass=False,
+        allow_admin_bypass=True,
         bypass_cooldown=True,
         return_stats=True,
     )
-    if stats["subscribers"] <= 0:
-        await message.answer(i18n.t(lang, "TEST_NO_SUBSCRIBERS"))
-        return
-    await message.answer(
-        i18n.t(
-            lang,
-            "TEST_AI_DONE",
-            sent=stats["sent"],
-            locked=stats["locked"],
-            paywall=stats["paywall"],
-            errors=stats["errors"],
-            subscribers=stats["subscribers"],
+    failure_samples = stats.get("error_samples", [])
+    sample_lines = []
+    for sample in failure_samples[:5]:
+        sample_lines.append(
+            f"- user_id={sample['user_id']} chat_id={sample['chat_id']} "
+            f"{sample['error_class']}: {sample['error_text']}"
         )
-    )
+    if not sample_lines:
+        sample_lines.append("- none")
+
+    report_lines = [
+        "✅ Test AI broadcast complete",
+        f"attempted: {stats['attempted']}",
+        f"sent: {stats['sent']}",
+        f"paywall: {stats['paywall']}",
+        f"skipped_locked: {stats['locked']}",
+        f"skipped_notifications_off: {stats['skipped_notifications_off']}",
+        f"errors: {stats['errors']}",
+        "samples:",
+        *sample_lines,
+    ]
+    if not stats.get("admin_received", False):
+        report_lines.append("⚠️ ADMIN did not receive test signal. Check error samples.")
+
+    await message.answer("\n".join(report_lines))
+
 
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_TEST_PD")))
@@ -4290,6 +4286,31 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
     return text
 
 
+def build_test_ai_signal(lang: str) -> str:
+    signal_dict = {
+        "symbol": "TESTUSDT",
+        "direction": "long",
+        "entry_zone": (100.0, 101.0),
+        "sl": 98.0,
+        "tp1": 104.0,
+        "tp2": 108.0,
+        "score": 75,
+        "is_test": True,
+        "reason": {
+            "trend_1d": "up",
+            "trend_4h": "up",
+            "rsi_1h": 55.0,
+            "volume_ratio": 1.5,
+            "rr": 2.0,
+        },
+        "title_prefix": {
+            "ru": i18n.t("ru", "TEST_AI_PREFIX"),
+            "en": i18n.t("en", "TEST_AI_PREFIX"),
+        },
+    }
+    return _format_signal(signal_dict, lang)
+
+
 def _subscription_kb_for(source: str, lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -4357,7 +4378,7 @@ async def send_signal_to_all(
     allow_admin_bypass: bool = True,
     bypass_cooldown: bool = False,
     return_stats: bool = False,
-) -> int | dict[str, int]:
+) -> int | dict[str, Any]:
     """Отправляет сигнал всем подписчикам без блокировки event loop."""
     if bot is None:
         print("[ai_signals] Bot is not initialized; skipping send.")
@@ -4384,16 +4405,21 @@ async def send_signal_to_all(
     is_test = bool(signal_dict.get("is_test") or (isinstance(meta, dict) and meta.get("test")))
     effective_bypass_cooldown = bypass_cooldown or is_test
     stats = {
+        "attempted": 0,
         "sent": 0,
         "locked": 0,
+        "skipped_notifications_off": 0,
         "paywall": 0,
         "errors": 0,
+        "error_blocked": 0,
+        "error_invalid_chat": 0,
         "subscribers": len(subscribers),
+        "error_samples": [],
+        "admin_received": False,
     }
     if not subscribers:
         skipped_no_subs += 1
-        print("[ai_signals] deliver: subs=0 queued=0 dedup=0")
-        return stats if return_stats else 0
+        print("[ai_signals] deliver: subs=0 (admin fallback may still receive message)")
 
     dedup_key = f"{symbol}:24h"
 
@@ -4414,73 +4440,202 @@ async def send_signal_to_all(
         entry_low, entry_high = 0.0, 0.0
     direction = str(signal_dict.get("direction") or "").lower()
 
-    tasks: list[asyncio.Task] = []
-    recipients: list[tuple[int, bool, str]] = []
-    for chat_id in subscribers:
+    admin_chat_id = ADMIN_CHAT_ID or ADMIN_USER_ID
+    recipients = list(dict.fromkeys(subscribers + ([admin_chat_id] if admin_chat_id else [])))
+    stats["attempted"] = len(recipients)
+    log_tag = "test_broadcast" if is_test else "ai_signals"
+    print(
+        f"[{log_tag}] start recipients={len(recipients)} "
+        f"subscribers={len(subscribers)} is_test={is_test}"
+    )
+
+    for chat_id in recipients:
+        if chat_id <= 0:
+            stats["errors"] += 1
+            sample = {
+                "user_id": chat_id,
+                "chat_id": chat_id,
+                "error_class": "InvalidRecipient",
+                "error_text": "chat_id is empty or zero",
+            }
+            if len(stats["error_samples"]) < 5:
+                stats["error_samples"].append(sample)
+            print(
+                f"[{log_tag}] error user_id={chat_id} chat_id={chat_id} "
+                "err=chat_id is empty or zero"
+            )
+            continue
+
         if is_user_locked(chat_id):
             stats["locked"] += 1
+            print(f"[{log_tag}] skip locked user_id={chat_id} chat_id={chat_id}")
             continue
+
+        if chat_id != admin_chat_id and not get_user_pref(chat_id, "ai_signals_enabled", 0):
+            stats["skipped_notifications_off"] += 1
+            print(
+                f"[{log_tag}] skip notifications_off user_id={chat_id} "
+                f"chat_id={chat_id}"
+            )
+            continue
+
         # индивидуальный cooldown на пользователя
         if not effective_bypass_cooldown:
             if not can_send(chat_id, "ai_signals", dedup_key, COOLDOWN_FREE_SEC):
                 skipped_dedup += 1
                 continue
         lang = get_user_lang(chat_id) or "ru"
-        message_text = _format_signal(signal_dict, lang)
-        if allow_admin_bypass and is_admin(chat_id):
-            tasks.append(asyncio.create_task(bot.send_message(chat_id, message_text)))
-            recipients.append((chat_id, True, "signal"))
-            continue
-        if is_sub_active(chat_id):
-            tasks.append(asyncio.create_task(bot.send_message(chat_id, message_text)))
-            recipients.append((chat_id, True, "signal"))
-            continue
-        ensure_trial_defaults(chat_id)
-        allowed, left = try_consume_trial(chat_id, "trial_ai_left", 1)
-        if allowed:
-            message_text = message_text + i18n.t(
-                lang,
-                "TRIAL_SUFFIX_AI",
-                left=left,
-                limit=TRIAL_AI_LIMIT,
-            )
-            tasks.append(asyncio.create_task(bot.send_message(chat_id, message_text)))
-            recipients.append((chat_id, True, "signal"))
+        if is_test:
+            message_text = build_test_ai_signal(lang)
+            should_log = False
+            kind = "signal"
         else:
-            if not _should_send_paywall(chat_id, "ai", sent_at):
-                continue
-            tasks.append(
-                asyncio.create_task(
-                    bot.send_message(
-                        chat_id,
-                        i18n.t(lang, "PAYWALL_AI"),
-                        reply_markup=_subscription_kb_for("ai", lang),
+            message_text = _format_signal(signal_dict, lang)
+            should_log = True
+            kind = "signal"
+            if allow_admin_bypass and is_admin(chat_id):
+                pass
+            elif is_sub_active(chat_id):
+                pass
+            else:
+                ensure_trial_defaults(chat_id)
+                allowed, left = try_consume_trial(chat_id, "trial_ai_left", 1)
+                if allowed:
+                    message_text = message_text + i18n.t(
+                        lang,
+                        "TRIAL_SUFFIX_AI",
+                        left=left,
+                        limit=TRIAL_AI_LIMIT,
                     )
-                )
-            )
-            recipients.append((chat_id, False, "paywall"))
+                else:
+                    if not _should_send_paywall(chat_id, "ai", sent_at):
+                        continue
+                    message_text = i18n.t(lang, "PAYWALL_AI")
+                    should_log = False
+                    kind = "paywall"
 
-    print(
-        "[ai_signals] deliver: "
-        f"subs={len(subscribers)} queued={len(tasks)} "
-        f"dedup={skipped_dedup}"
-    )
-    if not tasks:
-        return stats if return_stats else 0
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for (chat_id, should_log, kind), res in zip(recipients, results):
-        if isinstance(res, asyncio.CancelledError):
-            raise res
-        if isinstance(res, BaseException):
-            print(f"[ai_signals] Failed to send to {chat_id}: {res}")
-            stats["errors"] += 1
-            continue
-        stats["sent"] += 1
         if kind == "paywall":
             stats["paywall"] += 1
-        if not should_log:
+
+        try:
+            if kind == "paywall":
+                res = await bot.send_message(
+                    chat_id,
+                    message_text,
+                    reply_markup=_subscription_kb_for("ai", lang),
+                )
+            else:
+                res = await bot.send_message(
+                    chat_id,
+                    message_text,
+                    disable_web_page_preview=True,
+                )
+            stats["sent"] += 1
+            if chat_id == admin_chat_id:
+                stats["admin_received"] = True
+            print(f"[{log_tag}] send ok user_id={chat_id} chat_id={chat_id}")
+        except TelegramRetryAfter as exc:
+            wait_seconds = float(exc.retry_after) + random.uniform(0.05, 0.2)
+            print(
+                f"[{log_tag}] floodwait user_id={chat_id} chat_id={chat_id} "
+                f"retry_after={exc.retry_after:.2f}s"
+            )
+            await asyncio.sleep(wait_seconds)
+            try:
+                if kind == "paywall":
+                    res = await bot.send_message(
+                        chat_id,
+                        message_text,
+                        reply_markup=_subscription_kb_for("ai", lang),
+                    )
+                else:
+                    res = await bot.send_message(
+                        chat_id,
+                        message_text,
+                        disable_web_page_preview=True,
+                    )
+                stats["sent"] += 1
+                if chat_id == admin_chat_id:
+                    stats["admin_received"] = True
+                print(f"[{log_tag}] send ok after retry user_id={chat_id} chat_id={chat_id}")
+            except Exception as retry_exc:
+                stats["errors"] += 1
+                sample = {
+                    "user_id": chat_id,
+                    "chat_id": chat_id,
+                    "error_class": retry_exc.__class__.__name__,
+                    "error_text": str(retry_exc),
+                }
+                if len(stats["error_samples"]) < 5:
+                    stats["error_samples"].append(sample)
+                print(
+                    f"[{log_tag}] error user_id={chat_id} chat_id={chat_id} "
+                    f"err={retry_exc.__class__.__name__}: {retry_exc}"
+                )
+                logger.exception(
+                    f"[{log_tag}] retry failed user_id=%s chat_id=%s", chat_id, chat_id
+                )
+                continue
+        except TelegramForbiddenError as exc:
+            stats["errors"] += 1
+            stats["error_blocked"] += 1
+            set_user_pref(chat_id, "tg_blocked", 1)
+            set_user_pref(chat_id, "ai_signals_enabled", 0)
+            sample = {
+                "user_id": chat_id,
+                "chat_id": chat_id,
+                "error_class": exc.__class__.__name__,
+                "error_text": str(exc),
+            }
+            if len(stats["error_samples"]) < 5:
+                stats["error_samples"].append(sample)
+            print(
+                f"[{log_tag}] error user_id={chat_id} chat_id={chat_id} "
+                f"err={exc.__class__.__name__}: {exc}"
+            )
+            logger.exception(f"[{log_tag}] forbidden user_id=%s chat_id=%s", chat_id, chat_id)
             continue
+        except TelegramBadRequest as exc:
+            stats["errors"] += 1
+            stats["error_invalid_chat"] += 1
+            set_user_pref(chat_id, "invalid_chat_id", 1)
+            sample = {
+                "user_id": chat_id,
+                "chat_id": chat_id,
+                "error_class": exc.__class__.__name__,
+                "error_text": str(exc),
+            }
+            if len(stats["error_samples"]) < 5:
+                stats["error_samples"].append(sample)
+            print(
+                f"[{log_tag}] error user_id={chat_id} chat_id={chat_id} "
+                f"err={exc.__class__.__name__}: {exc}"
+            )
+            logger.exception(
+                f"[{log_tag}] bad request user_id=%s chat_id=%s", chat_id, chat_id
+            )
+            continue
+        except Exception as exc:
+            stats["errors"] += 1
+            sample = {
+                "user_id": chat_id,
+                "chat_id": chat_id,
+                "error_class": exc.__class__.__name__,
+                "error_text": str(exc),
+            }
+            if len(stats["error_samples"]) < 5:
+                stats["error_samples"].append(sample)
+            print(
+                f"[{log_tag}] error user_id={chat_id} chat_id={chat_id} "
+                f"err={exc.__class__.__name__}: {exc}"
+            )
+            logger.exception(f"[{log_tag}] unexpected send error user_id=%s chat_id=%s", chat_id, chat_id)
+            continue
+
+        if is_test or not should_log:
+            await asyncio.sleep(random.uniform(0.05, 0.15))
+            continue
+
         try:
             insert_signal_event(
                 ts=sent_at,
@@ -4503,6 +4658,7 @@ async def send_signal_to_all(
             )
         except Exception as exc:
             print(f"[ai_signals] Failed to log signal event for {chat_id}: {exc}")
+        await asyncio.sleep(random.uniform(0.05, 0.15))
     return stats if return_stats else stats["sent"]
 
 
