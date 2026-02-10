@@ -1052,18 +1052,50 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
     avg_rr_value = bucket_90.get("avg_rr") if isinstance(bucket_90, dict) else None
     avg_rr = f"{float(avg_rr_value):.2f}" if isinstance(avg_rr_value, (int, float)) else "—"
 
-    return i18n.t(
-        lang,
-        "HISTORY_PRO_BLOCK",
-        winrate_90_100=_safe_int(bucket_90.get("winrate"), 0) if isinstance(bucket_90, dict) and bucket_90.get("winrate") is not None else "—",
-        avg_rr_90_100=avg_rr,
-        closed_90_100=_safe_int(bucket_90.get("closed"), 0) if isinstance(bucket_90, dict) else 0,
-        winrate_80_89=_safe_int(bucket_80.get("winrate"), 0) if isinstance(bucket_80, dict) and bucket_80.get("winrate") is not None else "—",
-        closed_80_89=_safe_int(bucket_80.get("closed"), 0) if isinstance(bucket_80, dict) else 0,
-        tp_total=_safe_int(totals.get("tp"), 0) if isinstance(totals, dict) else 0,
-        sl_total=_safe_int(totals.get("sl"), 0) if isinstance(totals, dict) else 0,
-        neutral_total=_safe_int(totals.get("neutral"), 0) if isinstance(totals, dict) else 0,
-        in_progress_total=_safe_int(totals.get("in_progress"), 0) if isinstance(totals, dict) else 0,
+    winrate_90 = (
+        str(_safe_int(bucket_90.get("winrate"), 0))
+        if isinstance(bucket_90, dict) and bucket_90.get("winrate") is not None
+        else "—"
+    )
+    winrate_80 = (
+        str(_safe_int(bucket_80.get("winrate"), 0))
+        if isinstance(bucket_80, dict) and bucket_80.get("winrate") is not None
+        else "—"
+    )
+    closed_90 = _safe_int(bucket_90.get("closed"), 0) if isinstance(bucket_90, dict) else 0
+    closed_80 = _safe_int(bucket_80.get("closed"), 0) if isinstance(bucket_80, dict) else 0
+    tp_total = _safe_int(totals.get("tp"), 0) if isinstance(totals, dict) else 0
+    sl_total = _safe_int(totals.get("sl"), 0) if isinstance(totals, dict) else 0
+    neutral_total = _safe_int(totals.get("neutral"), 0) if isinstance(totals, dict) else 0
+    in_progress_total = _safe_int(totals.get("in_progress"), 0) if isinstance(totals, dict) else 0
+
+    if lang == "ru":
+        return "\n".join(
+            [
+                "📊 Winrate по Score",
+                f"• 90–100: {winrate_90}% | RR: {avg_rr} | Сделок: {closed_90}",
+                f"• 80–89: {winrate_80}% | Сделок: {closed_80}",
+                "",
+                "📈 Итоги",
+                f"🟢 TP: {tp_total}",
+                f"🔴 SL: {sl_total}",
+                f"⏳ Neutral: {neutral_total}",
+                f"🕒 В процессе: {in_progress_total}",
+            ]
+        )
+
+    return "\n".join(
+        [
+            "📊 Winrate by Score",
+            f"• 90–100: {winrate_90}% | RR: {avg_rr} | Trades: {closed_90}",
+            f"• 80–89: {winrate_80}% | Trades: {closed_80}",
+            "",
+            "📈 Totals",
+            f"🟢 TP: {tp_total}",
+            f"🔴 SL: {sl_total}",
+            f"⏳ Neutral: {neutral_total}",
+            f"🕒 In progress: {in_progress_total}",
+        ]
     )
 
 
@@ -1712,17 +1744,17 @@ async def stats_menu(message: Message):
     )
 
 
-@dp.callback_query(F.data.regexp(r"^history:(1d|7d|30d|all):page=\d+$"))
+@dp.callback_query(F.data.regexp(r"^history:(1d|7d|30d|all)(:page=\d+)?$"))
 async def history_callback(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
-    match = re.match(r"^history:(1d|7d|30d|all):page=(\d+)$", callback.data or "")
+    match = re.match(r"^history:(1d|7d|30d|all)(?::page=(\d+))?$", callback.data or "")
     if not match:
         lang = _resolve_user_lang(callback.from_user.id)
         await callback.answer(i18n.t(lang, "UNKNOWN_PERIOD"), show_alert=True)
         return
     time_window = match.group(1)
-    page_value = max(1, int(match.group(2)))
+    page_value = max(1, int(match.group(2) or 1))
     try:
         await callback.answer()
     except Exception:
