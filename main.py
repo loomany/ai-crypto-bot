@@ -966,7 +966,7 @@ def _set_history_context(
     user_id: int,
     time_window: str,
     page: int,
-    winrate_summary: dict[str, dict[str, int | None]] | None = None,
+    winrate_summary: dict[str, Any] | None = None,
 ) -> None:
     payload: dict[str, Any] = {"window": time_window, "page": page}
     if winrate_summary is not None:
@@ -974,7 +974,7 @@ def _set_history_context(
     set_state(_history_state_key(user_id), json.dumps(payload))
 
 
-def _get_history_context(user_id: int) -> tuple[str, int, dict[str, dict[str, int | None]] | None] | None:
+def _get_history_context(user_id: int) -> tuple[str, int, dict[str, Any] | None] | None:
     payload = get_state(_history_state_key(user_id))
     if not payload:
         return None
@@ -992,7 +992,7 @@ def _get_history_context(user_id: int) -> tuple[str, int, dict[str, dict[str, in
         return None
 
     raw_summary = parsed.get("winrate_summary")
-    winrate_summary: dict[str, dict[str, int | None]] | None = None
+    winrate_summary: dict[str, Any] | None = None
     if isinstance(raw_summary, dict):
         winrate_summary = raw_summary
 
@@ -1044,29 +1044,27 @@ def _format_history_item(row: dict[str, Any], lang: str) -> str:
     return f"{icon} | Score {score} | {symbol} {side} | {_format_event_time(created_at)}"
 
 
-def _format_history_winrate_block(lang: str, winrate_summary: dict[str, dict[str, int | None]]) -> str:
-    lines = [
-        i18n.t(lang, "HISTORY_WINRATE_TITLE"),
-        "",
-    ]
+def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str:
+    bucket_90 = history_summary.get("90_100", {}) if isinstance(history_summary, dict) else {}
+    bucket_80 = history_summary.get("80_89", {}) if isinstance(history_summary, dict) else {}
+    totals = history_summary.get("totals", {}) if isinstance(history_summary, dict) else {}
 
-    for bucket_key, label_key in (
-        ("90_100", "HISTORY_WINRATE_BUCKET_90_100"),
-        ("80_89", "HISTORY_WINRATE_BUCKET_80_89"),
-    ):
-        bucket = winrate_summary.get(bucket_key, {})
-        wins = _safe_int(bucket.get("wins"), 0)
-        losses = _safe_int(bucket.get("losses"), 0)
-        winrate = bucket.get("winrate")
+    avg_rr_value = bucket_90.get("avg_rr") if isinstance(bucket_90, dict) else None
+    avg_rr = f"{float(avg_rr_value):.2f}" if isinstance(avg_rr_value, (int, float)) else "—"
 
-        lines.append(i18n.t(lang, label_key))
-        if winrate is None:
-            lines.append(i18n.t(lang, "HISTORY_WINRATE_NO_DATA"))
-        else:
-            lines.append(f"✅ {wins} / ❌ {losses} ({int(winrate)}%)")
-        lines.append("")
-
-    return "\n".join(lines).rstrip()
+    return i18n.t(
+        lang,
+        "HISTORY_PRO_BLOCK",
+        winrate_90_100=_safe_int(bucket_90.get("winrate"), 0) if isinstance(bucket_90, dict) and bucket_90.get("winrate") is not None else "—",
+        avg_rr_90_100=avg_rr,
+        closed_90_100=_safe_int(bucket_90.get("closed"), 0) if isinstance(bucket_90, dict) else 0,
+        winrate_80_89=_safe_int(bucket_80.get("winrate"), 0) if isinstance(bucket_80, dict) and bucket_80.get("winrate") is not None else "—",
+        closed_80_89=_safe_int(bucket_80.get("closed"), 0) if isinstance(bucket_80, dict) else 0,
+        tp_total=_safe_int(totals.get("tp"), 0) if isinstance(totals, dict) else 0,
+        sl_total=_safe_int(totals.get("sl"), 0) if isinstance(totals, dict) else 0,
+        neutral_total=_safe_int(totals.get("neutral"), 0) if isinstance(totals, dict) else 0,
+        in_progress_total=_safe_int(totals.get("in_progress"), 0) if isinstance(totals, dict) else 0,
+    )
 
 
 def _build_history_text(
@@ -1077,14 +1075,14 @@ def _build_history_text(
     total: int,
     rows: list[dict],
     lang: str,
-    winrate_summary: dict[str, dict[str, int | None]],
+    history_summary: dict[str, Any],
 ) -> str:
     period_label = _period_label(time_window, lang)
     lines = [
         i18n.t(lang, "HISTORY_LIST_TITLE", period=period_label),
         i18n.t(lang, "HISTORY_PAGE_INFO", page=page, pages=pages, total=total),
         "",
-        _format_history_winrate_block(lang, winrate_summary),
+        _format_history_pro_block(lang, history_summary),
     ]
     if not rows:
         lines.append("")
@@ -1132,17 +1130,13 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
     lang = _resolve_user_lang(callback.from_user.id)
     page_value, pages, total, rows = _get_history_page(time_window=time_window, page=page)
 
-    context = _get_history_context(callback.from_user.id)
-    if context and context[0] == time_window and context[2] is not None:
-        winrate_summary = context[2]
-    else:
-        winrate_summary = get_history_winrate_summary(time_window=time_window, user_id=None)
+    history_summary = get_history_winrate_summary(time_window=time_window, user_id=None)
 
     _set_history_context(
         callback.from_user.id,
         time_window,
         page_value,
-        winrate_summary=winrate_summary,
+        winrate_summary=history_summary,
     )
     text = _build_history_text(
         time_window=time_window,
@@ -1151,7 +1145,7 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         total=total,
         rows=rows,
         lang=lang,
-        winrate_summary=winrate_summary,
+        history_summary=history_summary,
     )
     markup = _history_nav_kb(
         lang=lang,

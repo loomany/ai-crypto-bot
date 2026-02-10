@@ -276,6 +276,31 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "HISTORY_WINRATE_BUCKET_90_100": "Score 90–100:",
         "HISTORY_WINRATE_BUCKET_80_89": "Score 80–89:",
         "HISTORY_WINRATE_NO_DATA": "нет данных",
+        "HISTORY_PRO_BLOCK": (
+            "🔥 Рекомендуемые сигналы\n"
+            "Score 90–100\n\n"
+            "• Winrate: {winrate_90_100}%\n"
+            "• Средний RR: ~1 : {avg_rr_90_100}\n"
+            "• Всего сигналов: {closed_90_100}\n"
+            "• Статус: 🟢 Основной фокус\n\n"
+            "ℹ️ При RR > 2 даже 40–45% дают положительное ожидание.\n\n"
+            "————————————\n\n"
+            "⚠️ Повышенный риск\n"
+            "Score 80–89\n\n"
+            "• Winrate: {winrate_80_89}%\n"
+            "• Всего сигналов: {closed_80_89}\n"
+            "• Статус: 🟡 Использовать выборочно\n\n"
+            "───────────\n\n"
+            "🚫 Score < 80\n"
+            "• В статистике не учитывается\n"
+            "• Используется только для анализа рынка\n\n"
+            "───────────\n\n"
+            "📈 Итоги по сделкам\n\n"
+            "🟢 TP: {tp_total}\n"
+            "🔴 SL: {sl_total}\n"
+            "⏳ Neutral: {neutral_total}\n"
+            "🕒 В процессе: {in_progress_total}"
+        ),
         "HISTORY_LOAD_ERROR": "Ошибка загрузки истории. Попробуй позже.",
         "NAV_PREV_SHORT": "Назад",
         "NAV_NEXT_SHORT": "Вперед",
@@ -874,6 +899,31 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "HISTORY_WINRATE_BUCKET_90_100": "Score 90–100:",
         "HISTORY_WINRATE_BUCKET_80_89": "Score 80–89:",
         "HISTORY_WINRATE_NO_DATA": "no data",
+        "HISTORY_PRO_BLOCK": (
+            "🔥 Recommended signals\n"
+            "Score 90–100\n\n"
+            "• Winrate: {winrate_90_100}%\n"
+            "• Avg RR: ~1 : {avg_rr_90_100}\n"
+            "• Total signals: {closed_90_100}\n"
+            "• Status: 🟢 Primary focus\n\n"
+            "ℹ️ With RR > 2, even 40–45% can deliver positive expectancy.\n\n"
+            "————————————\n\n"
+            "⚠️ Higher risk\n"
+            "Score 80–89\n\n"
+            "• Winrate: {winrate_80_89}%\n"
+            "• Total signals: {closed_80_89}\n"
+            "• Status: 🟡 Use selectively\n\n"
+            "───────────\n\n"
+            "🚫 Score < 80\n"
+            "• Not included in statistics\n"
+            "• Used for market analysis only\n\n"
+            "───────────\n\n"
+            "📈 Trade summary\n\n"
+            "🟢 TP: {tp_total}\n"
+            "🔴 SL: {sl_total}\n"
+            "⏳ Neutral: {neutral_total}\n"
+            "🕒 In progress: {in_progress_total}"
+        ),
         "HISTORY_LOAD_ERROR": "History loading error. Try later.",
         "NAV_PREV_SHORT": "Back",
         "NAV_NEXT_SHORT": "Forward",
