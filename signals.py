@@ -2450,6 +2450,8 @@ async def scan_market(
             symbol for symbol in candidate_symbols if symbol.upper() not in excluded
         ]
     deep_scans_done = len(candidate_symbols)
+    if diag_state is not None:
+        diag_state["prescore_shortlist"] = list(candidate_symbols)
     if not candidate_symbols:
         pre_score_stats["pass_rate"] = pre_score_stats["passed"] / max(
             1, pre_score_stats["checked"]
@@ -2466,6 +2468,7 @@ async def scan_market(
                 "setup_stage": setup_stage_stats,
                 "final_stage": final_stage_stats,
                 "slowest_symbols": _build_slowest(),
+                "prescore_shortlist": list(candidate_symbols),
             }
         return signals
 
@@ -2551,6 +2554,7 @@ async def scan_market(
                 "setup_stage": setup_stage_stats,
                 "final_stage": final_stage_stats,
                 "slowest_symbols": _build_slowest(),
+                "prescore_shortlist": list(candidate_symbols),
             }
         return signals
 
@@ -2600,5 +2604,6 @@ async def scan_market(
             "setup_stage": setup_stage_stats,
             "final_stage": final_stage_stats,
             "slowest_symbols": _build_slowest(),
+            "prescore_shortlist": list(candidate_symbols),
         }
     return signals
