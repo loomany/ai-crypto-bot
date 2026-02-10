@@ -1017,34 +1017,8 @@ def _history_status_label(status_key: str, lang: str) -> str:
     if status_key == "sl":
         return "❌ SL"
     if status_key == "neutral":
-        return "⏳ Без входа" if lang == "ru" else "⏳ Neutral"
+        return "⏳ Neutral"
     return "🕒 В процессе" if lang == "ru" else "🕒 In progress"
-
-
-def _history_explanation_block(lang: str) -> str:
-    if lang == "ru":
-        return "\n".join(
-            [
-                "━━━━━━━━━━━━━━━━",
-                "ℹ️ Пояснение",
-                "━━━━━━━━━━━━━━━━",
-                "• Score ≥ 80 — участвует в расчёте winrate и RR",
-                "• Score < 80 — используется только для анализа рынка",
-                "• «Без входа» — цена не дошла до подтверждения/входа",
-                "  либо сценарий был отменён",
-            ]
-        )
-    return "\n".join(
-        [
-            "━━━━━━━━━━━━━━━━",
-            "ℹ️ Notes",
-            "━━━━━━━━━━━━━━━━",
-            "• Score ≥ 80 — included in winrate and RR",
-            "• Score < 80 — used for market analysis only",
-            "• Neutral — price did not reach confirmation/entry",
-            "  or the scenario was canceled",
-        ]
-    )
 
 
 def _get_history_page(*, time_window: str, page: int, page_size: int = 12) -> tuple[int, int, int, list[dict]]:
@@ -1111,7 +1085,7 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
                 "📈 Итоги",
                 f"🟢 TP: {tp_total}",
                 f"🔴 SL: {sl_total}",
-                f"⏳ Без входа: {neutral_total}",
+                f"⏳ Neutral: {neutral_total}",
                 f"🕒 В процессе: {in_progress_total}",
             ]
         )
@@ -1147,8 +1121,6 @@ def _build_history_text(
         i18n.t(lang, "HISTORY_PAGE_INFO", page=page, pages=pages, total=total),
         "",
         _format_history_pro_block(lang, history_summary),
-        "",
-        _history_explanation_block(lang),
     ]
     if not rows:
         lines.append("")
@@ -1183,7 +1155,7 @@ def _history_nav_kb(
     if page > 1:
         nav.append(InlineKeyboardButton(text="◀️", callback_data=f"history:{time_window}:page={page - 1}"))
     if page < pages:
-        nav.append(InlineKeyboardButton(text="▶ Вперёд", callback_data=f"history:{time_window}:page={page + 1}"))
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"history:{time_window}:page={page + 1}"))
     if nav:
         kb_rows.append(nav)
     kb_rows.append([InlineKeyboardButton(text=i18n.t(lang, "NAV_BACK"), callback_data="hist_back")])
