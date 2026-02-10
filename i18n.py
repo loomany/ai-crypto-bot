@@ -512,12 +512,18 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SIGNAL_COMPACT_TTL_LINE": "⏱ TTL: ~{minutes} мин",
         "SIGNAL_BUTTON_EXPAND": "🔽 Раскрыть",
         "SIGNAL_BUTTON_COLLAPSE": "🔼 Скрыть",
-        "SIGNAL_SHORT_ASSET_LINE": "Монета: {symbol}",
         "SIGNAL_SHORT_SIDE_LONG": "📈 LONG",
         "SIGNAL_SHORT_SIDE_SHORT": "📉 SHORT",
-        "SIGNAL_SHORT_META_LINE": "⏱ TF: {timeframe} | Вход: {entry_tf}",
-        "SIGNAL_SHORT_TTL_LINE": "⏳ TTL: ~{minutes} мин",
-        "SIGNAL_SHORT_SCORE_LINE": "🎯 Score: {score}",
+        "SIGNAL_SHORT_SYMBOL_SIDE_LINE": "{symbol} · {side}",
+        "SIGNAL_SHORT_POI_LINE": "POI: {poi_from}–{poi_to}",
+        "SIGNAL_SHORT_TP1_LINE": "TP1: {tp1}",
+        "SIGNAL_SHORT_TP2_LINE": "TP2: {tp2}",
+        "SIGNAL_SHORT_SL_LINE": "SL: {sl}",
+        "SIGNAL_SHORT_HIGH_RISK_WARNING": (
+            "⚠️ ПОВЫШЕННЫЙ РИСК\n"
+            "Только для опытных трейдеров\n"
+            "Использовать выборочно"
+        ),
         "SIGNAL_BUTTON_SOUND_ON": "🔔 Звук: Сигнал + Вход",
         "SIGNAL_BUTTON_SOUND_OFF": "🔕 Звук: Тихо (Сигнал + Вход)",
         "SIGNAL_SOUND_TOGGLE_TOAST_ON": "Звук для сигнала и входа: ВКЛ",
@@ -1230,12 +1236,18 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SIGNAL_COMPACT_TTL_LINE": "⏱ TTL: ~{minutes} min",
         "SIGNAL_BUTTON_EXPAND": "🔽 Show details",
         "SIGNAL_BUTTON_COLLAPSE": "🔼 Hide",
-        "SIGNAL_SHORT_ASSET_LINE": "Asset: {symbol}",
         "SIGNAL_SHORT_SIDE_LONG": "📈 LONG",
         "SIGNAL_SHORT_SIDE_SHORT": "📉 SHORT",
-        "SIGNAL_SHORT_META_LINE": "⏱ TF: {timeframe} | Entry: {entry_tf}",
-        "SIGNAL_SHORT_TTL_LINE": "⏳ TTL: ~{minutes} min",
-        "SIGNAL_SHORT_SCORE_LINE": "🎯 Score: {score}",
+        "SIGNAL_SHORT_SYMBOL_SIDE_LINE": "{symbol} · {side}",
+        "SIGNAL_SHORT_POI_LINE": "POI: {poi_from}–{poi_to}",
+        "SIGNAL_SHORT_TP1_LINE": "TP1: {tp1}",
+        "SIGNAL_SHORT_TP2_LINE": "TP2: {tp2}",
+        "SIGNAL_SHORT_SL_LINE": "SL: {sl}",
+        "SIGNAL_SHORT_HIGH_RISK_WARNING": (
+            "⚠️ HIGHER RISK\n"
+            "Experienced traders only\n"
+            "Use selectively"
+        ),
         "SIGNAL_BUTTON_SOUND_ON": "🔔 Sound: Signal + Entry",
         "SIGNAL_BUTTON_SOUND_OFF": "🔕 Sound: Silent (Signal + Entry)",
         "SIGNAL_SOUND_TOGGLE_TOAST_ON": "Signal+Entry sound: ON",

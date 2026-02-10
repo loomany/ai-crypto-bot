@@ -5014,20 +5014,31 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
 
 def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
     score = max(0, min(100, int(signal.get("score", 0) or 0)))
-    quality_key = "SIGNAL_QUALITY_RECOMMENDED" if score >= 90 else "SIGNAL_QUALITY_HIGH_RISK"
     symbol_text = _signal_symbol_text(str(signal.get("symbol") or ""))
-    side_key = "SIGNAL_SHORT_SIDE_LONG" if str(signal.get("direction") or "").lower() == "long" else "SIGNAL_SHORT_SIDE_SHORT"
-    ttl_minutes = max(1, int(signal.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60))
+    is_long = str(signal.get("direction") or "").lower() == "long"
+    side_key = "SIGNAL_SHORT_SIDE_LONG" if is_long else "SIGNAL_SHORT_SIDE_SHORT"
+    entry_low, entry_high = signal.get("entry_zone", (0.0, 0.0))
 
     lines = [
-        i18n.t(lang, quality_key),
-        "",
-        i18n.t(lang, "SIGNAL_SHORT_ASSET_LINE", symbol=symbol_text),
-        i18n.t(lang, side_key),
-        i18n.t(lang, "SIGNAL_SHORT_META_LINE", timeframe="1H", entry_tf="5–15m"),
-        i18n.t(lang, "SIGNAL_SHORT_TTL_LINE", minutes=ttl_minutes),
-        i18n.t(lang, "SIGNAL_SHORT_SCORE_LINE", score=score),
+        i18n.t(
+            lang,
+            "SIGNAL_SHORT_SYMBOL_SIDE_LINE",
+            symbol=symbol_text,
+            side=i18n.t(lang, side_key),
+        ),
+        i18n.t(
+            lang,
+            "SIGNAL_SHORT_POI_LINE",
+            poi_from=_format_price(float(entry_low or 0.0)),
+            poi_to=_format_price(float(entry_high or 0.0)),
+        ),
+        i18n.t(lang, "SIGNAL_SHORT_TP1_LINE", tp1=_format_price(float(signal.get("tp1") or 0.0))),
+        i18n.t(lang, "SIGNAL_SHORT_TP2_LINE", tp2=_format_price(float(signal.get("tp2") or 0.0))),
+        i18n.t(lang, "SIGNAL_SHORT_SL_LINE", sl=_format_price(float(signal.get("sl") or 0.0))),
     ]
+
+    if 80 <= score <= 89:
+        lines.extend(["", i18n.t(lang, "SIGNAL_SHORT_HIGH_RISK_WARNING")])
 
     prefix = signal.get("title_prefix")
     if isinstance(prefix, dict):
@@ -5321,13 +5332,18 @@ async def send_signal_to_all(
             try:
                 message_text = _format_compact_signal(signal_dict, lang)
             except Exception:
-                fallback_score = max(0, min(100, int(signal_dict.get("score", 0) or 0)))
-                fallback_quality = "SIGNAL_QUALITY_RECOMMENDED" if fallback_score >= 90 else "SIGNAL_QUALITY_HIGH_RISK"
-                message_text = "\n".join([
-                    i18n.t(lang, fallback_quality),
-                    "",
-                    i18n.t(lang, "SIGNAL_SHORT_SCORE_LINE", score=fallback_score),
-                ])
+                fallback_symbol = _signal_symbol_text(str(signal_dict.get("symbol") or ""))
+                fallback_side = (
+                    i18n.t(lang, "SIGNAL_SHORT_SIDE_LONG")
+                    if str(signal_dict.get("direction") or "").lower() == "long"
+                    else i18n.t(lang, "SIGNAL_SHORT_SIDE_SHORT")
+                )
+                message_text = i18n.t(
+                    lang,
+                    "SIGNAL_SHORT_SYMBOL_SIDE_LINE",
+                    symbol=fallback_symbol,
+                    side=fallback_side,
+                )
             should_log = True
             kind = "signal"
             if allow_admin_bypass and is_admin(chat_id):
