@@ -585,53 +585,6 @@ def get_signal_history(
         conn.close()
 
 
-def get_signal_history_full(
-    time_window: str,
-    user_id: int | None = None,
-) -> list[sqlite3.Row]:
-    since_ts = _history_since_ts(time_window)
-    conn = get_conn()
-    try:
-        clauses = ["(is_test IS NULL OR is_test = 0)"]
-        params: list[object] = []
-        if user_id is not None:
-            clauses.append("user_id = ?")
-            params.append(int(user_id))
-        if since_ts is not None:
-            clauses.append("ts >= ?")
-            params.append(int(since_ts))
-        clauses.append(
-            "NOT ("
-            "symbol LIKE 'TEST%' OR "
-            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
-            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
-            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
-            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
-        )
-        _append_blocked_symbols_filter(clauses, params)
-        where_clause = " AND ".join(clauses)
-        cur = conn.execute(
-            f"""
-            SELECT
-                id,
-                symbol,
-                side,
-                timeframe,
-                ts AS created_at,
-                CAST(ROUND(score) AS INTEGER) AS score,
-                COALESCE(result, status) AS outcome,
-                reason_json
-            FROM signal_events
-            WHERE {where_clause}
-            ORDER BY ts DESC
-            """,
-            params,
-        )
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-
 def count_signal_history(
     time_window: str,
     user_id: int | None = None,
