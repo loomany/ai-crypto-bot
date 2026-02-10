@@ -147,6 +147,7 @@ from signal_audit_worker import (
     set_signal_result_notifier,
 )
 import i18n
+from utils_symbols import ui_symbol
 from keyboards import (
     ai_signals_inline_kb,
     build_admin_diagnostics_kb,
@@ -640,7 +641,7 @@ def _get_ai_excluded_symbols() -> set[str]:
 
 
 def _format_symbol_list(symbols: set[str]) -> str:
-    return ", ".join(sorted(symbols)) if symbols else "-"
+    return ", ".join(sorted(ui_symbol(symbol) for symbol in symbols)) if symbols else "-"
 
 
 def _get_pump_excluded_symbols() -> set[str]:
@@ -1437,7 +1438,7 @@ def _status_toggle_inline_kb(*, lang: str, score: int, enabled: bool) -> InlineK
 def _format_short_result_message(event: dict, lang: str) -> str | None:
     status_raw = str(event.get("result") or event.get("status") or "OPEN")
     status = _normalize_signal_status(status_raw)
-    symbol = str(event.get("symbol", "")).upper()
+    symbol = ui_symbol(str(event.get("symbol", "")).upper())
     side = str(event.get("side", "")).upper()
     score = int(event.get("score", 0))
     entry_from = float(event.get("poi_low", 0.0))
@@ -1819,7 +1820,7 @@ def _format_refresh_report(event: dict, lang: str) -> str:
         "AMBIGUOUS": i18n.t(lang, "STATUS_AMBIGUOUS"),
     }
     status_label = status_map.get(status_raw, status_raw)
-    symbol = event.get("symbol")
+    symbol = ui_symbol(str(event.get("symbol") or ""))
     side = event.get("side")
     score = int(event.get("score", 0))
     last_price = event.get("last_price")
@@ -2885,9 +2886,7 @@ def _format_section(title: str, status_label: str, details: list[str], lang: str
 
 
 def _short_symbol(symbol: str) -> str:
-    if symbol.endswith("USDT"):
-        return symbol[:-4]
-    return symbol
+    return ui_symbol(symbol)
 
 
 def _format_samples(samples: list[tuple[str, float]]) -> str:
@@ -3170,7 +3169,7 @@ def _format_ai_section(st, now: float, lang: str) -> str:
         details.append(i18n.t(lang, "DIAG_MARKET_POSITION_TOTAL", current=cur, total=universe))
     elif cur:
         details.append(i18n.t(lang, "DIAG_MARKET_POSITION", current=cur))
-    details.append(i18n.t(lang, "DIAG_MARKET_CURRENT", symbol=current_symbol))
+    details.append(i18n.t(lang, "DIAG_MARKET_CURRENT", symbol=ui_symbol(current_symbol)))
     excluded_symbols = _get_ai_excluded_symbols()
     details.append(
         i18n.t(lang, "DIAG_AI_EXCLUDED", symbols=_format_symbol_list(excluded_symbols))
@@ -3621,7 +3620,7 @@ def _format_pump_section(st, now: float, lang: str) -> str:
         details.append(i18n.t(lang, "DIAG_SENT", count=sent))
     current = extra.get("current") or (st.current_symbol or None)
     if current:
-        details.append(i18n.t(lang, "DIAG_CURRENT_COIN", symbol=current))
+        details.append(i18n.t(lang, "DIAG_CURRENT_COIN", symbol=ui_symbol(current)))
     excluded_symbols = _get_pump_excluded_symbols()
     details.append(
         f"• Excluded symbols: {_format_symbol_list(excluded_symbols)}"
@@ -3883,7 +3882,7 @@ async def purge_symbol_cmd(message: Message):
         i18n.t(
             lang,
             "PURGE_SYMBOL_DONE",
-            symbol=symbol,
+            symbol=ui_symbol(symbol),
             events=stats["events_deleted"],
             audit=stats["signal_audit_deleted"],
         )
@@ -3923,7 +3922,7 @@ def _format_user_bot_status(chat_id: int) -> str:
         row = get_last_signal_audit("ai_signals")
         if not row:
             return None, None, None
-        symbol = str(row.get("symbol") or "")
+        symbol = ui_symbol(str(row.get("symbol") or ""))
         direction = str(row.get("direction", "")).upper()
         side = "LONG" if direction == "LONG" else "SHORT" if direction == "SHORT" else direction
         sent_at = int(row.get("sent_at", 0) or 0)
@@ -4748,7 +4747,7 @@ def _format_stats_message(stats: Dict[str, Any], lang: str) -> str:
         lines.append(i18n.t(lang, "ADMIN_STATS_NO_DATA"))
     else:
         for row in last10:
-            symbol = row.get("symbol", "-")
+            symbol = ui_symbol(str(row.get("symbol", "-")))
             direction = row.get("direction", "-")
             outcome = row.get("outcome", "-")
             pnl_r = row.get("pnl_r")
@@ -4851,13 +4850,7 @@ def _format_signed_number(value: float, decimals: int = 1) -> str:
 
 
 def _signal_symbol_text(symbol: str) -> str:
-    if symbol.endswith("USDT"):
-        base = symbol[:-4]
-        quote = "USDT"
-    else:
-        base = symbol
-        quote = ""
-    return f"{base} / {quote}" if quote else base
+    return ui_symbol(symbol)
 
 
 def _compact_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: bool) -> InlineKeyboardMarkup:

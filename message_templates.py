@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 import i18n
+from utils_symbols import ui_symbol
 
 
 def _trend_to_text(value: Optional[str], lang: str) -> str:
@@ -215,7 +216,7 @@ def format_signal_activation_message(
     lines = [
         header,
         "",
-        f"{symbol} - {side_value}",
+        f"{ui_symbol(symbol)} - {side_value}",
         f"Score: {max(0, min(100, int(score)))}",
         "",
         f"🔹 {i18n.t(lang, 'SIGNAL_ACTIVATED_ENTRY_LABEL')}: {_format_price(float(entry_price), 4)}",
@@ -241,7 +242,7 @@ def format_signal_poi_touched_message(
     lines = [
         i18n.t(lang, "SIGNAL_POI_TOUCHED_HEADER"),
         "",
-        f"{symbol} · {side_value}",
+        f"{ui_symbol(symbol)} · {side_value}",
         f"Score: {max(0, min(100, int(score)))}",
         "",
         i18n.t(lang, "SIGNAL_POI_TOUCHED_ZONE_HEADER"),

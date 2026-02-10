@@ -47,7 +47,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PUMPDUMP_TEXT": (
             "⚡ Pump/Dump — это быстрые алерты о резких движениях цены и объёма.\n\n"
             "Как бот находит импульсы:\n"
-            "• сканирует рынок по USDT-парам\n"
+            "• сканирует рынок по торговым парам\n"
             "• ищет резкое движение цены за 1m/5m\n"
             "• проверяет всплеск объёма (volume spike)\n"
             "• отсекает слабые движения по фильтрам ликвидности\n"
@@ -643,7 +643,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "DIAG_AI_CONFIG_PRESCORE_THRESHOLD": "  • Pre-score threshold: {value}",
         "DIAG_AI_CONFIG_PRESCORE_MIN": "  • Min pre-score: {value}",
         "DIAG_AI_CONFIG_FINAL_THRESHOLD": "  • Final scoring threshold: {value}",
-        "DIAG_AI_CONFIG_MIN_VOLUME": "  • Min volume 5m (USDT): {value}",
+        "DIAG_AI_CONFIG_MIN_VOLUME": "  • Min volume 5m: {value}",
         "DIAG_AI_CONFIG_PUMP_VOLUME": "  • Pump volume multiplier: {value}",
         "DIAG_AI_STRUCTURE_TITLE": "• Structure:",
         "DIAG_AI_STRUCTURE_MODE": "  • Mode: {value}",
@@ -764,7 +764,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PUMPDUMP_TEXT": (
             "⚡ Pump/Dump are fast alerts about sharp price and volume moves.\n\n"
             "How the bot finds impulses:\n"
-            "• scans the market across USDT pairs\n"
+            "• scans the market across trading pairs\n"
             "• detects sharp price moves in 1m/5m\n"
             "• checks volume spikes\n"
             "• filters weak moves with liquidity filters\n"
@@ -1355,7 +1355,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "DIAG_AI_CONFIG_PRESCORE_THRESHOLD": "  • Pre-score threshold: {value}",
         "DIAG_AI_CONFIG_PRESCORE_MIN": "  • Min pre-score: {value}",
         "DIAG_AI_CONFIG_FINAL_THRESHOLD": "  • Final scoring threshold: {value}",
-        "DIAG_AI_CONFIG_MIN_VOLUME": "  • Min volume 5m (USDT): {value}",
+        "DIAG_AI_CONFIG_MIN_VOLUME": "  • Min volume 5m: {value}",
         "DIAG_AI_CONFIG_PUMP_VOLUME": "  • Pump volume multiplier: {value}",
         "DIAG_AI_STRUCTURE_TITLE": "• Structure:",
         "DIAG_AI_STRUCTURE_MODE": "  • Mode: {value}",
