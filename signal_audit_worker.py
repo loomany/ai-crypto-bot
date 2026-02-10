@@ -84,6 +84,8 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
     tp1 = float(signal["tp1"])
     tp2 = float(signal["tp2"])
     sent_at = int(signal["sent_at"])
+    ttl_minutes = int(signal.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
+    ttl_sec = max(60, ttl_minutes * 60)
 
     entry_ref = (entry_from + entry_to) / 2
     r_value = abs(entry_ref - sl)
@@ -143,7 +145,7 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
             }
 
     age_sec = int(time.time()) - sent_at
-    if age_sec < SIGNAL_TTL_SECONDS:
+    if age_sec < ttl_sec:
         return None
 
     last_close = candles[-1]["close"] if candles else None
@@ -177,7 +179,7 @@ async def evaluate_open_signals(
     budget_sec: int = 45,
 ) -> None:
     if open_signals is None:
-        open_signals = fetch_open_signals(SIGNAL_TTL_SECONDS)
+        open_signals = fetch_open_signals()
     if not open_signals:
         return
 
@@ -258,7 +260,7 @@ async def signal_audit_worker_loop() -> None:
         start = time.time()
         BUDGET = 45
         mark_tick("signal_audit", extra="audit cycle")
-        open_signals = fetch_open_signals(SIGNAL_TTL_SECONDS)
+        open_signals = fetch_open_signals()
         if not open_signals:
             mark_ok("signal_audit", extra="audit cycle")
             return

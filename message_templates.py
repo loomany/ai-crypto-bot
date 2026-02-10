@@ -56,7 +56,7 @@ def format_scenario_message(
     rr: float,
     price_precision: int,
     score_breakdown: Optional[list[dict]] = None,
-    lifetime_hours: int = 12,
+    lifetime_minutes: int = 720,
 ) -> str:
     is_long = side == "LONG"
     emoji = "📈" if is_long else "📉"
@@ -138,7 +138,7 @@ def format_scenario_message(
         symbol_text,
         i18n.t(lang, "SCENARIO_POSSIBLE_LINE", emoji=emoji, scenario=scenario_text),
         i18n.t(lang, "SCENARIO_TIMEFRAME_LINE", timeframe=timeframe),
-        i18n.t(lang, "SCENARIO_LIFETIME_LINE", hours=lifetime_hours),
+        i18n.t(lang, "SCENARIO_LIFETIME_MINUTES_LINE", minutes=max(1, int(lifetime_minutes))),
         "",
         i18n.t(lang, "SCENARIO_POI_HEADER"),
         f"• {_format_price(entry_from, price_precision)} – {_format_price(entry_to, price_precision)}",
