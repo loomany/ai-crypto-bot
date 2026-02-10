@@ -757,8 +757,8 @@ def _status_icon(status: str | None) -> str:
     if normalized in failed:
         return "❌"
     if normalized in neutral:
-        return "🕒"
-    return "⏳"
+        return "⏳"
+    return "🕒"
 
 
 def _format_signal_event_status(raw_status: str, lang: str) -> str:
@@ -1002,57 +1002,22 @@ def _history_status_label(status_key: str, lang: str) -> str:
     if status_key == "sl":
         return "❌ SL"
     if status_key == "neutral":
-        return "🕒 Neutral"
-    return "⏳ В процессе" if lang == "ru" else "⏳ In progress"
+        return "⏳ Neutral"
+    return "🕒 В процессе" if lang == "ru" else "🕒 In progress"
 
 
-def _get_history_page(
-    *,
-    time_window: str,
-    page: int,
-    page_size: int = 12,
-) -> tuple[int, int, int, list[dict], dict[str, int], dict[str, dict[str, int]], float | None]:
+def _get_history_page(*, time_window: str, page: int, page_size: int = 12) -> tuple[int, int, int, list[dict]]:
     total = count_signal_history(time_window=time_window, user_id=None, min_score=None)
     pages = max(1, (total + page_size - 1) // page_size)
     page_value = max(1, min(page, pages))
     offset = (page_value - 1) * page_size
-    now_ts = int(time.time())
-    since_ts = window_since(time_window, now_ts)
-
-    outcome_counts = get_signal_outcome_counts(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=80,
-    )
-    score_bucket_counts = get_signal_score_bucket_counts(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=80,
-    )
-    avg_rr_row = get_signal_avg_rr(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=80,
-        score_min=90,
-        score_max=100,
-    )
-    avg_rr_90_100 = float(avg_rr_row.get("avg_rr", 0.0) or 0.0)
-
     rows = get_signal_history(
         time_window=time_window,
         user_id=None,
         limit=page_size,
         offset=offset,
     )
-    return (
-        page_value,
-        pages,
-        total,
-        [dict(row) for row in rows],
-        outcome_counts,
-        score_bucket_counts,
-        avg_rr_90_100 if avg_rr_90_100 > 0 else None,
-    )
+    return page_value, pages, total, [dict(row) for row in rows]
 
 
 def _format_history_item(row: dict[str, Any], lang: str) -> str:
@@ -1060,79 +1025,16 @@ def _format_history_item(row: dict[str, Any], lang: str) -> str:
     side = str(row.get("side") or "—").upper()
     score = _safe_int(row.get("score"), 0)
     status_key = _normalize_history_status(str(row.get("outcome") or ""))
-    icon = {
-        "tp": "🟢",
-        "sl": "❌",
-        "in_progress": "⏳",
-        "neutral": "🕒",
-    }.get(status_key, "⏳")
+    icon = _history_status_label(status_key, lang).split(" ", 1)[0]
     created_at = _safe_int(row.get("created_at"), 0)
-    return f"{icon} | S{score} | {symbol} {side} | {_format_event_time(created_at)}"
+    return f"{icon} | Score {score} | {symbol} {side} | {_format_event_time(created_at)}"
 
 
-def _build_history_text(
-    *,
-    time_window: str,
-    page: int,
-    pages: int,
-    total: int,
-    rows: list[dict],
-    lang: str,
-    outcome_counts: dict[str, int],
-    score_bucket_counts: dict[str, dict[str, int]],
-    avg_rr_90_100: float | None,
-) -> str:
+def _build_history_text(*, time_window: str, page: int, pages: int, total: int, rows: list[dict], lang: str) -> str:
     period_label = _period_label(time_window, lang)
-    bucket_90 = score_bucket_counts.get("90-100", {})
-    bucket_80 = score_bucket_counts.get("80-89", {})
-
-    winrate_90 = _format_bucket_winrate(bucket_90)
-    winrate_80 = _format_bucket_winrate(bucket_80)
-    avg_rr_text = _format_avg_rr(avg_rr_90_100)
-
-    count_90_100 = sum(int(bucket_90.get(key, 0) or 0) for key in ("passed", "failed", "neutral", "in_progress"))
-    count_80_89 = sum(int(bucket_80.get(key, 0) or 0) for key in ("passed", "failed", "neutral", "in_progress"))
-
-    tp_total = int(outcome_counts.get("passed", 0) or 0)
-    sl_total = int(outcome_counts.get("failed", 0) or 0)
-    neutral_total = int(outcome_counts.get("neutral", 0) or 0)
-    in_progress_total = int(outcome_counts.get("in_progress", 0) or 0)
-
     lines = [
         i18n.t(lang, "HISTORY_LIST_TITLE", period=period_label),
         i18n.t(lang, "HISTORY_PAGE_INFO", page=page, pages=pages, total=total),
-        "",
-        i18n.t(lang, "HISTORY_PRO_RECOMMENDED_HEADER"),
-        i18n.t(lang, "HISTORY_PRO_SCORE_90_100"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_WINRATE_LINE", winrate=winrate_90),
-        i18n.t(lang, "HISTORY_PRO_AVG_RR_LINE", avg_rr=avg_rr_text),
-        i18n.t(lang, "HISTORY_PRO_TOTAL_SIGNALS_LINE", count=count_90_100),
-        i18n.t(lang, "HISTORY_PRO_STATUS_PRIMARY"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_DIVIDER"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_HIGH_RISK_HEADER"),
-        i18n.t(lang, "HISTORY_PRO_SCORE_80_89"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_WINRATE_LINE", winrate=winrate_80),
-        i18n.t(lang, "HISTORY_PRO_TOTAL_SIGNALS_LINE", count=count_80_89),
-        i18n.t(lang, "HISTORY_PRO_STATUS_SELECTIVE"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_DIVIDER"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_BELOW_80_HEADER"),
-        i18n.t(lang, "HISTORY_PRO_BELOW_80_LINE1"),
-        i18n.t(lang, "HISTORY_PRO_BELOW_80_LINE2"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_DIVIDER"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_TOTALS_HEADER"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_TP_TOTAL", count=tp_total),
-        i18n.t(lang, "HISTORY_PRO_SL_TOTAL", count=sl_total),
-        i18n.t(lang, "HISTORY_PRO_NEUTRAL_TOTAL", count=neutral_total),
-        i18n.t(lang, "HISTORY_PRO_IN_PROGRESS_TOTAL", count=in_progress_total),
     ]
     if not rows:
         lines.append("")
@@ -1178,10 +1080,7 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
     if callback.message is None or callback.from_user is None:
         return
     lang = _resolve_user_lang(callback.from_user.id)
-    page_value, pages, total, rows, outcome_counts, score_bucket_counts, avg_rr_90_100 = _get_history_page(
-        time_window=time_window,
-        page=page,
-    )
+    page_value, pages, total, rows = _get_history_page(time_window=time_window, page=page)
     _set_history_context(callback.from_user.id, time_window, page_value)
     text = _build_history_text(
         time_window=time_window,
@@ -1190,9 +1089,6 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         total=total,
         rows=rows,
         lang=lang,
-        outcome_counts=outcome_counts,
-        score_bucket_counts=score_bucket_counts,
-        avg_rr_90_100=avg_rr_90_100,
     )
     markup = _history_nav_kb(
         lang=lang,
@@ -1826,7 +1722,7 @@ def _archive_inline_kb(
             [
                 InlineKeyboardButton(
                     text=(
-                        f"{status_icon} | S{_safe_int(event.get('score', 0))} | "
+                        f"{status_icon} Score {_safe_int(event.get('score', 0))} • "
                         f"{event.get('symbol')} {event.get('side')} | "
                         f"{_format_event_time(_safe_int(event.get('ts', 0)))}"
                     ),
