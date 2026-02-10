@@ -2537,11 +2537,11 @@ async def ai_notify_off(callback: CallbackQuery):
         await callback.message.answer(i18n.t(lang, "AI_OFF_OK"))
 
 
-@dp.callback_query(F.data.regexp(r"^sig_expand:\d+$"))
+@dp.callback_query(F.data.regexp(r"^expand_signal:\d+$"))
 async def sig_expand_callback(callback: CallbackQuery):
     if callback.from_user is None or callback.message is None:
         return
-    match = re.match(r"^sig_expand:(\d+)$", callback.data or "")
+    match = re.match(r"^expand_signal:(\d+)$", callback.data or "")
     if not match:
         await callback.answer()
         return
@@ -2553,8 +2553,11 @@ async def sig_expand_callback(callback: CallbackQuery):
         await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
         return
     payload = _signal_payload_from_event(dict(event))
-    full_text = _format_signal(payload, lang)
     regular_enabled = _is_signal_entry_sound_enabled(callback.from_user.id)
+    try:
+        full_text = _format_signal(payload, lang)
+    except Exception:
+        full_text = _format_compact_signal(payload, lang)
     await callback.message.edit_text(
         full_text,
         reply_markup=_expanded_signal_inline_kb(
@@ -2568,11 +2571,11 @@ async def sig_expand_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-@dp.callback_query(F.data.regexp(r"^sig_collapse:\d+$"))
+@dp.callback_query(F.data.regexp(r"^collapse_signal:\d+$"))
 async def sig_collapse_callback(callback: CallbackQuery):
     if callback.from_user is None or callback.message is None:
         return
-    match = re.match(r"^sig_collapse:(\d+)$", callback.data or "")
+    match = re.match(r"^collapse_signal:(\d+)$", callback.data or "")
     if not match:
         await callback.answer()
         return
@@ -2584,8 +2587,11 @@ async def sig_collapse_callback(callback: CallbackQuery):
         await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
         return
     payload = _signal_payload_from_event(dict(event))
-    compact_text = _format_compact_signal(payload, lang)
     regular_enabled = _is_signal_entry_sound_enabled(callback.from_user.id)
+    try:
+        compact_text = _format_compact_signal(payload, lang)
+    except Exception:
+        compact_text = _format_compact_signal({"score": payload.get("score", 0)}, lang)
     await callback.message.edit_text(
         compact_text,
         reply_markup=_compact_signal_inline_kb(
@@ -2651,11 +2657,14 @@ async def sig_sound_toggle_callback(callback: CallbackQuery):
         first_row = markup.inline_keyboard[0] if markup.inline_keyboard else []
         if first_row:
             first_button_data = first_row[0].callback_data or ""
-            expand_active = str(first_button_data).startswith("sig_collapse:")
+            expand_active = str(first_button_data).startswith("collapse_signal:")
 
     signal_id = int(event["id"])
     payload = _signal_payload_from_event(dict(event))
-    new_text = _format_signal(payload, lang) if expand_active else _format_compact_signal(payload, lang)
+    try:
+        new_text = _format_signal(payload, lang) if expand_active else _format_compact_signal(payload, lang)
+    except Exception:
+        new_text = _format_compact_signal(payload, lang)
     new_kb = (
         _expanded_signal_inline_kb(lang=lang, signal_id=signal_id, regular_enabled=next_enabled)
         if expand_active
@@ -4888,7 +4897,7 @@ def _compact_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: boo
             [
                 InlineKeyboardButton(
                     text=i18n.t(lang, "SIGNAL_BUTTON_EXPAND"),
-                    callback_data=f"sig_expand:{signal_id}",
+                    callback_data=f"expand_signal:{signal_id}",
                 ),
                 InlineKeyboardButton(
                     text=i18n.t(lang, regular_key),
@@ -4906,7 +4915,7 @@ def _expanded_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: bo
             [
                 InlineKeyboardButton(
                     text=i18n.t(lang, "SIGNAL_BUTTON_COLLAPSE"),
-                    callback_data=f"sig_collapse:{signal_id}",
+                    callback_data=f"collapse_signal:{signal_id}",
                 ),
                 InlineKeyboardButton(
                     text=i18n.t(lang, regular_key),
@@ -4974,7 +4983,28 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
 
 
 def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
-    return _format_signal(signal, lang)
+    score = max(0, min(100, int(signal.get("score", 0) or 0)))
+    quality_key = "SIGNAL_QUALITY_RECOMMENDED" if score >= 90 else "SIGNAL_QUALITY_HIGH_RISK"
+    symbol_text = _signal_symbol_text(str(signal.get("symbol") or ""))
+    side_key = "SIGNAL_SHORT_SIDE_LONG" if str(signal.get("direction") or "").lower() == "long" else "SIGNAL_SHORT_SIDE_SHORT"
+    ttl_minutes = max(1, int(signal.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60))
+
+    lines = [
+        i18n.t(lang, quality_key),
+        "",
+        i18n.t(lang, "SIGNAL_SHORT_ASSET_LINE", symbol=symbol_text),
+        i18n.t(lang, side_key),
+        i18n.t(lang, "SIGNAL_SHORT_META_LINE", timeframe="1H", entry_tf="5–15m"),
+        i18n.t(lang, "SIGNAL_SHORT_TTL_LINE", minutes=ttl_minutes),
+        i18n.t(lang, "SIGNAL_SHORT_SCORE_LINE", score=score),
+    ]
+
+    prefix = signal.get("title_prefix")
+    if isinstance(prefix, dict):
+        prefix = prefix.get(lang) or prefix.get("ru")
+    if prefix:
+        lines.extend(["", str(prefix)])
+    return "\n".join(lines)
 
 
 def _signal_payload_from_event(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -5252,12 +5282,22 @@ async def send_signal_to_all(
                 skipped_dedup += 1
                 continue
         lang = get_user_lang(chat_id) or "ru"
+        signal_reply_markup = None
         if is_test:
             message_text = build_test_ai_signal(lang)
             should_log = False
             kind = "signal"
         else:
-            message_text = _format_signal(signal_dict, lang)
+            try:
+                message_text = _format_compact_signal(signal_dict, lang)
+            except Exception:
+                fallback_score = max(0, min(100, int(signal_dict.get("score", 0) or 0)))
+                fallback_quality = "SIGNAL_QUALITY_RECOMMENDED" if fallback_score >= 90 else "SIGNAL_QUALITY_HIGH_RISK"
+                message_text = "\n".join([
+                    i18n.t(lang, fallback_quality),
+                    "",
+                    i18n.t(lang, "SIGNAL_SHORT_SCORE_LINE", score=fallback_score),
+                ])
             should_log = True
             kind = "signal"
             if allow_admin_bypass and is_admin(chat_id):
@@ -5303,6 +5343,7 @@ async def send_signal_to_all(
                     event_type="NEW_SIGNAL",
                     parse_mode=signal_parse_mode,
                     disable_web_page_preview=True,
+                    reply_markup=signal_reply_markup,
                 )
             stats["sent"] += 1
             if chat_id == admin_chat_id:
@@ -5437,6 +5478,19 @@ async def send_signal_to_all(
             )
         except Exception as exc:
             print(f"[ai_signals] Failed to log signal event for {chat_id}: {exc}")
+            await asyncio.sleep(random.uniform(0.05, 0.15))
+            continue
+
+        with suppress(Exception):
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=int(res.message_id),
+                reply_markup=_compact_signal_inline_kb(
+                    lang=lang,
+                    signal_id=event_id,
+                    regular_enabled=_is_signal_entry_sound_enabled(chat_id),
+                ),
+            )
         await asyncio.sleep(random.uniform(0.05, 0.15))
     return stats if return_stats else stats["sent"]
 

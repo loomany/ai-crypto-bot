@@ -510,8 +510,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SIGNAL_COMPACT_TP2_LINE": "TP2: {tp2}",
         "SIGNAL_COMPACT_SCORE_LINE": "Score: {score}",
         "SIGNAL_COMPACT_TTL_LINE": "⏱ TTL: ~{minutes} мин",
-        "SIGNAL_BUTTON_EXPAND": "📖 Раскрыть",
-        "SIGNAL_BUTTON_COLLAPSE": "📕 Свернуть",
+        "SIGNAL_BUTTON_EXPAND": "🔽 Раскрыть",
+        "SIGNAL_BUTTON_COLLAPSE": "🔼 Скрыть",
+        "SIGNAL_SHORT_ASSET_LINE": "Монета: {symbol}",
+        "SIGNAL_SHORT_SIDE_LONG": "📈 LONG",
+        "SIGNAL_SHORT_SIDE_SHORT": "📉 SHORT",
+        "SIGNAL_SHORT_META_LINE": "⏱ TF: {timeframe} | Вход: {entry_tf}",
+        "SIGNAL_SHORT_TTL_LINE": "⏳ TTL: ~{minutes} мин",
+        "SIGNAL_SHORT_SCORE_LINE": "🎯 Score: {score}",
         "SIGNAL_BUTTON_SOUND_ON": "🔔 Звук: Сигнал + Вход",
         "SIGNAL_BUTTON_SOUND_OFF": "🔕 Звук: Тихо (Сигнал + Вход)",
         "SIGNAL_SOUND_TOGGLE_TOAST_ON": "Звук для сигнала и входа: ВКЛ",
@@ -1201,8 +1207,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SCENARIO_CONTEXT_RR": "• RR ≈ 1 : {rr}",
         "SIGNAL_QUALITY_RECOMMENDED": (
             "🔥 RECOMMENDED SIGNAL\n"
-            "Primary working range (Score 90–100)\n"
-            "Suitable for trading"
+            "Primary trading range (Score 90–100)\n"
+            "Used for trading"
         ),
         "SIGNAL_QUALITY_HIGH_RISK": (
             "⚠️ HIGHER RISK\n"
@@ -1222,8 +1228,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SIGNAL_COMPACT_TP2_LINE": "TP2: {tp2}",
         "SIGNAL_COMPACT_SCORE_LINE": "Score: {score}",
         "SIGNAL_COMPACT_TTL_LINE": "⏱ TTL: ~{minutes} min",
-        "SIGNAL_BUTTON_EXPAND": "📖 Details",
-        "SIGNAL_BUTTON_COLLAPSE": "📕 Collapse",
+        "SIGNAL_BUTTON_EXPAND": "🔽 Show details",
+        "SIGNAL_BUTTON_COLLAPSE": "🔼 Hide",
+        "SIGNAL_SHORT_ASSET_LINE": "Asset: {symbol}",
+        "SIGNAL_SHORT_SIDE_LONG": "📈 LONG",
+        "SIGNAL_SHORT_SIDE_SHORT": "📉 SHORT",
+        "SIGNAL_SHORT_META_LINE": "⏱ TF: {timeframe} | Entry: {entry_tf}",
+        "SIGNAL_SHORT_TTL_LINE": "⏳ TTL: ~{minutes} min",
+        "SIGNAL_SHORT_SCORE_LINE": "🎯 Score: {score}",
         "SIGNAL_BUTTON_SOUND_ON": "🔔 Sound: Signal + Entry",
         "SIGNAL_BUTTON_SOUND_OFF": "🔕 Sound: Silent (Signal + Entry)",
         "SIGNAL_SOUND_TOGGLE_TOAST_ON": "Signal+Entry sound: ON",
