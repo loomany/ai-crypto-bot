@@ -1148,19 +1148,30 @@ def _history_nav_kb(
             ]
         )
 
-    nav: list[InlineKeyboardButton] = []
+    nav_row: list[InlineKeyboardButton] = []
     if page > 1:
-        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"history:{time_window}:page={page - 1}"))
-    if page < pages:
-        nav.append(
+        nav_row.append(
             InlineKeyboardButton(
-                text=i18n.t(lang, "pagination_next_label"),
+                text=i18n.t(lang, "nav_back_label"),
+                callback_data=f"history:{time_window}:page={page - 1}",
+            )
+        )
+    if page < pages:
+        nav_row.append(
+            InlineKeyboardButton(
+                text=i18n.t(lang, "nav_next_label"),
                 callback_data=f"history:{time_window}:page={page + 1}",
             )
         )
-    if nav:
-        kb_rows.append(nav)
-    kb_rows.append([InlineKeyboardButton(text=i18n.t(lang, "NAV_BACK"), callback_data="hist_back")])
+    if nav_row:
+        kb_rows.append(nav_row)
+
+    if page == 1:
+        if pages == 1:
+            kb_rows.append([InlineKeyboardButton(text=i18n.t(lang, "nav_back_label"), callback_data="hist_back")])
+    else:
+        kb_rows.append([InlineKeyboardButton(text=i18n.t(lang, "nav_back_label"), callback_data="hist_back")])
+
     return InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
 
@@ -1841,27 +1852,40 @@ def _archive_inline_kb(
     if page > 0:
         nav_row.append(
             InlineKeyboardButton(
-                text=i18n.t(lang, "NAV_PREV"),
+                text=i18n.t(lang, "nav_back_label"),
                 callback_data=f"history:{time_window}:page={page}",
             )
         )
     if page < pages - 1:
         nav_row.append(
             InlineKeyboardButton(
-                text=i18n.t(lang, "NAV_NEXT"),
+                text=i18n.t(lang, "nav_next_label"),
                 callback_data=f"history:{time_window}:page={page + 2}",
             )
         )
     if nav_row:
         rows.append(nav_row)
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text=i18n.t(lang, "NAV_BACK"),
-                callback_data="hist_back",
+
+    is_first_page = page <= 0
+    if is_first_page:
+        if pages <= 1:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t(lang, "nav_back_label"),
+                        callback_data="hist_back",
+                    )
+                ]
             )
-        ]
-    )
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "nav_back_label"),
+                    callback_data="hist_back",
+                )
+            ]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1886,7 +1910,7 @@ def _archive_detail_kb(
     rows.append(
         [
             InlineKeyboardButton(
-                text=i18n.t(lang, "NAV_BACK"),
+                text=i18n.t(lang, "nav_back_label"),
                 callback_data=back_callback,
             )
         ]
@@ -3729,7 +3753,7 @@ def _build_users_list_markup(rows: list[sqlite3.Row], lang: str) -> InlineKeyboa
     buttons.append(
         [
             InlineKeyboardButton(
-                text=i18n.t(lang, "NAV_BACK"),
+                text=i18n.t(lang, "nav_back_label"),
                 callback_data="admin_back",
             )
         ]
@@ -3747,7 +3771,7 @@ def _users_list_payload(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text=i18n.t(lang, "NAV_BACK"),
+                        text=i18n.t(lang, "nav_back_label"),
                         callback_data="admin_back",
                     )
                 ]
@@ -3834,7 +3858,7 @@ def _build_user_card(user_id: int, lang: str) -> tuple[str, InlineKeyboardMarkup
             ],
             [
                 InlineKeyboardButton(
-                    text=i18n.t(lang, "NAV_BACK"),
+                    text=i18n.t(lang, "nav_back_label"),
                     callback_data="users_list",
                 )
             ],
@@ -4040,7 +4064,7 @@ async def diagnostics_button(message: Message):
     )
 
 
-@dp.message(F.text.regexp(r"^\s*⬅️?\s*(Назад|Back)\s*$"))
+@dp.message(F.text.regexp(r"^\s*[◀⬅]️?\s*(Назад|Back)\s*$"))
 async def back_to_main(message: Message):
     lang = get_user_lang(message.chat.id) or "ru"
     await message.answer(
