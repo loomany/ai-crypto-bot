@@ -814,19 +814,19 @@ def window_since(window: str, now_ts: int) -> int | None:
 
 
 def _status_icon(status: str | None) -> str:
-    passed = {"TP1", "TP2", "BE"}
-    failed = {"SL"}
-    neutral = {"NF", "NO_FILL", "EXP", "EXPIRED"}
+    passed = {"TP1", "TP2", "BE", "TP"}
+    failed = {"SL", "FAILED"}
+    neutral = {"NF", "NO_FILL", "EXP", "EXPIRED", "NEUTRAL", "NO_CONFIRMATION", "AMBIGUOUS"}
     normalized = (status or "").upper().strip()
     if normalized in passed:
-        return "✅"
+        return "🟢"
     if normalized in failed:
-        return "❌"
+        return "🔴"
     if normalized in neutral:
-        return "⏳"
+        return "⚪"
     if normalized in {"ACTIVE"}:
         return "🟡"
-    return "🕒"
+    return "🟡"
 
 
 def _format_signal_event_status(raw_status: str, lang: str) -> str:
@@ -857,7 +857,7 @@ def _format_event_time(ts: int) -> str:
         dt = datetime.fromtimestamp(int(ts), tz=ALMATY_TZ)
     except (OSError, OverflowError, TypeError, ValueError):
         return "—"
-    return dt.strftime("%d.%m %H:%M")
+    return dt.strftime("%d.%m - %H:%M")
 
 
 
@@ -1109,7 +1109,7 @@ def _history_status_icon(status_key: str) -> str:
         "TP": "🟢",
         "SL": "🔴",
         "EXPIRED_NO_ENTRY": "⚪",
-        "NO_CONFIRMATION": "🔵",
+        "NO_CONFIRMATION": "⚪",
         "IN_PROGRESS": "🟡",
     }
     return icon_map.get(status_key, "🟡")
@@ -1145,9 +1145,10 @@ def _format_history_item(row: dict[str, Any], lang: str) -> str:
     symbol = str(row.get("symbol") or "—")
     side = str(row.get("side") or "—").upper()
     score = _safe_int(row.get("score"), 0)
+    created_at = _safe_int(row.get("created_at") or row.get("ts"), 0)
     status_key = _normalize_history_status(str(row.get("outcome") or ""))
     icon = _history_status_icon(status_key)
-    return f"{icon} | {i18n.t(lang, 'history_score_label_short', value=score)} | {symbol} | {side}"
+    return f"{icon} | Score {score} | {symbol} | {side} | {_format_event_time(created_at)}"
 
 
 def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str:
@@ -2161,13 +2162,14 @@ def _archive_inline_kb(
     for event in events:
         event_status = str(event.get("status", ""))
         status_icon = _status_icon(event_status)
+        created_at = _safe_int(event.get("created_at") or event.get("ts"), 0)
         rows.append(
             [
                 InlineKeyboardButton(
                     text=(
-                        f"{status_icon} Score {_safe_int(event.get('score', 0))} • "
-                        f"{event.get('symbol')} {event.get('side')} | "
-                        f"{_format_event_time(_safe_int(event.get('ts', 0)))}"
+                        f"{status_icon} | Score {_safe_int(event.get('score', 0))} | "
+                        f"{event.get('symbol')} | {str(event.get('side') or '—').upper()} | "
+                        f"{_format_event_time(created_at)}"
                     ),
                     callback_data=f"history_open:{event.get('id')}",
                 )
