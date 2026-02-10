@@ -101,9 +101,12 @@ from db import (
     purge_symbol,
     insert_signal_event,
     list_signal_events,
+    get_signal_history,
+    count_signal_history,
     list_open_signal_events,
     count_signal_events,
     get_signal_outcome_counts,
+    get_signal_score_bucket_counts,
     get_signal_avg_rr,
     get_signal_event,
     get_signal_by_id,
@@ -958,8 +961,8 @@ def _history_state_key(user_id: int) -> str:
     return f"history_ctx:{user_id}"
 
 
-def _set_history_context(user_id: int, period: str, page: int) -> None:
-    payload = json.dumps({"window": period, "page": page})
+def _set_history_context(user_id: int, time_window: str, page: int) -> None:
+    payload = json.dumps({"window": time_window, "page": page})
     set_state(_history_state_key(user_id), payload)
 
 
@@ -971,15 +974,15 @@ def _get_history_context(user_id: int) -> tuple[str, int] | None:
         parsed = json.loads(payload)
     except (TypeError, ValueError):
         return None
-    period = str(parsed.get("window", ""))
+    time_window = str(parsed.get("window", ""))
     page = parsed.get("page")
-    if period not in {"1d", "7d", "30d", "all"}:
+    if time_window not in {"1d", "7d", "30d", "all"}:
         return None
     try:
         page_value = int(page)
     except (TypeError, ValueError):
         return None
-    return period, max(0, page_value)
+    return time_window, max(1, page_value)
 
 
 def _normalize_history_status(raw_status: str | None) -> str:
@@ -1003,216 +1006,98 @@ def _history_status_label(status_key: str, lang: str) -> str:
     return "🕒 В процессе" if lang == "ru" else "🕒 In progress"
 
 
-def _history_period_keyboard(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=i18n.t(lang, "PERIOD_1D"), callback_data="hist:1d:0"),
-                InlineKeyboardButton(text=i18n.t(lang, "PERIOD_7D"), callback_data="hist:7d:0"),
-            ],
-            [
-                InlineKeyboardButton(text=i18n.t(lang, "PERIOD_30D"), callback_data="hist:30d:0"),
-                InlineKeyboardButton(text=i18n.t(lang, "PERIOD_ALL"), callback_data="hist:all:0"),
-            ],
-        ]
+def _get_history_page(*, time_window: str, page: int, page_size: int = 12) -> tuple[int, int, int, list[dict]]:
+    total = count_signal_history(time_window=time_window, user_id=None, min_score=None)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page_value = max(1, min(page, pages))
+    offset = (page_value - 1) * page_size
+    rows = get_signal_history(
+        time_window=time_window,
+        user_id=None,
+        limit=page_size,
+        offset=offset,
     )
+    return page_value, pages, total, [dict(row) for row in rows]
 
 
-def _history_since_ts(period: str) -> int | None:
-    now = int(time.time())
-    if period == "1d":
-        return now - 86400
-    if period == "7d":
-        return now - 7 * 86400
-    if period == "30d":
-        return now - 30 * 86400
-    return None
+def _format_history_item(row: dict[str, Any], lang: str) -> str:
+    symbol = str(row.get("symbol") or "—")
+    side = str(row.get("side") or "—").upper()
+    score = _safe_int(row.get("score"), 0)
+    status_key = _normalize_history_status(str(row.get("outcome") or ""))
+    icon = _history_status_label(status_key, lang).split(" ", 1)[0]
+    created_at = _safe_int(row.get("created_at"), 0)
+    return f"{icon} | Score {score} | {symbol} {side} | {_format_event_time(created_at)}"
 
 
-def _compute_bucket_winrate(rows: list[dict[str, Any]], score_min: int, score_max: int) -> tuple[int, int]:
-    bucket_rows = [r for r in rows if score_min <= _safe_int(r.get("score"), 0) <= score_max]
-    tp_set = {"TP", "TP1", "TP2", "PASSED"}
-    sl_set = {"SL", "FAILED"}
-    tp_count = 0
-    sl_count = 0
-    for row in bucket_rows:
-        status = str(row.get("result") or row.get("status") or "").upper().strip()
-        if status in tp_set:
-            tp_count += 1
-        elif status in sl_set:
-            sl_count += 1
-    denom = tp_count + sl_count
-    winrate = int(round((tp_count / denom) * 100)) if denom > 0 else 0
-    return len(bucket_rows), winrate
+def _build_history_text(*, time_window: str, page: int, pages: int, total: int, rows: list[dict], lang: str) -> str:
+    period_label = _period_label(time_window, lang)
+    lines = [
+        i18n.t(lang, "HISTORY_LIST_TITLE", period=period_label),
+        i18n.t(lang, "HISTORY_PAGE_INFO", page=page, pages=pages, total=total),
+    ]
+    if not rows:
+        lines.append("")
+        lines.append(i18n.t(lang, "HISTORY_EMPTY_PERIOD"))
+        return "\n".join(lines)
+    return "\n".join(lines)
 
 
-def _history_header_text(
+def _history_nav_kb(
     *,
     lang: str,
-    winrate_90_100: int,
-    rr_90_100: str,
-    count_90_100: int,
-    winrate_80_89: int,
-    count_80_89: int,
-    tp_total: int,
-    sl_total: int,
-    neutral_total: int,
-    in_progress_total: int,
-) -> str:
-    if lang == "ru":
-        return (
-            f"🔥 Рекомендуемые сигналы\n"
-            f"Score 90–100\n\n"
-            f"• Winrate: {winrate_90_100}%\n"
-            f"• Средний RR: ~1 : {rr_90_100}\n"
-            f"• Всего сигналов: {count_90_100}\n"
-            f"• Статус: 🟢 Основной фокус\n\n"
-            f"ℹ️ При RR > 2 даже 40–45% дают положительное ожидание.\n\n"
-            f"————————————\n\n"
-            f"⚠️ Повышенный риск\n"
-            f"Score 80–89\n\n"
-            f"• Winrate: {winrate_80_89}%\n"
-            f"• Всего сигналов: {count_80_89}\n"
-            f"• Статус: 🟡 Использовать выборочно\n\n"
-            f"───────────\n\n"
-            f"🚫 Score < 80\n"
-            f"• В статистике не учитывается\n"
-            f"• Используется только для анализа рынка\n\n"
-            f"───────────\n\n"
-            f"📈 Итоги по сделкам\n\n"
-            f"🟢 TP: {tp_total}\n"
-            f"🔴 SL: {sl_total}\n"
-            f"⏳ Neutral: {neutral_total}\n"
-            f"🕒 В процессе: {in_progress_total}"
+    time_window: str,
+    page: int,
+    pages: int,
+    events: list[dict],
+) -> InlineKeyboardMarkup:
+    kb_rows: list[list[InlineKeyboardButton]] = []
+    for event in events:
+        event_id = _safe_int(event.get("id"), 0)
+        if event_id <= 0:
+            continue
+        kb_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_format_history_item(event, lang),
+                    callback_data=f"history_open:{event_id}",
+                )
+            ]
         )
-    return (
-        f"🔥 RECOMMENDED SIGNALS\n"
-        f"Score 90–100\n\n"
-        f"• Winrate: {winrate_90_100}%\n"
-        f"• Avg RR: ~1 : {rr_90_100}\n"
-        f"• Total signals: {count_90_100}\n"
-        f"• Status: 🟢 Main focus\n\n"
-        f"ℹ️ With RR > 2, even 40–45% winrate can be positive expectancy.\n\n"
-        f"————————————\n\n"
-        f"⚠️ HIGHER RISK\n"
-        f"Score 80–89\n\n"
-        f"• Winrate: {winrate_80_89}%\n"
-        f"• Total signals: {count_80_89}\n"
-        f"• Status: 🟡 Use selectively\n\n"
-        f"───────────\n\n"
-        f"🚫 Score < 80\n"
-        f"• Not included in stats\n"
-        f"• Market analysis only\n\n"
-        f"───────────\n\n"
-        f"📈 Period totals\n\n"
-        f"🟢 TP: {tp_total}\n"
-        f"🔴 SL: {sl_total}\n"
-        f"⏳ Neutral: {neutral_total}\n"
-        f"🕒 In progress: {in_progress_total}"
-    )
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 1:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"history:{time_window}:page={page - 1}"))
+    if page < pages:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"history:{time_window}:page={page + 1}"))
+    if nav:
+        kb_rows.append(nav)
+    kb_rows.append([InlineKeyboardButton(text=i18n.t(lang, "NAV_BACK"), callback_data="hist_back")])
+    return InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
 
-async def render_history_screen(callback: CallbackQuery, period: str, page: int) -> None:
+async def _render_history(*, callback: CallbackQuery, time_window: str, page: int) -> None:
     if callback.message is None or callback.from_user is None:
         return
     lang = _resolve_user_lang(callback.from_user.id)
-    await callback.answer()
-    try:
-        since_ts = _history_since_ts(period)
-        page_size = 10
-        total = count_signal_events(user_id=callback.from_user.id, since_ts=since_ts, min_score=None)
-        pages = max(1, (total + page_size - 1) // page_size)
-        page_value = max(0, min(page, pages - 1))
-        rows = [
-            dict(r)
-            for r in list_signal_events(
-                user_id=callback.from_user.id,
-                since_ts=since_ts,
-                min_score=None,
-                limit=page_size,
-                offset=page_value * page_size,
-            )
-        ]
-
-        period_rows: list[dict[str, Any]] = []
-        offset = 0
-        while True:
-            batch = list_signal_events(
-                user_id=callback.from_user.id,
-                since_ts=since_ts,
-                min_score=None,
-                limit=200,
-                offset=offset,
-            )
-            if not batch:
-                break
-            period_rows.extend(dict(r) for r in batch)
-            offset += len(batch)
-            if len(batch) < 200:
-                break
-
-        count_90_100, winrate_90_100 = _compute_bucket_winrate(period_rows, 90, 100)
-        count_80_89, winrate_80_89 = _compute_bucket_winrate(period_rows, 80, 89)
-
-        outcome_counts = get_signal_outcome_counts(user_id=callback.from_user.id, since_ts=since_ts, min_score=None)
-        rr_data = get_signal_avg_rr(
-            user_id=callback.from_user.id,
-            since_ts=since_ts,
-            min_score=80,
-            score_min=90,
-            score_max=100,
-        )
-        rr_90_100 = "—"
-        if int(rr_data.get("samples", 0) or 0) > 0:
-            rr_90_100 = f"{float(rr_data.get('avg_rr', 0.0)):.2f}"
-
-        _set_history_context(callback.from_user.id, period, page_value)
-
-        text = (
-            f"{i18n.t(lang, 'HISTORY_LIST_TITLE', period=_period_label(period, lang))}\n"
-            f"{i18n.t(lang, 'HISTORY_PAGE_INFO', page=page_value + 1, pages=pages, total=total)}\n\n"
-            f"{_history_header_text(lang=lang, winrate_90_100=winrate_90_100, rr_90_100=rr_90_100, count_90_100=count_90_100, winrate_80_89=winrate_80_89, count_80_89=count_80_89, tp_total=int(outcome_counts.get('passed', 0)), sl_total=int(outcome_counts.get('failed', 0)), neutral_total=int(outcome_counts.get('neutral', 0)), in_progress_total=int(outcome_counts.get('in_progress', 0)))}"
-        )
-
-        kb_rows: list[list[InlineKeyboardButton]] = []
-        for event in rows:
-            event_id = _safe_int(event.get("id"), 0)
-            if event_id <= 0:
-                continue
-            status_key = _normalize_history_status(str(event.get("result") or event.get("status") or ""))
-            icon = _history_status_label(status_key, lang).split(" ", 1)[0]
-            kb_rows.append([
-                InlineKeyboardButton(
-                    text=(
-                        f"{icon} | Score {_safe_int(event.get('score'), 0)} | "
-                        f"{event.get('symbol')} {str(event.get('side') or '—').upper()} | "
-                        f"{_format_event_time(_safe_int(event.get('ts'), 0))}"
-                    ),
-                    callback_data=f"history_open:{event_id}",
-                )
-            ])
-
-        nav_row: list[InlineKeyboardButton] = []
-        if page_value > 0:
-            nav_row.append(InlineKeyboardButton(text=i18n.t(lang, "NAV_PREV"), callback_data=f"hist:{period}:{page_value - 1}"))
-        if page_value < pages - 1:
-            nav_row.append(InlineKeyboardButton(text=i18n.t(lang, "NAV_NEXT"), callback_data=f"hist:{period}:{page_value + 1}"))
-        if nav_row:
-            kb_rows.append(nav_row)
-        kb_rows.append([InlineKeyboardButton(text=i18n.t(lang, "NAV_BACK"), callback_data="hist_back")])
-
-        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
-    except Exception:
-        logger.exception(
-            "render_history_screen failed: period=%s page=%s user_id=%s",
-            period,
-            page,
-            callback.from_user.id,
-        )
-        await callback.message.edit_text(
-            "Не удалось загрузить историю. Попробуй ещё раз позже." if lang == "ru" else "Failed to load history. Please try again later.",
-            reply_markup=_history_period_keyboard(lang),
-        )
+    page_value, pages, total, rows = _get_history_page(time_window=time_window, page=page)
+    _set_history_context(callback.from_user.id, time_window, page_value)
+    text = _build_history_text(
+        time_window=time_window,
+        page=page_value,
+        pages=pages,
+        total=total,
+        rows=rows,
+        lang=lang,
+    )
+    markup = _history_nav_kb(
+        lang=lang,
+        time_window=time_window,
+        page=page_value,
+        pages=pages,
+        events=rows,
+    )
+    await _edit_message_with_chunks(callback.message, text, reply_markup=markup)
 
 
 def enforce_signal_ttl() -> int:
@@ -1770,36 +1655,37 @@ async def stats_menu(message: Message):
     )
 
 
-@dp.callback_query(F.data.regexp(r"^hist:(1d|7d|30d|all):\d+$"))
+@dp.callback_query(F.data.regexp(r"^history:(1d|7d|30d|all):page=\d+$"))
 async def history_callback(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
-    match = re.match(r"^hist:(1d|7d|30d|all):(\d+)$", callback.data or "")
+    match = re.match(r"^history:(1d|7d|30d|all):page=(\d+)$", callback.data or "")
     if not match:
         lang = _resolve_user_lang(callback.from_user.id)
         await callback.answer(i18n.t(lang, "UNKNOWN_PERIOD"), show_alert=True)
         return
-    period = match.group(1)
-    page = max(0, int(match.group(2)))
+    time_window = match.group(1)
+    page_value = max(1, int(match.group(2)))
     try:
-        await render_history_screen(callback, period, page)
+        await callback.answer()
+    except Exception:
+        pass
+    try:
+        await _render_history(callback=callback, time_window=time_window, page=page_value)
     except Exception:
         user_id = callback.from_user.id if callback.from_user else None
         logger.exception(
-            "history_callback failed: period=%s page=%s user_id=%s",
-            period,
-            page,
+            "history_callback failed: window=%s page=%s user_id=%s",
+            time_window,
+            page_value,
             user_id,
         )
         lang = _resolve_user_lang(user_id)
         with suppress(Exception):
-            await callback.message.edit_text(
-                "Не удалось загрузить историю. Попробуй ещё раз позже." if lang == "ru" else "Failed to load history. Please try again later.",
-                reply_markup=_history_period_keyboard(lang),
-            )
+            await callback.message.answer(i18n.t(lang, "HISTORY_LOAD_ERROR"))
 
 
-@dp.callback_query(F.data.regexp(r"^hist:"))
+@dp.callback_query(F.data.regexp(r"^history:"))
 async def history_unknown_period(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
@@ -1859,14 +1745,14 @@ def _archive_inline_kb(
         nav_row.append(
             InlineKeyboardButton(
                 text=i18n.t(lang, "NAV_PREV"),
-                callback_data=f"hist:{time_window}:{max(page - 1, 0)}",
+                callback_data=f"history:{time_window}:page={page}",
             )
         )
     if page < pages - 1:
         nav_row.append(
             InlineKeyboardButton(
                 text=i18n.t(lang, "NAV_NEXT"),
-                callback_data=f"hist:{time_window}:{page + 1}",
+                callback_data=f"history:{time_window}:page={page + 2}",
             )
         )
     if nav_row:
@@ -1928,11 +1814,11 @@ async def sig_open(callback: CallbackQuery):
         event = dict(event_row)
         lang = get_user_lang(callback.from_user.id) if callback.from_user else None
         lang = lang or "ru"
-        back_callback = "hist:all:0"
+        back_callback = "history:all:page=1"
         context = _get_history_context(callback.from_user.id)
         if context:
             stored_window, page = context
-            back_callback = f"hist:{stored_window}:{max(0, page)}"
+            back_callback = f"history:{stored_window}:page={max(1, page)}"
         detail_text = _format_archive_detail(event, lang)
         detail_markup = _archive_detail_kb(
             lang=lang,
@@ -2001,11 +1887,35 @@ async def sig_refresh(callback: CallbackQuery):
 
         if callback.message is None:
             return
-        if callback.message.text and callback.message.text.startswith(("📊", "📜")):
+        if callback.message.text and callback.message.text.startswith("📊"):
             context = _get_history_context(callback.from_user.id)
             if context:
                 time_window, page = context
-                await render_history_screen(callback, time_window, page)
+                page, pages, events, outcome_counts, score_bucket_counts, avg_rr_90_100 = _get_history_page(
+                    time_window=time_window,
+                    page=page,
+                )
+                await _edit_message_with_chunks(
+                    callback.message,
+                    _format_archive_list(
+                        lang,
+                        time_window,
+                        events,
+                        page,
+                        pages,
+                        outcome_counts,
+                        score_bucket_counts,
+                        avg_rr_90_100,
+                    ),
+                    reply_markup=_archive_inline_kb(
+                        lang,
+                        time_window,
+                        page,
+                        pages,
+                        events,
+                        is_admin_user=True,
+                    ),
+                )
                 await callback.message.answer(report_text)
                 return
 
@@ -2017,7 +1927,7 @@ async def sig_refresh(callback: CallbackQuery):
         context = _get_history_context(callback.from_user.id)
         if context:
             time_window, page = context
-            back_callback = f"hist:{time_window}:{max(0, page)}"
+            back_callback = f"history:{time_window}:page={max(1, page + 1)}"
         with suppress(Exception):
             await callback.message.edit_text(
                 _format_archive_detail(dict(event), lang),
