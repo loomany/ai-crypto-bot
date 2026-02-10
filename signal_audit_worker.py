@@ -98,26 +98,13 @@ def _find_activation_from_candles(signal: Dict[str, Any], candles: list[Dict[str
     strict = bool(signal.get("confirm_strict", False))
     required_closes = 1
     if strict:
-        strict_n = signal.get("confirm_strict_n")
-        if strict_n is not None:
-            try:
-                required_closes = int(strict_n)
-            except (TypeError, ValueError):
-                required_closes = 2
-        else:
-            try:
-                required_closes = int(
-                    os.getenv(
-                        "SOFT_BTC_STRICT_CONFIRM_N",
-                        os.getenv(
-                            "ALT_CHOP_STRICT_CONFIRM_N",
-                            os.getenv("SOFT_BTC_STRICT_CONFIRM_CLOSES", "2"),
-                        ),
-                    )
-                    or "2"
-                )
-            except (TypeError, ValueError):
-                required_closes = 2
+        try:
+            required_closes = int(
+                os.getenv("SOFT_BTC_STRICT_CONFIRM_N", os.getenv("SOFT_BTC_STRICT_CONFIRM_CLOSES", "2"))
+                or "2"
+            )
+        except (TypeError, ValueError):
+            required_closes = 2
         required_closes = max(2, required_closes)
     elif _require_two_closes():
         required_closes = 2
