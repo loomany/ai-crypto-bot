@@ -1003,22 +1003,25 @@ def _get_history_context(user_id: int) -> tuple[str, int, dict[str, Any] | None]
 def _normalize_history_status(raw_status: str | None) -> str:
     normalized = str(raw_status or "").upper().strip()
     if normalized in {"TP", "TP1", "TP2", "BE", "PASSED"}:
-        return "tp"
+        return "TP"
     if normalized in {"SL", "FAILED"}:
-        return "sl"
-    if normalized in {"NEUTRAL", "NO_FILL", "NF", "EXP", "EXPIRED"}:
-        return "neutral"
-    return "in_progress"
+        return "SL"
+    if normalized in {"EXPIRED_NO_ENTRY", "NEUTRAL", "NO_FILL", "NF", "EXP", "EXPIRED"}:
+        return "EXPIRED_NO_ENTRY"
+    if normalized in {"NO_CONFIRMATION", "AMBIGUOUS"}:
+        return "NO_CONFIRMATION"
+    return "IN_PROGRESS"
 
 
 def _history_status_label(status_key: str, lang: str) -> str:
-    if status_key == "tp":
-        return "✅ TP"
-    if status_key == "sl":
-        return "❌ SL"
-    if status_key == "neutral":
-        return f"⏳ {i18n.t(lang, 'totals_no_entry_label')}"
-    return "🕒 В процессе" if lang == "ru" else "🕒 In progress"
+    status_labels = {
+        "TP": i18n.t(lang, "history_status_tp"),
+        "SL": i18n.t(lang, "history_status_sl"),
+        "EXPIRED_NO_ENTRY": i18n.t(lang, "history_status_expired_no_entry"),
+        "NO_CONFIRMATION": i18n.t(lang, "history_status_no_confirmation"),
+        "IN_PROGRESS": i18n.t(lang, "history_status_in_progress"),
+    }
+    return status_labels.get(status_key, status_labels["IN_PROGRESS"])
 
 
 def _get_history_page(*, time_window: str, page: int, page_size: int = 12) -> tuple[int, int, int, list[dict]]:
@@ -1040,9 +1043,9 @@ def _format_history_item(row: dict[str, Any], lang: str) -> str:
     side = str(row.get("side") or "—").upper()
     score = _safe_int(row.get("score"), 0)
     status_key = _normalize_history_status(str(row.get("outcome") or ""))
-    icon = _history_status_label(status_key, lang).split(" ", 1)[0]
-    created_at = _safe_int(row.get("created_at"), 0)
-    return f"{icon} | Score {score} | {symbol} {side} | {_format_event_time(created_at)}"
+    status_text = _history_status_label(status_key, lang)
+    icon = status_text.split(" ", 1)[0]
+    return f"{icon} | {i18n.t(lang, 'history_score_label_short', value=score)} | {symbol} | {side} | {status_text}"
 
 
 def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str:
@@ -1067,7 +1070,8 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
     closed_80 = _safe_int(bucket_80.get("closed"), 0) if isinstance(bucket_80, dict) else 0
     tp_total = _safe_int(totals.get("tp"), 0) if isinstance(totals, dict) else 0
     sl_total = _safe_int(totals.get("sl"), 0) if isinstance(totals, dict) else 0
-    neutral_total = _safe_int(totals.get("neutral"), 0) if isinstance(totals, dict) else 0
+    expired_no_entry_total = _safe_int(totals.get("expired_no_entry"), 0) if isinstance(totals, dict) else 0
+    no_confirmation_total = _safe_int(totals.get("no_confirmation"), 0) if isinstance(totals, dict) else 0
     in_progress_total = _safe_int(totals.get("in_progress"), 0) if isinstance(totals, dict) else 0
 
     return "\n".join(
@@ -1090,8 +1094,10 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
             i18n.t(lang, "totals_title"),
             i18n.t(lang, "totals_tp", value=tp_total),
             i18n.t(lang, "totals_sl", value=sl_total),
-            i18n.t(lang, "totals_no_entry", value=neutral_total),
+            i18n.t(lang, "totals_expired_no_entry", value=expired_no_entry_total),
+            i18n.t(lang, "totals_no_confirmation", value=no_confirmation_total),
             i18n.t(lang, "totals_in_progress", value=in_progress_total),
+            i18n.t(lang, "history_expired_helper"),
         ]
     )
 

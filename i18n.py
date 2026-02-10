@@ -288,8 +288,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "totals_title": "📈 Итоги",
         "totals_tp": "🟢 TP: {value}",
         "totals_sl": "🔴 SL: {value}",
-        "totals_no_entry": "⏳ Без входа: {value}",
-        "totals_in_progress": "🕒 В процессе: {value}",
+        "totals_expired_no_entry": "⏳ Без входа (истёк): {value}",
+        "totals_no_confirmation": "🔵 Без подтверждения: {value}",
+        "totals_in_progress": "🟡 В процессе: {value}",
         "explanation_title": "ℹ️ Пояснение",
         "explanation_line_1": "• Score ≥ 80 — участвует в расчёте winrate и RR",
         "explanation_line_2": "• Score ниже 80 — используется только для анализа рынка",
@@ -347,6 +348,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "nav_next_page": "▶️ Вперёд",
         "nav_back_to_periods": "↩️ К выбору периода",
         "totals_no_entry_label": "Без входа",
+        "history_status_tp": "🟢 TP",
+        "history_status_sl": "🔴 SL",
+        "history_status_expired_no_entry": "⏳ Без входа",
+        "history_status_no_confirmation": "🔵 Без подтверждения",
+        "history_status_in_progress": "🟡 В процессе",
+        "history_score_label_short": "Score {value}",
+        "history_expired_helper": "ℹ️ Истёкшие сигналы означают, что сделка не состоялась, и это не убыток.",
         "explanation_block": (
             "━━━━━━━━━━━━━━━━\n"
             "ℹ️ Пояснение\n"
@@ -954,8 +962,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "totals_title": "📈 Summary",
         "totals_tp": "🟢 TP: {value}",
         "totals_sl": "🔴 SL: {value}",
-        "totals_no_entry": "⏳ No entry: {value}",
-        "totals_in_progress": "🕒 In progress: {value}",
+        "totals_expired_no_entry": "⏳ Expired (no entry): {value}",
+        "totals_no_confirmation": "🔵 No confirmation: {value}",
+        "totals_in_progress": "🟡 In progress: {value}",
         "explanation_title": "ℹ️ Explanation",
         "explanation_line_1": "• Score 80+ — included in winrate and RR calculations",
         "explanation_line_2": "• Score below 80 — used only for market analysis",
@@ -1008,6 +1017,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "nav_next_page": "▶️ Next",
         "nav_back_to_periods": "↩️ Back to periods",
         "totals_no_entry_label": "No entry",
+        "history_status_tp": "🟢 TP",
+        "history_status_sl": "🔴 SL",
+        "history_status_expired_no_entry": "⏳ Expired (no entry)",
+        "history_status_no_confirmation": "🔵 No confirmation",
+        "history_status_in_progress": "🟡 In progress",
+        "history_score_label_short": "Score {value}",
+        "history_expired_helper": "ℹ️ Expired signals mean no trade occurred and are not losses.",
         "explanation_block": (
             "━━━━━━━━━━━━━━━━\n"
             "ℹ️ Explanation\n"
