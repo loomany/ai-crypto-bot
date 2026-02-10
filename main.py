@@ -1072,9 +1072,14 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
     if lang == "ru":
         return "\n".join(
             [
-                "📊 Winrate по Score",
-                f"• 90–100: {winrate_90}% | RR: {avg_rr} | Сделок: {closed_90}",
-                f"• 80–89: {winrate_80}% | Сделок: {closed_80}",
+                "🔹 Score 90–100  (топ-сигналы)",
+                f"• Winrate: {winrate_90}%",
+                f"• Avg RR: {avg_rr}",
+                f"• Сделок: {closed_90}",
+                "",
+                "🔸 Score 80–89   (повышенный риск)",
+                f"• Winrate: {winrate_80}%",
+                f"• Сделок: {closed_80}",
                 "",
                 "📈 Итоги",
                 f"🟢 TP: {tp_total}",
