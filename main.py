@@ -1152,25 +1152,28 @@ def _history_nav_kb(
     if page > 1:
         nav_row.append(
             InlineKeyboardButton(
-                text=i18n.t(lang, "nav_back_label"),
+                text=i18n.t(lang, "nav_prev_page"),
                 callback_data=f"history:{time_window}:page={page - 1}",
             )
         )
     if page < pages:
         nav_row.append(
             InlineKeyboardButton(
-                text=i18n.t(lang, "nav_next_label"),
+                text=i18n.t(lang, "nav_next_page"),
                 callback_data=f"history:{time_window}:page={page + 1}",
             )
         )
     if nav_row:
         kb_rows.append(nav_row)
 
-    if page == 1:
-        if pages == 1:
-            kb_rows.append([InlineKeyboardButton(text=i18n.t(lang, "nav_back_label"), callback_data="hist_back")])
-    else:
-        kb_rows.append([InlineKeyboardButton(text=i18n.t(lang, "nav_back_label"), callback_data="hist_back")])
+    kb_rows.append(
+        [
+            InlineKeyboardButton(
+                text=i18n.t(lang, "nav_back_to_periods"),
+                callback_data="hist_back",
+            )
+        ]
+    )
 
     return InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
@@ -1852,40 +1855,28 @@ def _archive_inline_kb(
     if page > 0:
         nav_row.append(
             InlineKeyboardButton(
-                text=i18n.t(lang, "nav_back_label"),
+                text=i18n.t(lang, "nav_prev_page"),
                 callback_data=f"history:{time_window}:page={page}",
             )
         )
     if page < pages - 1:
         nav_row.append(
             InlineKeyboardButton(
-                text=i18n.t(lang, "nav_next_label"),
+                text=i18n.t(lang, "nav_next_page"),
                 callback_data=f"history:{time_window}:page={page + 2}",
             )
         )
     if nav_row:
         rows.append(nav_row)
 
-    is_first_page = page <= 0
-    if is_first_page:
-        if pages <= 1:
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text=i18n.t(lang, "nav_back_label"),
-                        callback_data="hist_back",
-                    )
-                ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=i18n.t(lang, "nav_back_to_periods"),
+                callback_data="hist_back",
             )
-    else:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=i18n.t(lang, "nav_back_label"),
-                    callback_data="hist_back",
-                )
-            ]
-        )
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

@@ -343,6 +343,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "pagination_next_label": "▶️ Вперёд",
         "nav_back_label": "◀️ Назад",
         "nav_next_label": "▶️ Вперёд",
+        "nav_prev_page": "◀️ Назад",
+        "nav_next_page": "▶️ Вперёд",
+        "nav_back_to_periods": "↩️ К выбору периода",
         "totals_no_entry_label": "Без входа",
         "explanation_block": (
             "━━━━━━━━━━━━━━━━\n"
@@ -1000,6 +1003,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "pagination_next_label": "▶️ Next",
         "nav_back_label": "◀️ Back",
         "nav_next_label": "▶️ Next",
+        "nav_prev_page": "◀️ Back",
+        "nav_next_page": "▶️ Next",
+        "nav_back_to_periods": "↩️ Back to periods",
         "totals_no_entry_label": "No entry",
         "explanation_block": (
             "━━━━━━━━━━━━━━━━\n"
