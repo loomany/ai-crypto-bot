@@ -675,17 +675,30 @@ def get_history_winrate_summary(
 
     win_statuses = {"TP", "TP1", "TP2", "BE", "PASSED"}
     loss_statuses = {"SL", "FAILED"}
-    closed_statuses = win_statuses | loss_statuses | {
-        "NEUTRAL",
-        "NO_FILL",
-        "NF",
-        "AMBIGUOUS",
-    }
+    expired_no_entry_statuses = {"EXPIRED_NO_ENTRY", "EXPIRED", "EXP", "NO_FILL", "NF", "NEUTRAL"}
+    no_confirmation_statuses = {"NO_CONFIRMATION", "AMBIGUOUS"}
+
+    def _history_outcome_type(outcome: str) -> str:
+        if outcome in win_statuses:
+            return "TP"
+        if outcome in loss_statuses:
+            return "SL"
+        if outcome in expired_no_entry_statuses:
+            return "EXPIRED_NO_ENTRY"
+        if outcome in no_confirmation_statuses:
+            return "NO_CONFIRMATION"
+        return "IN_PROGRESS"
 
     summary: dict[str, object] = {
         "90_100": {"wins": 0, "losses": 0, "closed": 0, "winrate": None, "avg_rr": None},
         "80_89": {"wins": 0, "losses": 0, "closed": 0, "winrate": None},
-        "totals": {"tp": 0, "sl": 0, "neutral": 0, "in_progress": 0},
+        "totals": {
+            "tp": 0,
+            "sl": 0,
+            "expired_no_entry": 0,
+            "no_confirmation": 0,
+            "in_progress": 0,
+        },
     }
 
     rr_sum_90_100 = 0.0
@@ -694,14 +707,17 @@ def get_history_winrate_summary(
     for row in rows:
         score = int(row["score"] or 0)
         outcome = str(row["outcome"] or "")
+        outcome_type = _history_outcome_type(outcome)
         totals = summary["totals"]
         if isinstance(totals, dict):
-            if outcome in win_statuses:
+            if outcome_type == "TP":
                 totals["tp"] = int(totals.get("tp", 0) or 0) + 1
-            elif outcome in loss_statuses:
+            elif outcome_type == "SL":
                 totals["sl"] = int(totals.get("sl", 0) or 0) + 1
-            elif outcome in {"NEUTRAL", "NO_FILL", "NF", "AMBIGUOUS"}:
-                totals["neutral"] = int(totals.get("neutral", 0) or 0) + 1
+            elif outcome_type == "EXPIRED_NO_ENTRY":
+                totals["expired_no_entry"] = int(totals.get("expired_no_entry", 0) or 0) + 1
+            elif outcome_type == "NO_CONFIRMATION":
+                totals["no_confirmation"] = int(totals.get("no_confirmation", 0) or 0) + 1
             else:
                 totals["in_progress"] = int(totals.get("in_progress", 0) or 0) + 1
 
@@ -730,11 +746,11 @@ def get_history_winrate_summary(
         if not isinstance(bucket, dict):
             continue
 
-        if outcome not in closed_statuses:
+        if outcome_type not in {"TP", "SL"}:
             continue
-        if outcome in win_statuses:
+        if outcome_type == "TP":
             bucket["wins"] = int(bucket["wins"] or 0) + 1
-        elif outcome in loss_statuses:
+        elif outcome_type == "SL":
             bucket["losses"] = int(bucket["losses"] or 0) + 1
 
     for key in ("90_100", "80_89"):
