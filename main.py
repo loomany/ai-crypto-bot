@@ -4308,7 +4308,10 @@ def build_test_ai_signal(lang: str) -> str:
             "en": i18n.t("en", "TEST_AI_PREFIX"),
         },
     }
-    return _format_signal(signal_dict, lang)
+    text = _format_signal(signal_dict, lang)
+    text = re.sub(r"</?(?:b|i|code)>", "", text, flags=re.IGNORECASE)
+    text = text.replace("<", "‹").replace(">", "›")
+    return text
 
 
 def _subscription_kb_for(source: str, lang: str) -> InlineKeyboardMarkup:
@@ -4449,6 +4452,31 @@ async def send_signal_to_all(
         f"subscribers={len(subscribers)} is_test={is_test}"
     )
 
+    async def _send_with_safe_fallback(
+        target_chat_id: int,
+        text: str,
+        *,
+        reply_markup: InlineKeyboardMarkup | None = None,
+        disable_web_page_preview: bool | None = None,
+        parse_mode: str | None = None,
+    ):
+        send_kwargs: dict[str, Any] = {}
+        if reply_markup is not None:
+            send_kwargs["reply_markup"] = reply_markup
+        if disable_web_page_preview is not None:
+            send_kwargs["disable_web_page_preview"] = disable_web_page_preview
+        send_kwargs["parse_mode"] = parse_mode
+        try:
+            return await bot.send_message(target_chat_id, text, **send_kwargs)
+        except TelegramBadRequest as exc:
+            error_text = str(exc).lower()
+            if "can't parse entities" not in error_text:
+                raise
+            if send_kwargs.get("parse_mode") is None:
+                raise
+            send_kwargs["parse_mode"] = None
+            return await bot.send_message(target_chat_id, text, **send_kwargs)
+
     for chat_id in recipients:
         if chat_id <= 0:
             stats["errors"] += 1
@@ -4517,17 +4545,22 @@ async def send_signal_to_all(
         if kind == "paywall":
             stats["paywall"] += 1
 
+        signal_parse_mode = None if is_test else "HTML"
+        paywall_parse_mode = None if is_test else "HTML"
+
         try:
             if kind == "paywall":
-                res = await bot.send_message(
+                res = await _send_with_safe_fallback(
                     chat_id,
                     message_text,
+                    parse_mode=paywall_parse_mode,
                     reply_markup=_subscription_kb_for("ai", lang),
                 )
             else:
-                res = await bot.send_message(
+                res = await _send_with_safe_fallback(
                     chat_id,
                     message_text,
+                    parse_mode=signal_parse_mode,
                     disable_web_page_preview=True,
                 )
             stats["sent"] += 1
@@ -4543,15 +4576,17 @@ async def send_signal_to_all(
             await asyncio.sleep(wait_seconds)
             try:
                 if kind == "paywall":
-                    res = await bot.send_message(
+                    res = await _send_with_safe_fallback(
                         chat_id,
                         message_text,
+                        parse_mode=paywall_parse_mode,
                         reply_markup=_subscription_kb_for("ai", lang),
                     )
                 else:
-                    res = await bot.send_message(
+                    res = await _send_with_safe_fallback(
                         chat_id,
                         message_text,
+                        parse_mode=signal_parse_mode,
                         disable_web_page_preview=True,
                     )
                 stats["sent"] += 1
