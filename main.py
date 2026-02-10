@@ -3914,7 +3914,29 @@ async def test_admin(message: Message):
     )
 
 
-@dp.message(F.text.in_(i18n.all_labels("SYS_DIAG_ADMIN")))
+def _normalize_menu_label(text: str) -> str:
+    return " ".join(text.replace("\ufe0f", "").split()).strip().casefold()
+
+
+def _is_admin_diagnostics_button(text: str | None) -> bool:
+    if not text:
+        return False
+    normalized = _normalize_menu_label(text)
+    expected = {_normalize_menu_label(label) for label in i18n.all_labels("SYS_DIAG_ADMIN")}
+    if normalized in expected:
+        return True
+
+    fallback_labels = {
+        "диагностика (админ)",
+        "diagnostics (admin)",
+        "диагностика админ",
+        "diagnostics admin",
+    }
+    normalized_no_emoji = normalized.lstrip("🧪 ")
+    return normalized_no_emoji in fallback_labels
+
+
+@dp.message(lambda message: _is_admin_diagnostics_button(message.text))
 async def test_admin_button(message: Message):
     lang = get_user_lang(message.chat.id) or "ru"
     if message.from_user is None or not is_admin(message.from_user.id):
