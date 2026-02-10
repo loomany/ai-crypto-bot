@@ -815,19 +815,20 @@ def window_since(window: str, now_ts: int) -> int | None:
 
 
 def _status_icon(status: str | None) -> str:
+    return _format_status_prefix(status)
+
+
+def _format_status_prefix(status: str | None) -> str:
+    """Return a fixed-width status prefix for list rows."""
+    # Keep status parsing for possible future mapping, but render with a
+    # monospace-friendly single-width symbol to align all rows from the left.
     passed = {"TP1", "TP2", "BE", "TP"}
     failed = {"SL", "FAILED"}
     neutral = {"NF", "NO_FILL", "EXP", "EXPIRED", "NEUTRAL", "NO_CONFIRMATION", "AMBIGUOUS"}
     normalized = (status or "").upper().strip()
-    if normalized in passed:
-        return "🟢"
-    if normalized in failed:
-        return "🔴"
-    if normalized in neutral:
-        return "⚪"
-    if normalized in {"ACTIVE"}:
-        return "🟡"
-    return "🟡"
+    if normalized in passed or normalized in failed or normalized in neutral or normalized in {"ACTIVE"}:
+        return "•"
+    return "•"
 
 
 def _format_signal_event_status(raw_status: str, lang: str) -> str:
@@ -1106,14 +1107,7 @@ def _history_status_label(status_key: str, lang: str) -> str:
 
 
 def _history_status_icon(status_key: str) -> str:
-    icon_map = {
-        "TP": "🟢",
-        "SL": "🔴",
-        "EXPIRED_NO_ENTRY": "⚪",
-        "NO_CONFIRMATION": "⚪",
-        "IN_PROGRESS": "🟡",
-    }
-    return icon_map.get(status_key, "🟡")
+    return _format_status_prefix(status_key)
 
 
 def _get_history_page(
