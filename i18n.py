@@ -214,7 +214,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "STATS_PRO_SUMMARY_SUB": "(за {period})",
         "STATS_PRO_TP_TOTAL": "🟢 Успешные (TP): {tp_total}",
         "STATS_PRO_SL_TOTAL": "🔴 По стопу (SL): {sl_total}",
-        "STATS_PRO_NEUTRAL_TOTAL": "⏳ Neutral: {neutral_total}",
+        "STATS_PRO_NEUTRAL_TOTAL": "⏳ Без входа: {neutral_total}",
         "STATS_PRO_IN_PROGRESS_TOTAL": "🕒 В процессе: {in_progress_total}",
         "STATS_PRO_NEUTRAL_NOTE": "ℹ️ Neutral — сценарий не дошёл ни до TP, ни до SL",
         "STATS_PRO_NEUTRAL_NOTE_2": "(флет, отмена по времени или ручное закрытие).",
@@ -319,6 +319,17 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "NAV_PREV": "⬅️ Назад",
         "NAV_NEXT": "Вперёд ➡️",
         "NAV_BACK": "⬅️ Назад",
+        "pagination_next_label": "▶ Вперёд",
+        "totals_no_entry_label": "Без входа",
+        "explanation_block": (
+            "━━━━━━━━━━━━━━━━\n"
+            "ℹ️ Пояснение\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "• Score ≥ 80 — участвует в расчёте winrate и RR\n"
+            "• Score ниже 80 — используется только для анализа рынка\n"
+            "• «Без входа» — цена не дошла до подтверждения/входа,\n"
+            "  либо сценарий был отменён"
+        ),
         "PAYMENT_COPY_ADDRESS": "📋 Адрес для оплаты (TRX):\n{wallet}",
         "RECEIPT_REQUEST_TEXT": (
             "📎 Отправьте сюда чек (скрин/фото) одним сообщением.\n"
@@ -842,7 +853,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "STATS_PRO_SUMMARY_SUB": "(for {period})",
         "STATS_PRO_TP_TOTAL": "🟢 Successful (TP): {tp_total}",
         "STATS_PRO_SL_TOTAL": "🔴 Stopped (SL): {sl_total}",
-        "STATS_PRO_NEUTRAL_TOTAL": "⏳ Neutral: {neutral_total}",
+        "STATS_PRO_NEUTRAL_TOTAL": "⏳ No entry: {neutral_total}",
         "STATS_PRO_IN_PROGRESS_TOTAL": "🕒 In progress: {in_progress_total}",
         "STATS_PRO_NEUTRAL_NOTE": "ℹ️ Neutral — scenario reached neither TP nor SL",
         "STATS_PRO_NEUTRAL_NOTE_2": "(range, time-based cancel, or manual close).",
@@ -942,6 +953,17 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "NAV_PREV": "⬅️ Prev",
         "NAV_NEXT": "Next ➡️",
         "NAV_BACK": "⬅️ Back",
+        "pagination_next_label": "▶ Next",
+        "totals_no_entry_label": "No entry",
+        "explanation_block": (
+            "━━━━━━━━━━━━━━━━\n"
+            "ℹ️ Explanation\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "• Score ≥ 80 — included in winrate and RR calculations\n"
+            "• Score below 80 — used only for market analysis\n"
+            "• “No entry” — price didn’t reach confirmation/entry,\n"
+            "  or the scenario was canceled/expired"
+        ),
         "PAYMENT_COPY_ADDRESS": "📋 Payment address (TRX):\n{wallet}",
         "RECEIPT_REQUEST_TEXT": (
             "📎 Send the receipt here (screenshot/photo) in one message.\n"
