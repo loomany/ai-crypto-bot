@@ -36,13 +36,18 @@ def init_signal_audit_tables() -> None:
                 outcome TEXT,
                 closed_at INTEGER,
                 pnl_r REAL,
-                notes TEXT
+                notes TEXT,
+                ttl_minutes INTEGER NOT NULL DEFAULT 720
             )
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_audit_status ON signal_audit(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_audit_sent_at ON signal_audit(sent_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_audit_symbol ON signal_audit(symbol)")
+        cur = conn.execute("PRAGMA table_info(signal_audit)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "ttl_minutes" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN ttl_minutes INTEGER NOT NULL DEFAULT 720")
         conn.commit()
     finally:
         conn.close()
@@ -110,6 +115,7 @@ def insert_signal_audit(
         json.dumps(breakdown, ensure_ascii=False),
         signal_sent_at,
         "open",
+        int(signal_dict.get("ttl_minutes", 720) or 720),
     )
 
     conn = sqlite3.connect(get_db_path())
@@ -119,8 +125,8 @@ def insert_signal_audit(
             INSERT INTO signal_audit (
                 signal_id, module, tier, symbol, direction, timeframe,
                 entry_from, entry_to, sl, tp1, tp2, score, rr,
-                reason_json, breakdown_json, sent_at, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                reason_json, breakdown_json, sent_at, status, ttl_minutes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             payload,
         )
@@ -184,7 +190,7 @@ def fetch_open_signals(max_age_sec: int = 86400) -> list[dict]:
             f"""
             SELECT *
             FROM signal_audit
-            WHERE status = 'open' AND sent_at >= ?
+            WHERE status = 'open' AND (sent_at + ttl_minutes * 60) >= ?
               AND NOT (
                 symbol LIKE 'TEST%' OR
                 LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
@@ -219,6 +225,7 @@ def get_public_stats(days: int = 30) -> dict:
             FROM signal_audit
             WHERE sent_at >= ?
               AND score >= ?
+              AND (status != 'closed' OR outcome != 'EXPIRED')
               AND NOT (
                 symbol LIKE 'TEST%' OR
                 LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
@@ -240,6 +247,7 @@ def get_public_stats(days: int = 30) -> dict:
             FROM signal_audit
             WHERE status = 'closed' AND sent_at >= ?
               AND score >= ?
+              AND outcome != 'EXPIRED'
               AND NOT (
                 symbol LIKE 'TEST%' OR
                 LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
@@ -279,6 +287,7 @@ def get_public_stats(days: int = 30) -> dict:
             FROM signal_audit
             WHERE sent_at >= ?
               AND score >= ?
+              AND (status != 'closed' OR outcome != 'EXPIRED')
               AND NOT (
                 symbol LIKE 'TEST%' OR
                 LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
@@ -302,6 +311,7 @@ def get_public_stats(days: int = 30) -> dict:
             FROM signal_audit
             WHERE status = 'closed' AND sent_at >= ?
               AND score >= ?
+              AND outcome != 'EXPIRED'
               AND NOT (
                 symbol LIKE 'TEST%' OR
                 LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
@@ -424,7 +434,7 @@ def count_signals_sent_since(
 
 def get_ai_signal_stats(days: int | None) -> dict:
     now = int(time.time())
-    params: list[Any] = ["TP1", "TP2", "SL", "EXPIRED", 80.0]
+    params: list[Any] = ["TP1", "TP2", "SL", 80.0]
     since_clause = ""
     if days is not None:
         since_clause = " AND sent_at >= ?"
@@ -441,7 +451,7 @@ def get_ai_signal_stats(days: int | None) -> dict:
             SELECT outcome, score
             FROM signal_audit
             WHERE status = 'closed'
-              AND outcome IN (?, ?, ?, ?)
+              AND outcome IN (?, ?, ?)
               AND score >= ?
               AND NOT (
                 symbol LIKE 'TEST%' OR
@@ -463,7 +473,7 @@ def get_ai_signal_stats(days: int | None) -> dict:
         tp2 = sum(1 for row in rows if row["outcome"] == "TP2")
         tp1 = sum(1 for row in rows if row["outcome"] in ("TP1", "TP2"))
         sl = sum(1 for row in rows if row["outcome"] == "SL")
-        exp = sum(1 for row in rows if row["outcome"] == "EXPIRED")
+        exp = 0
         winrate = (tp1 / total * 100) if total else 0.0
 
         buckets = {

@@ -1220,8 +1220,10 @@ def enforce_signal_ttl() -> int:
         created_at = int(event.get("ts", 0))
         if created_at <= 0:
             continue
+        ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
+        ttl_sec = max(60, ttl_minutes * 60)
         age_sec = now - created_at
-        if age_sec < SIGNAL_TTL_SECONDS:
+        if age_sec < ttl_sec:
             continue
         tp2_hit = bool(event.get("tp2_hit"))
         tp1_hit = bool(event.get("tp1_hit"))
@@ -1437,7 +1439,8 @@ def _format_outcome_block(event: dict) -> list[str]:
 
         lines.append(header)
         if status in {"NF", "EXP"}:
-            lines.append("⏱ Прошло 12 часов")
+            ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
+            lines.append(f"⏱ Прошло ~{ttl_minutes} минут")
         elif finalized_at:
             lines.append(f"⏱ Время: {_format_event_time(finalized_at)}")
         elif last_checked_at:
@@ -1447,7 +1450,8 @@ def _format_outcome_block(event: dict) -> list[str]:
         lines.append(f"💬 Комментарий: {comment}")
         return lines
 
-    remaining = SIGNAL_TTL_SECONDS - (now - created_at)
+    ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
+    remaining = ttl_minutes * 60 - (now - created_at)
     status_hint = "ожидает подтверждение" if entry_touched else "ожидает вход"
     lines.extend(
         [
@@ -1481,7 +1485,8 @@ def _format_issue_hint_block(event: dict) -> list[str]:
     elif status == "NF":
         lines.append("• цена не дошла до POI — это нормально, сигнал просто не активировался")
     else:
-        lines.append("• время жизни 12ч истекло — сценарий больше не актуален")
+        ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
+        lines.append(f"• время жизни ~{ttl_minutes}м истекло — сценарий больше не актуален")
     return lines
 
 
@@ -1525,13 +1530,16 @@ def _format_refresh_report(event: dict, lang: str) -> str:
     if status_raw == "OPEN":
         touched_label = "тронуто" if entry_touched else "не тронуто"
         lines.append(f"• entry: {entry_from:.4f}–{entry_to:.4f} ({touched_label})")
-        remaining = SIGNAL_TTL_SECONDS - (int(time.time()) - created_at)
+        ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
+        remaining = ttl_minutes * 60 - (int(time.time()) - created_at)
         lines.append(f"• до конца жизни: {_format_duration(remaining)}")
     elif status_raw in {"NO_FILL"}:
-        lines.append("• прошло 12ч")
+        ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
+        lines.append(f"• прошло ~{ttl_minutes}м")
         lines.append("• цена не дошла до входа")
     elif status_raw in {"EXP", "EXPIRED"}:
-        lines.append("• прошло 12ч после активации")
+        ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
+        lines.append(f"• прошло ~{ttl_minutes}м после активации")
         lines.append("• сценарий устарел")
     return "\n".join(lines)
 
@@ -1585,9 +1593,11 @@ async def refresh_signal(event_id: int) -> dict | None:
 
     symbol = str(event.get("symbol", ""))
     created_at = int(event.get("ts", 0))
-    cutoff_ts = min(now, created_at + SIGNAL_TTL_SECONDS)
+    ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
+    ttl_sec = max(60, ttl_minutes * 60)
+    cutoff_ts = min(now, created_at + ttl_sec)
     start_ms = created_at * 1000
-    limit = max(200, int(SIGNAL_TTL_SECONDS / 300) + 20)
+    limit = max(200, int(ttl_sec / 300) + 20)
     with binance_request_context("signal_refresh"):
         data = await fetch_klines(symbol, "5m", limit, start_ms=start_ms)
     candles: list[dict] = []
@@ -1640,7 +1650,7 @@ async def refresh_signal(event_id: int) -> dict | None:
     if outcome is None:
         if tp1_hit:
             outcome = "TP1"
-        elif now - created_at >= SIGNAL_TTL_SECONDS:
+        elif now - created_at >= ttl_sec:
             if entry_touched:
                 outcome = "EXP"
             else:
@@ -1741,7 +1751,7 @@ def _format_archive_detail(event: dict, lang: str) -> str:
         i18n.t(
             lang,
             "ARCHIVE_DETAIL_LIFETIME",
-            hours=SIGNAL_TTL_SECONDS // 3600,
+            hours=max(1, int(round(float(event.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60))),
         ),
     ]
     lines.extend(["", *_format_outcome_block(event)])
@@ -4293,7 +4303,7 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
         rr=rr,
         price_precision=4,
         score_breakdown=breakdown,
-        lifetime_hours=SIGNAL_TTL_SECONDS // 3600,
+        lifetime_minutes=int(signal.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60),
     )
     prefix = signal.get("title_prefix")
     if isinstance(prefix, dict):
@@ -4707,6 +4717,7 @@ async def send_signal_to_all(
                 is_test=is_test,
                 reason_json=reason_json,
                 breakdown_json=breakdown_json,
+                ttl_minutes=int(signal_dict.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60),
             )
         except Exception as exc:
             print(f"[ai_signals] Failed to log signal event for {chat_id}: {exc}")

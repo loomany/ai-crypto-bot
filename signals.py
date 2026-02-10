@@ -284,6 +284,26 @@ def _dynamic_rr_target(atr_pct: float, setup_type: str, min_rr_required: float) 
     return max(rr, min_rr_required)
 
 
+def calculate_signal_ttl_minutes(score: float, atr_pct: float | None) -> int:
+    score_value = float(score or 0.0)
+    if score_value >= 90:
+        ttl = 120.0
+    elif score_value >= 80:
+        ttl = 75.0
+    else:
+        ttl = 45.0
+
+    if atr_pct is not None:
+        atr_value = float(atr_pct)
+        if atr_value >= 0.45:
+            ttl *= 0.7
+        elif atr_value <= 0.25:
+            ttl *= 1.2
+
+    ttl = _clamp(ttl, 30.0, 180.0)
+    return int(round(ttl))
+
+
 def _build_setup_id(
     *,
     symbol: str,
@@ -503,6 +523,10 @@ async def process_confirm_retry_queue(
                         "retry": True,
                         "retry_attempts": entry["attempts"],
                     },
+                    "ttl_minutes": calculate_signal_ttl_minutes(
+                        min(100, abs(raw_score)),
+                        (entry.get("setup_snapshot") or {}).get("atr_pct"),
+                    ),
                 }
             )
             to_send.append(signal_base)
@@ -1569,6 +1593,7 @@ async def _prepare_signal(
                             "atr_30": round(atr_15m or 0.0, 4),
                         },
                         "meta": {"setup_id": setup_id, "setup_type": setup_type},
+                        "ttl_minutes": calculate_signal_ttl_minutes(0, atr_dynamic_atr_pct),
                     }
                     pending_entry = {
                         "setup_id": setup_id,
@@ -1985,6 +2010,7 @@ async def _prepare_signal(
                         "atr_30": round(atr_15m or 0.0, 4),
                     },
                     "meta": {"setup_id": setup_id, "setup_type": setup_type},
+                    "ttl_minutes": calculate_signal_ttl_minutes(min(100, abs(raw_score)), atr_dynamic_atr_pct),
                 }
                 pending_entry = {
                     "setup_id": setup_id,
@@ -2053,6 +2079,7 @@ async def _prepare_signal(
             "atr_30": round(atr_15m or 0.0, 4),
         },
         "meta": {"setup_id": setup_id, "setup_type": setup_type},
+        "ttl_minutes": calculate_signal_ttl_minutes(min(100, abs(raw_score)), atr_dynamic_atr_pct),
     }
 
 

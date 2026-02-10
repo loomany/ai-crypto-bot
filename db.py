@@ -68,7 +68,8 @@ def init_db() -> None:
                 tg_message_id INTEGER,
                 reason_json TEXT,
                 breakdown_json TEXT,
-                result_notified INTEGER NOT NULL DEFAULT 0
+                result_notified INTEGER NOT NULL DEFAULT 0,
+                ttl_minutes INTEGER NOT NULL DEFAULT 720
             )
             """
         )
@@ -110,6 +111,8 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE signal_events ADD COLUMN result_notified INTEGER NOT NULL DEFAULT 0"
             )
+        if "ttl_minutes" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN ttl_minutes INTEGER NOT NULL DEFAULT 720")
         conn.commit()
     finally:
         conn.close()
@@ -428,6 +431,7 @@ def insert_signal_event(
     is_test: bool = False,
     reason_json: str | None = None,
     breakdown_json: str | None = None,
+    ttl_minutes: int = 720,
 ) -> int:
     if is_test:
         return 0
@@ -441,8 +445,8 @@ def insert_signal_event(
             INSERT INTO signal_events (
                 ts, user_id, module, symbol, side, timeframe, score,
                 poi_low, poi_high, sl, tp1, tp2, status, is_test, tg_message_id,
-                reason_json, breakdown_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                reason_json, breakdown_json, ttl_minutes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(ts),
@@ -462,6 +466,7 @@ def insert_signal_event(
                 tg_message_id,
                 reason_json,
                 breakdown_json,
+                int(ttl_minutes),
             ),
         )
         conn.commit()
@@ -674,8 +679,6 @@ def get_history_winrate_summary(
         "NEUTRAL",
         "NO_FILL",
         "NF",
-        "EXP",
-        "EXPIRED",
         "AMBIGUOUS",
     }
 
@@ -697,7 +700,7 @@ def get_history_winrate_summary(
                 totals["tp"] = int(totals.get("tp", 0) or 0) + 1
             elif outcome in loss_statuses:
                 totals["sl"] = int(totals.get("sl", 0) or 0) + 1
-            elif outcome in {"NEUTRAL", "NO_FILL", "NF", "EXP", "EXPIRED", "AMBIGUOUS"}:
+            elif outcome in {"NEUTRAL", "NO_FILL", "NF", "AMBIGUOUS"}:
                 totals["neutral"] = int(totals.get("neutral", 0) or 0) + 1
             else:
                 totals["in_progress"] = int(totals.get("in_progress", 0) or 0) + 1
