@@ -561,6 +561,7 @@ def get_signal_history(
         cur = conn.execute(
             f"""
             SELECT
+                id,
                 symbol,
                 side,
                 CAST(ROUND(score) AS INTEGER) AS score,
