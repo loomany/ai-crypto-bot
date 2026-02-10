@@ -2061,7 +2061,7 @@ def _format_archive_detail(event: dict, lang: str) -> str:
                 breakdown_lines.append(f"• {label}: {sign}{abs(delta_value)}")
 
     status_raw = str(event.get("result") or event.get("status") or "OPEN").upper()
-    lines = [
+    compact_lines = [
         f"📌 {event.get('symbol')} {event.get('side')} {score}",
         f"🕒 {_format_event_time(int(event.get('ts', 0)))}",
         f"POI: {float(event.get('poi_low')):.4f} - {float(event.get('poi_high')):.4f}",
@@ -2070,13 +2070,15 @@ def _format_archive_detail(event: dict, lang: str) -> str:
         f"TP2: {float(event.get('tp2')):.4f}",
     ]
     if status_raw == "OPEN":
-        lines.append(
+        compact_lines.append(
             i18n.t(
                 lang,
                 "ARCHIVE_DETAIL_LIFETIME",
                 hours=max(1, int(round(float(event.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60))),
             )
         )
+
+    lines = list(compact_lines)
     lines.extend(["", *_format_outcome_block(event)])
     lines.extend(_format_issue_hint_block(event))
     if breakdown_lines:
@@ -2088,6 +2090,27 @@ def _format_archive_detail(event: dict, lang: str) -> str:
             ]
         )
     return "\n".join(lines)
+
+
+def _signal_detail_expand_state_key(*, user_id: int, signal_id: int) -> str:
+    return f"sig_detail_expand:{int(user_id)}:{int(signal_id)}"
+
+
+def _get_signal_detail_expanded(*, user_id: int, signal_id: int) -> bool:
+    raw = get_state(_signal_detail_expand_state_key(user_id=user_id, signal_id=signal_id), "0")
+    return str(raw or "0") == "1"
+
+
+def _set_signal_detail_expanded(*, user_id: int, signal_id: int, expanded: bool) -> None:
+    set_state(_signal_detail_expand_state_key(user_id=user_id, signal_id=signal_id), "1" if expanded else "0")
+
+
+def _format_archive_detail_view(event: dict, lang: str, *, expanded: bool) -> str:
+    full_text = _format_archive_detail(event, lang)
+    if expanded:
+        return full_text
+    compact_lines = full_text.split("\n")[:6]
+    return "\n".join(compact_lines)
 
 
 @dp.message(F.text.in_(i18n.all_labels("MENU_STATS")))
@@ -2221,8 +2244,17 @@ def _archive_detail_kb(
     event_id: int,
     event_status: str,
     is_admin_user: bool,
+    expanded: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=i18n.t(lang, "BTN_COLLAPSE" if expanded else "BTN_EXPAND"),
+                callback_data=f"sig_toggle:{event_id}",
+            )
+        ]
+    )
     if is_admin_user:
         rows.append(
             [
@@ -2264,13 +2296,15 @@ async def sig_open(callback: CallbackQuery):
         if context:
             stored_window, page, _ = context
             back_callback = f"history:{stored_window}:page={max(1, page)}"
-        detail_text = _format_archive_detail(event, lang)
+        expanded = _get_signal_detail_expanded(user_id=callback.from_user.id, signal_id=event_id)
+        detail_text = _format_archive_detail_view(event, lang, expanded=expanded)
         detail_markup = _archive_detail_kb(
             lang=lang,
             back_callback=back_callback,
             event_id=event_id,
             event_status=str(event.get("status", "")),
             is_admin_user=is_admin(callback.from_user.id),
+            expanded=expanded,
         )
         try:
             await callback.message.edit_text(detail_text, reply_markup=detail_markup)
@@ -2304,11 +2338,55 @@ async def history_noop(callback: CallbackQuery):
     await callback.answer()
 
 
+@dp.callback_query(F.data.regexp(r"^sig_toggle:\d+$"))
+async def sig_toggle(callback: CallbackQuery):
+    if callback.message is None or callback.from_user is None:
+        return
+    lang = get_user_lang(callback.from_user.id) or "ru"
+    try:
+        event_id = int((callback.data or "").split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer()
+        return
+
+    include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
+    event_row = get_signal_by_id(event_id, include_legacy=include_legacy)
+    if event_row is None:
+        await callback.answer(i18n.t(lang, "legacy_hidden_notice"), show_alert=True)
+        return
+    event = dict(event_row)
+
+    current = _get_signal_detail_expanded(user_id=callback.from_user.id, signal_id=event_id)
+    next_state = not current
+    _set_signal_detail_expanded(user_id=callback.from_user.id, signal_id=event_id, expanded=next_state)
+
+    back_callback = "history:all:page=1"
+    context = _get_history_context(callback.from_user.id)
+    if context:
+        stored_window, page, _ = context
+        back_callback = f"history:{stored_window}:page={max(1, page)}"
+
+    with suppress(Exception):
+        await callback.answer()
+    await callback.message.edit_text(
+        _format_archive_detail_view(event, lang, expanded=next_state),
+        reply_markup=_archive_detail_kb(
+            lang=lang,
+            back_callback=back_callback,
+            event_id=event_id,
+            event_status=str(event.get("status", "")),
+            is_admin_user=is_admin(callback.from_user.id),
+            expanded=next_state,
+        ),
+    )
+
+
 @dp.callback_query(F.data.regexp(r"^sig_refresh:\d+$"))
 async def sig_refresh(callback: CallbackQuery):
     if callback.from_user is None:
         return
     try:
+        lang = get_user_lang(callback.from_user.id) or "ru"
         if not is_admin(callback.from_user.id):
             await callback.answer("Недостаточно прав", show_alert=True)
             return
@@ -2376,14 +2454,16 @@ async def sig_refresh(callback: CallbackQuery):
             time_window, page, _ = context
             back_callback = f"history:{time_window}:page={max(1, page + 1)}"
         with suppress(Exception):
+            expanded = _get_signal_detail_expanded(user_id=callback.from_user.id, signal_id=event_id)
             await callback.message.edit_text(
-                _format_archive_detail(dict(event), lang),
+                _format_archive_detail_view(dict(event), lang, expanded=expanded),
                 reply_markup=_archive_detail_kb(
                     lang=lang,
                     back_callback=back_callback,
                     event_id=event_id,
                     event_status=str(event.get("status", "")),
                     is_admin_user=True,
+                    expanded=expanded,
                 ),
             )
         await callback.message.answer(report_text)

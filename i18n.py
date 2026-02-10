@@ -187,6 +187,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "BTN_COPY_ADDRESS": "📋 Скопировать адрес",
         "BTN_SEND_RECEIPT": "📎 Отправить чек + ID",
         "BTN_BUY_SUB": "💳 Купить подписку",
+        "BTN_EXPAND": "📖 Раскрыть",
+        "BTN_COLLAPSE": "🔽 Скрыть",
         "STATUS_LABEL": "Статус",
         "STATUS_ON": "✅ включено",
         "STATUS_OFF": "⛔ выключено",
@@ -902,6 +904,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "BTN_COPY_ADDRESS": "📋 Copy address",
         "BTN_SEND_RECEIPT": "📎 Send receipt + ID",
         "BTN_BUY_SUB": "💳 Buy subscription",
+        "BTN_EXPAND": "📖 Expand",
+        "BTN_COLLAPSE": "🔽 Collapse",
         "STATUS_LABEL": "Status",
         "STATUS_ON": "✅ enabled",
         "STATUS_OFF": "⛔ disabled",
