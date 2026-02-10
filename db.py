@@ -980,7 +980,22 @@ def get_signal_score_bucket_counts(
                 SUM(CASE
                     WHEN score BETWEEN 60 AND 69
                      AND status IN ('EXP', 'EXPIRED', 'NO_FILL', 'NF')
-                    THEN 1 ELSE 0 END) AS b60_neutral
+                    THEN 1 ELSE 0 END) AS b60_neutral,
+                SUM(CASE
+                    WHEN score < 80
+                    THEN 1 ELSE 0 END) AS bbelow80_total,
+                SUM(CASE
+                    WHEN score < 80
+                     AND status IN ('TP1', 'TP2', 'BE')
+                    THEN 1 ELSE 0 END) AS bbelow80_passed,
+                SUM(CASE
+                    WHEN score < 80
+                     AND status = 'SL'
+                    THEN 1 ELSE 0 END) AS bbelow80_failed,
+                SUM(CASE
+                    WHEN score < 80
+                     AND status IN ('EXP', 'EXPIRED', 'NO_FILL', 'NF')
+                    THEN 1 ELSE 0 END) AS bbelow80_neutral
             FROM signal_events
             WHERE {where_clause}
             """,
@@ -1003,6 +1018,10 @@ def get_signal_score_bucket_counts(
         b80_neutral = int(row["b80_neutral"] or 0)
         b70_neutral = int(row["b70_neutral"] or 0)
         b60_neutral = int(row["b60_neutral"] or 0)
+        bbelow80_total = int(row["bbelow80_total"] or 0)
+        bbelow80_passed = int(row["bbelow80_passed"] or 0)
+        bbelow80_failed = int(row["bbelow80_failed"] or 0)
+        bbelow80_neutral = int(row["bbelow80_neutral"] or 0)
         return {
             "90-100": {
                 "passed": b90_passed,
@@ -1027,6 +1046,15 @@ def get_signal_score_bucket_counts(
                 "failed": b60_failed,
                 "neutral": b60_neutral,
                 "in_progress": max(b60_total - b60_passed - b60_failed - b60_neutral, 0),
+            },
+            "below-80": {
+                "passed": bbelow80_passed,
+                "failed": bbelow80_failed,
+                "neutral": bbelow80_neutral,
+                "in_progress": max(
+                    bbelow80_total - bbelow80_passed - bbelow80_failed - bbelow80_neutral,
+                    0,
+                ),
             },
         }
     finally:

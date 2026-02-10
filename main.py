@@ -1006,7 +1006,21 @@ def _history_status_label(status_key: str, lang: str) -> str:
     return "🕒 В процессе" if lang == "ru" else "🕒 In progress"
 
 
-def _get_history_page(*, time_window: str, page: int, page_size: int = 12) -> tuple[int, int, int, list[dict]]:
+def _history_since_ts(time_window: str) -> int | None:
+    now = int(time.time())
+    day_seconds = 24 * 60 * 60
+    if time_window == "1d":
+        return now - day_seconds
+    if time_window == "7d":
+        return now - (7 * day_seconds)
+    if time_window == "30d":
+        return now - (30 * day_seconds)
+    return None
+
+
+def _get_history_page(
+    *, time_window: str, page: int, page_size: int = 12
+) -> tuple[int, int, int, list[dict], dict[str, dict[str, int]]]:
     total = count_signal_history(time_window=time_window, user_id=None, min_score=None)
     pages = max(1, (total + page_size - 1) // page_size)
     page_value = max(1, min(page, pages))
@@ -1017,7 +1031,12 @@ def _get_history_page(*, time_window: str, page: int, page_size: int = 12) -> tu
         limit=page_size,
         offset=offset,
     )
-    return page_value, pages, total, [dict(row) for row in rows]
+    score_bucket_counts = get_signal_score_bucket_counts(
+        user_id=None,
+        since_ts=_history_since_ts(time_window),
+        min_score=None,
+    )
+    return page_value, pages, total, [dict(row) for row in rows], score_bucket_counts
 
 
 def _format_history_item(row: dict[str, Any], lang: str) -> str:
@@ -1030,9 +1049,29 @@ def _format_history_item(row: dict[str, Any], lang: str) -> str:
     return f"{icon} | Score {score} | {symbol} {side} | {_format_event_time(created_at)}"
 
 
-def _build_history_text(*, time_window: str, page: int, pages: int, total: int, rows: list[dict], lang: str) -> str:
+def _build_bucket_winrate_line(*, label: str, bucket: dict[str, int], lang: str) -> str:
+    winrate = _format_bucket_winrate(bucket)
+    total = sum(int(bucket.get(key, 0) or 0) for key in ("passed", "failed", "neutral", "in_progress"))
+    return i18n.t(lang, "HISTORY_WINRATE_BUCKET_LINE", label=label, winrate=winrate, total=total)
+
+
+def _build_history_text(
+    *,
+    time_window: str,
+    page: int,
+    pages: int,
+    total: int,
+    rows: list[dict],
+    score_bucket_counts: dict[str, dict[str, int]],
+    lang: str,
+) -> str:
     period_label = _period_label(time_window, lang)
     lines = [
+        i18n.t(lang, "HISTORY_WINRATE_HEADER"),
+        _build_bucket_winrate_line(label="Score 90–100", bucket=score_bucket_counts.get("90-100", {}), lang=lang),
+        _build_bucket_winrate_line(label="Score 80–89", bucket=score_bucket_counts.get("80-89", {}), lang=lang),
+        _build_bucket_winrate_line(label="Score < 80", bucket=score_bucket_counts.get("below-80", {}), lang=lang),
+        "",
         i18n.t(lang, "HISTORY_LIST_TITLE", period=period_label),
         i18n.t(lang, "HISTORY_PAGE_INFO", page=page, pages=pages, total=total),
     ]
@@ -1080,7 +1119,7 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
     if callback.message is None or callback.from_user is None:
         return
     lang = _resolve_user_lang(callback.from_user.id)
-    page_value, pages, total, rows = _get_history_page(time_window=time_window, page=page)
+    page_value, pages, total, rows, score_bucket_counts = _get_history_page(time_window=time_window, page=page)
     _set_history_context(callback.from_user.id, time_window, page_value)
     text = _build_history_text(
         time_window=time_window,
@@ -1088,6 +1127,7 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         pages=pages,
         total=total,
         rows=rows,
+        score_bucket_counts=score_bucket_counts,
         lang=lang,
     )
     markup = _history_nav_kb(
@@ -1887,25 +1927,24 @@ async def sig_refresh(callback: CallbackQuery):
 
         if callback.message is None:
             return
-        if callback.message.text and callback.message.text.startswith("📊"):
+        if callback.message.text and (callback.message.text.startswith("📊") or callback.message.text.startswith("📈")):
             context = _get_history_context(callback.from_user.id)
             if context:
                 time_window, page = context
-                page, pages, events, outcome_counts, score_bucket_counts, avg_rr_90_100 = _get_history_page(
+                page, pages, total, events, score_bucket_counts = _get_history_page(
                     time_window=time_window,
                     page=page,
                 )
                 await _edit_message_with_chunks(
                     callback.message,
-                    _format_archive_list(
-                        lang,
-                        time_window,
-                        events,
-                        page,
-                        pages,
-                        outcome_counts,
-                        score_bucket_counts,
-                        avg_rr_90_100,
+                    _build_history_text(
+                        time_window=time_window,
+                        page=page,
+                        pages=pages,
+                        total=total,
+                        rows=events,
+                        score_bucket_counts=score_bucket_counts,
+                        lang=lang,
                     ),
                     reply_markup=_archive_inline_kb(
                         lang,
