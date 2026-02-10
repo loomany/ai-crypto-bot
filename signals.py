@@ -135,6 +135,42 @@ _CONFIRM_RETRY_STATE_KEY = "ai_confirm_retry_state_v1"
 _CONFIRM_RETRY_LOCK = asyncio.Lock()
 
 
+def _getenv_float(key: str, default: float) -> float:
+    try:
+        return float(os.getenv(key, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _getenv_int(key: str, default: int) -> int:
+    try:
+        return int(os.getenv(key, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp(value: float, min_value: float, max_value: float) -> float:
+    return max(min_value, min(value, max_value))
+
+
+AI_ATR_DYNAMIC_ENABLED = os.getenv("AI_ATR_DYNAMIC_ENABLED", "0") == "1"
+AI_ATR_DYNAMIC_TF = os.getenv("AI_ATR_DYNAMIC_TF", "15m").strip().lower()
+AI_ATR_DYNAMIC_PERIOD = _getenv_int("AI_ATR_DYNAMIC_PERIOD", 14)
+AI_ATR_SL_MULT = _getenv_float("AI_ATR_SL_MULT", 1.8)
+AI_ATR_TREND_SL_MULT = _getenv_float("AI_ATR_TREND_SL_MULT", 2.0)
+AI_ATR_SL_MIN_PCT = _getenv_float("AI_ATR_SL_MIN_PCT", 0.30)
+AI_ATR_SL_MAX_PCT = _getenv_float("AI_ATR_SL_MAX_PCT", 0.85)
+AI_ATR_RR_ENABLED = os.getenv("AI_ATR_RR_ENABLED", "1") == "1"
+AI_ATR_RR_LOW_ATR_PCT = _getenv_float("AI_ATR_RR_LOW_ATR_PCT", 0.25)
+AI_ATR_RR_HIGH_ATR_PCT = _getenv_float("AI_ATR_RR_HIGH_ATR_PCT", 0.45)
+AI_ATR_RR_LOW = _getenv_float("AI_ATR_RR_LOW", 2.0)
+AI_ATR_RR_MID = _getenv_float("AI_ATR_RR_MID", 2.4)
+AI_ATR_RR_HIGH = _getenv_float("AI_ATR_RR_HIGH", 2.8)
+AI_ATR_TREND_RR_LOW = _getenv_float("AI_ATR_TREND_RR_LOW", AI_ATR_RR_LOW)
+AI_ATR_TREND_RR_MID = _getenv_float("AI_ATR_TREND_RR_MID", AI_ATR_RR_MID)
+AI_ATR_TREND_RR_HIGH = _getenv_float("AI_ATR_TREND_RR_HIGH", AI_ATR_RR_HIGH)
+
+
 def get_ai_fallback_direct() -> int:
     return AI_FALLBACK_DIRECT
 
@@ -206,6 +242,46 @@ def _confirm_direction(candles: List[Candle], side: str) -> bool:
     if side == "SHORT":
         return last_closed.close < last_closed.open and last_closed.close < prev_closed.close
     return last_closed.close > last_closed.open and last_closed.close > prev_closed.close
+
+
+def _atr_pct(symbol: str, candles_dict: Dict[str, List[Candle]], entry_ref: float) -> Optional[float]:
+    tf = AI_ATR_DYNAMIC_TF
+    period = AI_ATR_DYNAMIC_PERIOD
+    candles_tf = candles_dict.get(tf) or []
+    if entry_ref <= 0 or len(candles_tf) < period + 1:
+        return None
+    atr_value = get_cached_atr(symbol, tf, candles_tf[-60:], period)
+    if not atr_value:
+        return None
+    return (atr_value / entry_ref) * 100
+
+
+def _dynamic_sl_pct(atr_pct: float, setup_type: str) -> Tuple[float, float, float]:
+    mult = AI_ATR_TREND_SL_MULT if setup_type == "trend" else AI_ATR_SL_MULT
+    sl_pct_raw = atr_pct * mult
+    sl_pct = _clamp(sl_pct_raw, AI_ATR_SL_MIN_PCT, AI_ATR_SL_MAX_PCT)
+    return sl_pct, sl_pct_raw, mult
+
+
+def _dynamic_rr_target(atr_pct: float, setup_type: str, min_rr_required: float) -> float:
+    if not AI_ATR_RR_ENABLED:
+        return min_rr_required
+    if setup_type == "trend":
+        rr_low = AI_ATR_TREND_RR_LOW
+        rr_mid = AI_ATR_TREND_RR_MID
+        rr_high = AI_ATR_TREND_RR_HIGH
+    else:
+        rr_low = AI_ATR_RR_LOW
+        rr_mid = AI_ATR_RR_MID
+        rr_high = AI_ATR_RR_HIGH
+
+    if atr_pct <= AI_ATR_RR_LOW_ATR_PCT:
+        rr = rr_low
+    elif atr_pct >= AI_ATR_RR_HIGH_ATR_PCT:
+        rr = rr_high
+    else:
+        rr = rr_mid
+    return max(rr, min_rr_required)
 
 
 def _build_setup_id(
@@ -891,6 +967,10 @@ async def _prepare_signal(
     level_touched: Optional[float] = None
     setup_type = "meanrev"
     trend_context: dict[str, float | str] = {}
+    atr_dynamic_atr_pct: Optional[float] = None
+    atr_dynamic_sl_pct: Optional[float] = None
+    atr_dynamic_rr_target: Optional[float] = None
+    atr_dynamic_mult: Optional[float] = None
 
     def _compute_side_indicators(
         side_value: str,
@@ -998,6 +1078,32 @@ async def _prepare_signal(
             tp2_value = entry_to_value - risk_value * 3
 
         entry_ref_value = (entry_from_value + entry_to_value) / 2
+        dynamic_atr_pct: Optional[float] = None
+        dynamic_sl_pct: Optional[float] = None
+        dynamic_rr_target: Optional[float] = None
+        dynamic_mult: Optional[float] = None
+        if AI_ATR_DYNAMIC_ENABLED:
+            dynamic_atr_pct = _atr_pct(symbol, candles, entry_ref_value)
+            if dynamic_atr_pct is not None:
+                dynamic_sl_pct, _, dynamic_mult = _dynamic_sl_pct(dynamic_atr_pct, "trend")
+                risk_value = entry_ref_value * dynamic_sl_pct / 100
+                min_rr_required = AI_TREND_MIN_RR if AI_TREND_MIN_RR else AI_MIN_RR
+                dynamic_rr_target = _dynamic_rr_target(dynamic_atr_pct, "trend", min_rr_required)
+                if side_value == "LONG":
+                    sl_value = entry_ref_value - risk_value
+                    tp1_value = entry_ref_value + risk_value * dynamic_rr_target
+                    tp2_value = entry_ref_value + risk_value * (dynamic_rr_target + 1.0)
+                else:
+                    sl_value = entry_ref_value + risk_value
+                    tp1_value = entry_ref_value - risk_value * dynamic_rr_target
+                    tp2_value = entry_ref_value - risk_value * (dynamic_rr_target + 1.0)
+                print(
+                    "[atr_dynamic] "
+                    f"symbol={symbol} type=trend side={side_value} "
+                    f"atr_pct={dynamic_atr_pct:.2f} mult={dynamic_mult:.2f} "
+                    f"sl_pct={dynamic_sl_pct:.2f} rr={dynamic_rr_target:.2f} "
+                    f"entry_ref={entry_ref_value:.6f} sl={sl_value:.6f} tp1={tp1_value:.6f}"
+                )
         risk_pre_value = abs(entry_ref_value - sl_value)
         reward_pre_value = abs(tp1_value - entry_ref_value)
         rr_pre_value = reward_pre_value / risk_pre_value if risk_pre_value > 0 else 0.0
@@ -1025,6 +1131,10 @@ async def _prepare_signal(
             "trend_label": trend_label or "",
             "slope_pct": slope_pct,
             "dist_pb_pct": dist_pb_pct,
+            "atr_pct": dynamic_atr_pct,
+            "sl_pct": dynamic_sl_pct,
+            "rr_target": dynamic_rr_target,
+            "atr_mult": dynamic_mult,
         }
 
     level_near_pct = LEVEL_NEAR_PCT_FREE if free_mode else 0.6
@@ -1052,7 +1162,15 @@ async def _prepare_signal(
                 "trend_label": trend_result.get("trend_label", ""),
                 "slope_pct": trend_result.get("slope_pct", 0.0),
                 "dist_pb_pct": trend_result.get("dist_pb_pct", 0.0),
+                "atr_pct": trend_result.get("atr_pct"),
+                "sl_pct": trend_result.get("sl_pct"),
+                "rr_target": trend_result.get("rr_target"),
+                "atr_mult": trend_result.get("atr_mult"),
             }
+            atr_dynamic_atr_pct = trend_result.get("atr_pct")
+            atr_dynamic_sl_pct = trend_result.get("sl_pct")
+            atr_dynamic_rr_target = trend_result.get("rr_target")
+            atr_dynamic_mult = trend_result.get("atr_mult")
         else:
             _fail_setup("fail_setup_no_valid_zone")
             return None
@@ -1105,7 +1223,15 @@ async def _prepare_signal(
                     "trend_label": trend_result.get("trend_label", ""),
                     "slope_pct": trend_result.get("slope_pct", 0.0),
                     "dist_pb_pct": trend_result.get("dist_pb_pct", 0.0),
+                    "atr_pct": trend_result.get("atr_pct"),
+                    "sl_pct": trend_result.get("sl_pct"),
+                    "rr_target": trend_result.get("rr_target"),
+                    "atr_mult": trend_result.get("atr_mult"),
                 }
+                atr_dynamic_atr_pct = trend_result.get("atr_pct")
+                atr_dynamic_sl_pct = trend_result.get("sl_pct")
+                atr_dynamic_rr_target = trend_result.get("rr_target")
+                atr_dynamic_mult = trend_result.get("atr_mult")
                 sweep, volume_spike, rsi_div, bb_extreme = _compute_side_indicators(
                     candidate_side,
                     level_touched,
@@ -1128,15 +1254,40 @@ async def _prepare_signal(
             return None
 
     entry_ref = (entry_from + entry_to) / 2
-    if setup_type == "trend":
-        risk = abs(entry_ref - sl)
+    min_rr_required = AI_TREND_MIN_RR if setup_type == "trend" else AI_MIN_RR
 
+    if AI_ATR_DYNAMIC_ENABLED:
+        atr_pct_value = _atr_pct(symbol, candles, entry_ref)
+        if atr_pct_value is not None:
+            sl_pct_value, _, mult_value = _dynamic_sl_pct(atr_pct_value, setup_type)
+            risk = entry_ref * sl_pct_value / 100
+            rr_target_value = _dynamic_rr_target(atr_pct_value, setup_type, min_rr_required)
+            if candidate_side == "LONG":
+                sl = entry_ref - risk
+                tp1 = entry_ref + risk * rr_target_value
+                tp2 = entry_ref + risk * (rr_target_value + 1.0)
+            else:
+                sl = entry_ref + risk
+                tp1 = entry_ref - risk * rr_target_value
+                tp2 = entry_ref - risk * (rr_target_value + 1.0)
+            atr_dynamic_atr_pct = atr_pct_value
+            atr_dynamic_sl_pct = sl_pct_value
+            atr_dynamic_rr_target = rr_target_value
+            atr_dynamic_mult = mult_value
+            print(
+                "[atr_dynamic] "
+                f"symbol={symbol} type={setup_type} side={candidate_side} "
+                f"atr_pct={atr_pct_value:.2f} mult={mult_value:.2f} "
+                f"sl_pct={sl_pct_value:.2f} rr={rr_target_value:.2f} "
+                f"entry_ref={entry_ref:.6f} sl={sl:.6f} tp1={tp1:.6f}"
+            )
+
+    risk = abs(entry_ref - sl)
     atr_ok = True
     if atr_15m and risk > 0:
         min_stop = atr_15m * 0.5
         max_stop = atr_15m * 2.0
         atr_ok = min_stop <= risk <= max_stop
-
 
     level_distance = dist_low if candidate_side == "LONG" else dist_high
     level_distance = level_distance if level_distance is not None else level_near_pct
@@ -1148,7 +1299,6 @@ async def _prepare_signal(
     min_rr_pre = (
         AI_TREND_MIN_RR if setup_type == "trend" else (MIN_RR_FREE if free_mode else 2.0)
     )
-    min_rr_required = AI_TREND_MIN_RR if setup_type == "trend" else AI_MIN_RR
 
     if rr_pre < min_rr_required:
         near_limit = min_rr_required * 0.9
@@ -1181,6 +1331,9 @@ async def _prepare_signal(
         + (8.0 if rr_pre >= min_rr_pre else 0.0)
     )
     score_pre = min(100.0, max(0.0, score_pre))
+    if not atr_ok:
+        score_pre = max(0.0, score_pre - 8.0)
+        _inc_fail("fail_atr")
 
     closes_1h = [c.close for c in candles_1h]
     ema50_1h = get_cached_ema(symbol, "1h", candles_1h, 50) if len(closes_1h) >= 50 else None
@@ -1208,7 +1361,15 @@ async def _prepare_signal(
                             "trend_label": trend_result.get("trend_label", ""),
                             "slope_pct": trend_result.get("slope_pct", 0.0),
                             "dist_pb_pct": trend_result.get("dist_pb_pct", 0.0),
+                            "atr_pct": trend_result.get("atr_pct"),
+                            "sl_pct": trend_result.get("sl_pct"),
+                            "rr_target": trend_result.get("rr_target"),
+                            "atr_mult": trend_result.get("atr_mult"),
                         }
+                        atr_dynamic_atr_pct = trend_result.get("atr_pct")
+                        atr_dynamic_sl_pct = trend_result.get("sl_pct")
+                        atr_dynamic_rr_target = trend_result.get("rr_target")
+                        atr_dynamic_mult = trend_result.get("atr_mult")
                         sweep, volume_spike, rsi_div, bb_extreme = _compute_side_indicators(
                             candidate_side,
                             level_touched,
@@ -1245,6 +1406,9 @@ async def _prepare_signal(
                             + (8.0 if rr_pre >= min_rr_pre else 0.0)
                         )
                         score_pre = min(100.0, max(0.0, score_pre))
+                        if not atr_ok:
+                            score_pre = max(0.0, score_pre - 8.0)
+                            _inc_fail("fail_atr")
                         ma_trend_ok = True
                         dist_to_ema50_pct = None
                     else:
@@ -1323,10 +1487,6 @@ async def _prepare_signal(
             _fail_setup("fail_ma_trend")
             return None
 
-    if not atr_ok:
-        _fail_setup("fail_setup_sl_too_wide")
-        return None
-
     if setup_type == "trend":
         confirm_candles = candles.get(AI_TREND_CONFIRM_TF) or []
         if not _confirm_direction(confirm_candles, candidate_side):
@@ -1352,6 +1512,10 @@ async def _prepare_signal(
                         "tp2": round(tp2, 4),
                         "poi": round(level_touched or 0.0, 4),
                         "score": 0,
+                        "atr_pct": round(atr_dynamic_atr_pct, 4) if atr_dynamic_atr_pct is not None else None,
+                        "sl_pct": round(atr_dynamic_sl_pct, 4) if atr_dynamic_sl_pct is not None else None,
+                        "rr_target": round(atr_dynamic_rr_target, 4) if atr_dynamic_rr_target is not None else None,
+                        "atr_mult": round(atr_dynamic_mult, 4) if atr_dynamic_mult is not None else None,
                     }
                     rsi_1h_value = get_cached_rsi(symbol, "1h", candles_1h)
                     rsi_zone = "комфортная зона"
@@ -1670,6 +1834,10 @@ async def _prepare_signal(
                 "poi": round(level_touched or 0.0, 4),
                 "score": min(100, abs(raw_score)),
                 "setup_type": setup_type,
+                "atr_pct": round(atr_dynamic_atr_pct, 4) if atr_dynamic_atr_pct is not None else None,
+                "sl_pct": round(atr_dynamic_sl_pct, 4) if atr_dynamic_sl_pct is not None else None,
+                "rr_target": round(atr_dynamic_rr_target, 4) if atr_dynamic_rr_target is not None else None,
+                "atr_mult": round(atr_dynamic_mult, 4) if atr_dynamic_mult is not None else None,
             }
             signal_base = {
                 "symbol": symbol,
@@ -1785,6 +1953,10 @@ async def _prepare_signal(
                     "poi": round(level_touched or 0.0, 4),
                     "score": min(100, abs(raw_score)),
                     "setup_type": setup_type,
+                    "atr_pct": round(atr_dynamic_atr_pct, 4) if atr_dynamic_atr_pct is not None else None,
+                    "sl_pct": round(atr_dynamic_sl_pct, 4) if atr_dynamic_sl_pct is not None else None,
+                    "rr_target": round(atr_dynamic_rr_target, 4) if atr_dynamic_rr_target is not None else None,
+                    "atr_mult": round(atr_dynamic_mult, 4) if atr_dynamic_mult is not None else None,
                 }
                 signal_base = {
                     "symbol": symbol,
