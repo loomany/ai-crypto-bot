@@ -167,6 +167,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_LANG = "ru"
 _LOG_THROTTLE_SEC = 30.0
 _LAST_LOG_TS: Dict[str, float] = {}
+_ADMIN_DIAG_DEBOUNCE_SEC = 1.5
+_ADMIN_DIAG_LOCK_TTL_SEC = 10.0
+_ADMIN_DIAG_GUARD = asyncio.Lock()
+_ADMIN_DIAG_LAST_TS: Dict[int, float] = {}
+_ADMIN_DIAG_LOCK_UNTIL: Dict[int, float] = {}
 
 
 def _log_throttled(key: str, message: str, *args: Any, exc: Exception | None = None) -> None:
@@ -3870,6 +3875,14 @@ async def test_admin(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
         await message.answer(i18n.t(lang, "NO_ACCESS"))
         return
+    await _answer_long_message(
+        message,
+        _build_admin_diag_text(lang),
+        reply_markup=build_admin_diagnostics_kb(lang),
+    )
+
+
+def _build_admin_diag_text(lang: str) -> str:
     ai_subscribers = list_ai_subscribers()
     pump_subscribers = list_user_ids_with_pref("pumpdump_enabled", 1)
     ai_extra = MODULES.get("ai_signals").extra if "ai_signals" in MODULES else ""
@@ -3906,12 +3919,42 @@ async def test_admin(message: Message):
     if pump_module:
         blocks.append(_format_pump_section(pump_module, now, lang))
 
-    lang = get_user_lang(message.chat.id) or "ru"
-    await _answer_long_message(
-        message,
-        "\n".join(blocks).strip(),
-        reply_markup=build_admin_diagnostics_kb(lang),
-    )
+    return "\n".join(blocks).strip()
+
+
+async def _admin_diag_try_enter(user_id: int) -> tuple[bool, str, float]:
+    now = time.monotonic()
+    async with _ADMIN_DIAG_GUARD:
+        last_ts = _ADMIN_DIAG_LAST_TS.get(user_id, 0.0)
+        dt = now - last_ts
+        if dt < _ADMIN_DIAG_DEBOUNCE_SEC:
+            logger.debug("[admin_diag] debounce ignore user=%s dt=%.3f", user_id, dt)
+            return False, "debounce", dt
+
+        lock_until = _ADMIN_DIAG_LOCK_UNTIL.get(user_id, 0.0)
+        if lock_until > now:
+            logger.debug("[admin_diag] lock ignore user=%s", user_id)
+            return False, "lock", dt
+
+        _ADMIN_DIAG_LAST_TS[user_id] = now
+        _ADMIN_DIAG_LOCK_UNTIL[user_id] = now + _ADMIN_DIAG_LOCK_TTL_SEC
+        return True, "ok", dt
+
+
+async def _admin_diag_release(user_id: int) -> None:
+    async with _ADMIN_DIAG_GUARD:
+        _ADMIN_DIAG_LOCK_UNTIL.pop(user_id, None)
+
+
+async def _safe_edit_or_send(
+    base_message: Message,
+    text: str,
+    reply_markup: ReplyKeyboardMarkup | InlineKeyboardMarkup | None = None,
+) -> None:
+    try:
+        await base_message.edit_text(text, reply_markup=reply_markup)
+    except Exception:
+        await _answer_long_message(base_message, text, reply_markup=reply_markup)
 
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_DIAG_ADMIN")))
@@ -3920,7 +3963,63 @@ async def test_admin_button(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
         await message.answer(i18n.t(lang, "NO_ACCESS"))
         return
-    await test_admin(message)
+
+    allowed, reason, _ = await _admin_diag_try_enter(message.from_user.id)
+    if not allowed:
+        if reason == "debounce":
+            return
+        return
+
+    status_message: Message | None = None
+    try:
+        status_message = await message.answer(
+            i18n.t(lang, "admin_diag_running"),
+            reply_markup=build_admin_diagnostics_kb(lang),
+        )
+        if status_message is not None:
+            await _safe_edit_or_send(
+                status_message,
+                _build_admin_diag_text(lang),
+                reply_markup=build_admin_diagnostics_kb(lang),
+            )
+    finally:
+        await _admin_diag_release(message.from_user.id)
+
+
+@dp.callback_query(F.data == "admin_diag")
+async def test_admin_callback(callback: CallbackQuery):
+    if callback.from_user is None:
+        await callback.answer()
+        return
+    lang = get_user_lang(callback.from_user.id) or "ru"
+    if not is_admin(callback.from_user.id):
+        await callback.answer(i18n.t(lang, "NO_ACCESS"), show_alert=True)
+        return
+    allowed, reason, _ = await _admin_diag_try_enter(callback.from_user.id)
+    if not allowed:
+        if reason == "debounce":
+            await callback.answer(i18n.t(lang, "admin_diag_debounce"), show_alert=False)
+            return
+        await callback.answer(i18n.t(lang, "admin_diag_busy"), show_alert=False)
+        return
+
+    await callback.answer()
+    if callback.message is None:
+        await _admin_diag_release(callback.from_user.id)
+        return
+
+    try:
+        await callback.message.edit_text(
+            i18n.t(lang, "admin_diag_running"),
+            reply_markup=callback.message.reply_markup,
+        )
+        await _safe_edit_or_send(
+            callback.message,
+            _build_admin_diag_text(lang),
+            reply_markup=callback.message.reply_markup,
+        )
+    finally:
+        await _admin_diag_release(callback.from_user.id)
 
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_TEST_AI")))
