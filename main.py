@@ -1046,17 +1046,37 @@ def _build_history_text(*, time_window: str, page: int, pages: int, total: int, 
     return "\n".join(lines)
 
 
-def _history_nav_kb(*, lang: str, time_window: str, page: int, pages: int) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
+def _history_nav_kb(
+    *,
+    lang: str,
+    time_window: str,
+    page: int,
+    pages: int,
+    events: list[dict],
+) -> InlineKeyboardMarkup:
+    kb_rows: list[list[InlineKeyboardButton]] = []
+    for event in events:
+        event_id = _safe_int(event.get("id"), 0)
+        if event_id <= 0:
+            continue
+        kb_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_format_history_item(event, lang),
+                    callback_data=f"history_open:{event_id}",
+                )
+            ]
+        )
+
     nav: list[InlineKeyboardButton] = []
     if page > 1:
         nav.append(InlineKeyboardButton(text="◀️", callback_data=f"history:{time_window}:page={page - 1}"))
     if page < pages:
         nav.append(InlineKeyboardButton(text="▶️", callback_data=f"history:{time_window}:page={page + 1}"))
     if nav:
-        rows.append(nav)
-    rows.append([InlineKeyboardButton(text=i18n.t(lang, "NAV_BACK"), callback_data="hist_back")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+        kb_rows.append(nav)
+    kb_rows.append([InlineKeyboardButton(text=i18n.t(lang, "NAV_BACK"), callback_data="hist_back")])
+    return InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
 
 async def _render_history(*, callback: CallbackQuery, time_window: str, page: int) -> None:
@@ -1073,7 +1093,13 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         rows=rows,
         lang=lang,
     )
-    markup = _history_nav_kb(lang=lang, time_window=time_window, page=page_value, pages=pages)
+    markup = _history_nav_kb(
+        lang=lang,
+        time_window=time_window,
+        page=page_value,
+        pages=pages,
+        events=rows,
+    )
     await _edit_message_with_chunks(callback.message, text, reply_markup=markup)
 
 
