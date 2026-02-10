@@ -6073,6 +6073,9 @@ async def ai_scan_once() -> None:
                 f"ticker_req={ticker_count}"
             ),
         )
+    except Exception as e:
+        logger.exception("[ai_signals] cycle crash: %s", e)
+        logger.error(traceback.format_exc())
     finally:
         print("[AI] scan_once end")
 
