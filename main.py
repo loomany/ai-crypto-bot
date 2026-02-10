@@ -113,6 +113,7 @@ from db import (
     get_signal_score_bucket_counts,
     get_signal_avg_rr,
     get_signal_event,
+    get_signal_event_by_message,
     get_signal_by_id,
     update_signal_event_refresh,
     update_signal_event_status_by_id,
@@ -125,7 +126,11 @@ from db_path import ensure_db_writable, get_db_path
 from market_cache import get_ticker_request_count, reset_ticker_request_count
 from alert_dedup_db import init_alert_dedup, can_send
 from status_utils import is_notify_enabled
-from message_templates import format_scenario_message, format_signal_activation_message
+from message_templates import (
+    format_compact_scenario_message,
+    format_scenario_message,
+    format_signal_activation_message,
+)
 from signal_audit_db import (
     get_public_stats,
     get_last_signal_audit,
@@ -2247,6 +2252,115 @@ async def ai_notify_off(callback: CallbackQuery):
     await callback.answer()
     if callback.message:
         await callback.message.answer(i18n.t(lang, "AI_OFF_OK"))
+
+
+@dp.callback_query(F.data.regexp(r"^sig_expand:\d+$"))
+async def sig_expand_callback(callback: CallbackQuery):
+    if callback.from_user is None or callback.message is None:
+        return
+    match = re.match(r"^sig_expand:(\d+)$", callback.data or "")
+    if not match:
+        await callback.answer()
+        return
+    signal_id = int(match.group(1))
+    lang = get_user_lang(callback.from_user.id) or "ru"
+    include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
+    event = get_signal_by_id(signal_id, include_legacy=include_legacy)
+    if event is None or int(event["user_id"]) != callback.from_user.id:
+        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+        return
+    payload = _signal_payload_from_event(dict(event))
+    full_text = _format_signal(payload, lang)
+    regular_enabled = bool(get_user_pref(callback.from_user.id, "notif_regular_enabled", 1))
+    await callback.message.edit_text(
+        full_text,
+        reply_markup=_expanded_signal_inline_kb(
+            lang=lang,
+            signal_id=signal_id,
+            regular_enabled=regular_enabled,
+        ),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.regexp(r"^sig_collapse:\d+$"))
+async def sig_collapse_callback(callback: CallbackQuery):
+    if callback.from_user is None or callback.message is None:
+        return
+    match = re.match(r"^sig_collapse:(\d+)$", callback.data or "")
+    if not match:
+        await callback.answer()
+        return
+    signal_id = int(match.group(1))
+    lang = get_user_lang(callback.from_user.id) or "ru"
+    include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
+    event = get_signal_by_id(signal_id, include_legacy=include_legacy)
+    if event is None or int(event["user_id"]) != callback.from_user.id:
+        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+        return
+    payload = _signal_payload_from_event(dict(event))
+    compact_text = _format_compact_signal(payload, lang)
+    regular_enabled = bool(get_user_pref(callback.from_user.id, "notif_regular_enabled", 1))
+    await callback.message.edit_text(
+        compact_text,
+        reply_markup=_compact_signal_inline_kb(
+            lang=lang,
+            signal_id=signal_id,
+            regular_enabled=regular_enabled,
+        ),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "sig_regular_toggle")
+async def sig_regular_toggle_callback(callback: CallbackQuery):
+    if callback.from_user is None or callback.message is None:
+        return
+    user_id = callback.from_user.id
+    lang = get_user_lang(user_id) or "ru"
+    current_enabled = bool(get_user_pref(user_id, "notif_regular_enabled", 1))
+    next_enabled = not current_enabled
+    set_user_pref(user_id, "notif_regular_enabled", 1 if next_enabled else 0)
+
+    include_legacy = allow_legacy_for_user(is_admin_user=is_admin(user_id))
+    event = get_signal_event_by_message(
+        user_id=user_id,
+        tg_message_id=int(callback.message.message_id),
+        include_legacy=include_legacy,
+    )
+    if event is None:
+        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+        return
+
+    expand_active = False
+    markup = callback.message.reply_markup
+    if markup and markup.inline_keyboard:
+        first_row = markup.inline_keyboard[0] if markup.inline_keyboard else []
+        if first_row:
+            first_button_data = first_row[0].callback_data or ""
+            expand_active = str(first_button_data).startswith("sig_collapse:")
+
+    signal_id = int(event["id"])
+    payload = _signal_payload_from_event(dict(event))
+    new_text = _format_signal(payload, lang) if expand_active else _format_compact_signal(payload, lang)
+    new_kb = (
+        _expanded_signal_inline_kb(lang=lang, signal_id=signal_id, regular_enabled=next_enabled)
+        if expand_active
+        else _compact_signal_inline_kb(lang=lang, signal_id=signal_id, regular_enabled=next_enabled)
+    )
+
+    await callback.message.edit_text(
+        new_text,
+        reply_markup=new_kb,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    toast_key = "SIGNAL_REGULAR_TOGGLE_TOAST_ON" if next_enabled else "SIGNAL_REGULAR_TOGGLE_TOAST_OFF"
+    await callback.answer(i18n.t(lang, toast_key))
 
 
 @dp.callback_query(F.data == "pumpdump_notify_on")
@@ -4407,16 +4521,56 @@ def _format_signed_number(value: float, decimals: int = 1) -> str:
     sign = "−" if value < 0 else "+"
     return f"{sign}{abs(value):.{decimals}f}"
 
-def _format_signal(signal: Dict[str, Any], lang: str) -> str:
-    entry_low, entry_high = signal["entry_zone"]
-    symbol = signal["symbol"]
+
+def _signal_symbol_text(symbol: str) -> str:
     if symbol.endswith("USDT"):
         base = symbol[:-4]
         quote = "USDT"
     else:
         base = symbol
         quote = ""
-    symbol_text = f"{base} / {quote}" if quote else base
+    return f"{base} / {quote}" if quote else base
+
+
+def _compact_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: bool) -> InlineKeyboardMarkup:
+    regular_key = "SIGNAL_BUTTON_REGULAR_ON" if regular_enabled else "SIGNAL_BUTTON_REGULAR_OFF"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "SIGNAL_BUTTON_EXPAND"),
+                    callback_data=f"sig_expand:{signal_id}",
+                ),
+                InlineKeyboardButton(
+                    text=i18n.t(lang, regular_key),
+                    callback_data="sig_regular_toggle",
+                ),
+            ]
+        ]
+    )
+
+
+def _expanded_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: bool) -> InlineKeyboardMarkup:
+    regular_key = "SIGNAL_BUTTON_REGULAR_ON" if regular_enabled else "SIGNAL_BUTTON_REGULAR_OFF"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "SIGNAL_BUTTON_COLLAPSE"),
+                    callback_data=f"sig_collapse:{signal_id}",
+                ),
+                InlineKeyboardButton(
+                    text=i18n.t(lang, regular_key),
+                    callback_data="sig_regular_toggle",
+                ),
+            ]
+        ]
+    )
+
+def _format_signal(signal: Dict[str, Any], lang: str) -> str:
+    entry_low, entry_high = signal["entry_zone"]
+    symbol = signal["symbol"]
+    symbol_text = _signal_symbol_text(symbol)
 
     raw_reason = signal.get("reason")
     reason = raw_reason if isinstance(raw_reason, dict) else {}
@@ -4454,6 +4608,58 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
     if prefix:
         return f"{text}\n\n{prefix}"
     return text
+
+
+def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
+    entry_low, entry_high = signal["entry_zone"]
+    symbol_text = _signal_symbol_text(signal["symbol"])
+    side = "LONG" if signal.get("direction") == "long" else "SHORT"
+    score = int(signal.get("score", 0))
+    return format_compact_scenario_message(
+        lang=lang,
+        symbol_text=symbol_text,
+        side=side,
+        timeframe="1H",
+        entry_from=entry_low,
+        entry_to=entry_high,
+        sl=float(signal["sl"]),
+        tp1=float(signal["tp1"]),
+        tp2=float(signal["tp2"]),
+        score=score,
+        price_precision=4,
+        lifetime_minutes=int(signal.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60),
+    )
+
+
+def _signal_payload_from_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    reason_raw = event.get("reason_json")
+    reason = {}
+    if isinstance(reason_raw, str) and reason_raw.strip():
+        with suppress(Exception):
+            parsed_reason = json.loads(reason_raw)
+            if isinstance(parsed_reason, dict):
+                reason = parsed_reason
+
+    breakdown_raw = event.get("breakdown_json")
+    breakdown = []
+    if isinstance(breakdown_raw, str) and breakdown_raw.strip():
+        with suppress(Exception):
+            parsed_breakdown = json.loads(breakdown_raw)
+            if isinstance(parsed_breakdown, list):
+                breakdown = parsed_breakdown
+
+    return {
+        "symbol": str(event.get("symbol") or ""),
+        "direction": "long" if str(event.get("side") or "").upper() == "LONG" else "short",
+        "entry_zone": (float(event.get("poi_low") or 0.0), float(event.get("poi_high") or 0.0)),
+        "sl": float(event.get("sl") or 0.0),
+        "tp1": float(event.get("tp1") or 0.0),
+        "tp2": float(event.get("tp2") or 0.0),
+        "score": int(round(float(event.get("score") or 0))),
+        "reason": reason,
+        "score_breakdown": breakdown,
+        "ttl_minutes": int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60),
+    }
 
 
 def build_test_ai_signal(lang: str) -> str:
@@ -4677,6 +4883,20 @@ async def send_signal_to_all(
             )
             continue
 
+        signal_score_value = int(round(float(signal_dict.get("score", 0) or 0)))
+        is_regular_bucket = signal_score_value < 90
+        if chat_id != admin_chat_id and is_regular_bucket and not get_user_pref(
+            chat_id,
+            "notif_regular_enabled",
+            1,
+        ):
+            stats["skipped_notifications_off"] += 1
+            print(
+                f"[{log_tag}] skip regular_bucket_off user_id={chat_id} "
+                f"chat_id={chat_id}"
+            )
+            continue
+
         # индивидуальный cooldown на пользователя
         if not effective_bypass_cooldown:
             if not can_send(chat_id, "ai_signals", dedup_key, COOLDOWN_FREE_SEC):
@@ -4688,7 +4908,7 @@ async def send_signal_to_all(
             should_log = False
             kind = "signal"
         else:
-            message_text = _format_signal(signal_dict, lang)
+            message_text = _format_compact_signal(signal_dict, lang) if is_regular_bucket else _format_signal(signal_dict, lang)
             should_log = True
             kind = "signal"
             if allow_admin_bypass and is_admin(chat_id):
@@ -4718,6 +4938,14 @@ async def send_signal_to_all(
         signal_parse_mode = None if is_test else "HTML"
         paywall_parse_mode = None if is_test else "HTML"
 
+        signal_reply_markup = None
+        if kind == "signal" and not is_test and is_regular_bucket:
+            signal_reply_markup = _compact_signal_inline_kb(
+                lang=lang,
+                signal_id=0,
+                regular_enabled=bool(get_user_pref(chat_id, "notif_regular_enabled", 1)),
+            )
+
         try:
             if kind == "paywall":
                 res = await _send_with_safe_fallback(
@@ -4731,6 +4959,7 @@ async def send_signal_to_all(
                     chat_id,
                     message_text,
                     parse_mode=signal_parse_mode,
+                    reply_markup=signal_reply_markup,
                     disable_web_page_preview=True,
                 )
             stats["sent"] += 1
@@ -4757,6 +4986,7 @@ async def send_signal_to_all(
                         chat_id,
                         message_text,
                         parse_mode=signal_parse_mode,
+                        reply_markup=signal_reply_markup,
                         disable_web_page_preview=True,
                     )
                 stats["sent"] += 1
@@ -4842,7 +5072,7 @@ async def send_signal_to_all(
             continue
 
         try:
-            insert_signal_event(
+            event_id = insert_signal_event(
                 ts=sent_at,
                 user_id=chat_id,
                 module="ai_signals",
@@ -4862,6 +5092,17 @@ async def send_signal_to_all(
                 breakdown_json=breakdown_json,
                 ttl_minutes=int(signal_dict.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60),
             )
+            if is_regular_bucket and event_id > 0:
+                with suppress(Exception):
+                    await bot.edit_message_reply_markup(
+                        chat_id=chat_id,
+                        message_id=int(res.message_id),
+                        reply_markup=_compact_signal_inline_kb(
+                            lang=lang,
+                            signal_id=event_id,
+                            regular_enabled=bool(get_user_pref(chat_id, "notif_regular_enabled", 1)),
+                        ),
+                    )
         except Exception as exc:
             print(f"[ai_signals] Failed to log signal event for {chat_id}: {exc}")
         await asyncio.sleep(random.uniform(0.05, 0.15))

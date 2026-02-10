@@ -1348,6 +1348,38 @@ def get_signal_by_id(signal_id: int, *, include_legacy: bool = False) -> Optiona
     return get_signal_event(user_id=None, event_id=signal_id, include_legacy=include_legacy)
 
 
+def get_signal_event_by_message(
+    *,
+    user_id: int,
+    tg_message_id: int,
+    include_legacy: bool = False,
+) -> Optional[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        params: list[object] = [int(user_id), int(tg_message_id)]
+        clauses = [
+            "user_id = ?",
+            "tg_message_id = ?",
+            "(is_test IS NULL OR is_test = 0)",
+            "NOT ("
+            "symbol LIKE 'TEST%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')",
+        ]
+        _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
+        _append_blocked_symbols_filter(clauses, params)
+        where_clause = " AND ".join(clauses)
+        cur = conn.execute(
+            f"SELECT * FROM signal_events WHERE {where_clause} ORDER BY id DESC LIMIT 1",
+            params,
+        )
+        return cur.fetchone()
+    finally:
+        conn.close()
+
+
 def update_signal_event_refresh(
     *,
     event_id: int,
