@@ -563,6 +563,46 @@ def list_signal_events(
         conn.close()
 
 
+def get_signals_for_period(
+    *,
+    user_id: int | None,
+    since_ts: int | None,
+) -> List[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        clauses = ["(is_test IS NULL OR is_test = 0)"]
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
+        if since_ts is not None:
+            clauses.append("ts >= ?")
+            params.append(int(since_ts))
+        clauses.append(
+            "NOT ("
+            "symbol LIKE 'TEST%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
+        )
+        _append_blocked_symbols_filter(clauses, params)
+        where_clause = " AND ".join(clauses)
+        cur = conn.execute(
+            f"""
+            SELECT id, ts, score, status, result, poi_low, poi_high, sl, tp1
+            FROM signal_events
+            WHERE {where_clause}
+            ORDER BY ts DESC
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+        return list(rows) if rows else []
+    finally:
+        conn.close()
+
+
 def list_open_signal_events(*, max_age_sec: int | None = None) -> List[sqlite3.Row]:
     conn = get_conn()
     try:
