@@ -45,9 +45,7 @@ def init_signal_audit_tables() -> None:
                 activated_at INTEGER,
                 entry_price REAL,
                 confirm_strict INTEGER NOT NULL DEFAULT 0,
-                confirm_count INTEGER NOT NULL DEFAULT 0,
-                confirm_strict_n INTEGER NOT NULL DEFAULT 0,
-                gate_reason TEXT
+                confirm_count INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -70,10 +68,6 @@ def init_signal_audit_tables() -> None:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN confirm_strict INTEGER NOT NULL DEFAULT 0")
         if "confirm_count" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN confirm_count INTEGER NOT NULL DEFAULT 0")
-        if "confirm_strict_n" not in cols:
-            conn.execute("ALTER TABLE signal_audit ADD COLUMN confirm_strict_n INTEGER NOT NULL DEFAULT 0")
-        if "gate_reason" not in cols:
-            conn.execute("ALTER TABLE signal_audit ADD COLUMN gate_reason TEXT")
         conn.execute(
             """
             UPDATE signal_audit
@@ -152,8 +146,6 @@ def insert_signal_audit(
         "WAITING_ENTRY",
         int(bool(signal_dict.get("confirm_strict", False))),
         int(signal_dict.get("confirm_count", 0) or 0),
-        int(signal_dict.get("confirm_strict_n", 0) or 0),
-        str(signal_dict.get("gate_reason", "") or ""),
     )
 
     conn = sqlite3.connect(get_db_path())
@@ -164,8 +156,8 @@ def insert_signal_audit(
                 signal_id, module, tier, symbol, direction, timeframe,
                 entry_from, entry_to, sl, tp1, tp2, score, rr,
                 reason_json, breakdown_json, sent_at, status, ttl_minutes
-                , state, confirm_strict, confirm_count, confirm_strict_n, gate_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                , state, confirm_strict, confirm_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             payload,
         )
