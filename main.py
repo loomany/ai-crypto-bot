@@ -396,6 +396,55 @@ def increment_pumpdump_daily_count(chat_id: int, date_key: str) -> None:
         conn.close()
 
 
+_PUMP_TOGGLE_TTL_SEC = 24 * 60 * 60
+_PUMP_MESSAGE_STATE: dict[tuple[int, int], dict[str, Any]] = {}
+
+
+def _pump_state_cleanup(now_ts: int | None = None) -> None:
+    now = int(time.time()) if now_ts is None else int(now_ts)
+    expired_keys = [
+        key for key, value in _PUMP_MESSAGE_STATE.items() if now - int(value.get("ts", now)) > _PUMP_TOGGLE_TTL_SEC
+    ]
+    for key in expired_keys:
+        _PUMP_MESSAGE_STATE.pop(key, None)
+
+
+def _save_pump_message_state(*, chat_id: int, message_id: int, collapsed_text: str, expanded_text: str, lang: str) -> None:
+    _pump_state_cleanup()
+    _PUMP_MESSAGE_STATE[(int(chat_id), int(message_id))] = {
+        "ts": int(time.time()),
+        "collapsed": collapsed_text,
+        "expanded": expanded_text,
+        "is_expanded": False,
+        "lang": lang,
+    }
+
+
+def _get_pump_message_state(chat_id: int, message_id: int) -> dict[str, Any] | None:
+    _pump_state_cleanup()
+    state = _PUMP_MESSAGE_STATE.get((int(chat_id), int(message_id)))
+    if state is None:
+        return None
+    if int(time.time()) - int(state.get("ts", 0)) > _PUMP_TOGGLE_TTL_SEC:
+        _PUMP_MESSAGE_STATE.pop((int(chat_id), int(message_id)), None)
+        return None
+    return state
+
+
+def _pump_toggle_inline_kb(*, lang: str, chat_id: int, message_id: int, expanded: bool) -> InlineKeyboardMarkup:
+    key = "PUMP_BUTTON_COLLAPSE" if expanded else "PUMP_BUTTON_EXPAND"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, key),
+                    callback_data=f"pump_toggle:{int(chat_id)}:{int(message_id)}",
+                )
+            ]
+        ]
+    )
+
+
 def _clean_lang(lang: str | None) -> str | None:
     if not lang:
         return None
@@ -2559,6 +2608,54 @@ async def pumpdump_notify_off(callback: CallbackQuery):
     await callback.answer()
     if callback.message:
         await callback.message.answer(i18n.t(lang, "PD_OFF_OK"))
+
+
+@dp.callback_query(F.data.regexp(r"^pump_toggle:-?\d+:\d+$"))
+async def pump_toggle_callback(callback: CallbackQuery):
+    if callback.from_user is None or callback.message is None:
+        return
+    match = re.match(r"^pump_toggle:(-?\d+):(\d+)$", callback.data or "")
+    if not match:
+        await callback.answer()
+        return
+    chat_id = int(match.group(1))
+    message_id = int(match.group(2))
+    lang = get_user_lang(callback.from_user.id) or "ru"
+
+    current_chat = int(callback.message.chat.id)
+    current_message = int(callback.message.message_id)
+    if current_chat != chat_id or current_message != message_id:
+        await callback.answer(i18n.t(lang, "PUMP_TOGGLE_EXPIRED"), show_alert=True)
+        return
+
+    state = _get_pump_message_state(chat_id, message_id)
+    if state is None:
+        await callback.answer(i18n.t(lang, "PUMP_TOGGLE_EXPIRED"), show_alert=True)
+        return
+
+    state_lang = str(state.get("lang") or lang)
+    is_expanded = bool(state.get("is_expanded", False))
+    next_expanded = not is_expanded
+    next_text = state.get("expanded") if next_expanded else state.get("collapsed")
+    if not isinstance(next_text, str):
+        await callback.answer(i18n.t(lang, "PUMP_TOGGLE_EXPIRED"), show_alert=True)
+        return
+
+    state["is_expanded"] = next_expanded
+    state["ts"] = int(time.time())
+
+    await callback.message.edit_text(
+        next_text,
+        parse_mode="Markdown",
+        reply_markup=_pump_toggle_inline_kb(
+            lang=state_lang,
+            chat_id=chat_id,
+            message_id=message_id,
+            expanded=next_expanded,
+        ),
+    )
+    toast_key = "PUMP_TOGGLE_EXPANDED" if next_expanded else "PUMP_TOGGLE_COLLAPSED"
+    await callback.answer(i18n.t(state_lang, toast_key))
 
 
 @dp.callback_query(F.data.startswith("sub_paywall:"))
@@ -5371,11 +5468,17 @@ async def _deliver_pumpdump_signal_stats(
     for chat_id in subscribers:
         try:
             lang = get_user_lang(chat_id) or "ru"
-            message_text = format_pump_message(signal, lang)
+            collapsed_text = format_pump_message(signal, lang, expanded=False)
+            expanded_text = format_pump_message(signal, lang, expanded=True)
             if prefix_key:
-                message_text = f"{i18n.t(lang, prefix_key)}{message_text}"
+                prefix_text = i18n.t(lang, prefix_key)
+                collapsed_text = f"{prefix_text}{collapsed_text}"
+                expanded_text = f"{prefix_text}{expanded_text}"
             if suffix_key:
-                message_text = f"{message_text}\n\n{i18n.t(lang, suffix_key)}"
+                suffix_text = i18n.t(lang, suffix_key)
+                collapsed_text = f"{collapsed_text}\n\n{suffix_text}"
+                expanded_text = f"{expanded_text}\n\n{suffix_text}"
+
             is_admin_user = is_admin(chat_id) if allow_admin_bypass else False
             if not is_admin_user:
                 if not bypass_limits:
@@ -5402,28 +5505,62 @@ async def _deliver_pumpdump_signal_stats(
                     PUMP_COOLDOWN_SYMBOL_SEC,
                 ):
                     continue
-            if is_admin_user:
-                await bot.send_message(chat_id, message_text, parse_mode="Markdown")
+
+            if is_admin_user or is_sub_active(chat_id):
+                sent_message = await bot.send_message(chat_id, collapsed_text, parse_mode="Markdown")
+                _save_pump_message_state(
+                    chat_id=chat_id,
+                    message_id=int(sent_message.message_id),
+                    collapsed_text=collapsed_text,
+                    expanded_text=expanded_text,
+                    lang=lang,
+                )
+                with suppress(Exception):
+                    await bot.edit_message_reply_markup(
+                        chat_id=chat_id,
+                        message_id=int(sent_message.message_id),
+                        reply_markup=_pump_toggle_inline_kb(
+                            lang=lang,
+                            chat_id=chat_id,
+                            message_id=int(sent_message.message_id),
+                            expanded=False,
+                        ),
+                    )
                 increment_pumpdump_daily_count(chat_id, date_key)
                 sent_count += 1
                 recipient_count += 1
                 continue
-            if is_sub_active(chat_id):
-                await bot.send_message(chat_id, message_text, parse_mode="Markdown")
-                increment_pumpdump_daily_count(chat_id, date_key)
-                sent_count += 1
-                recipient_count += 1
-                continue
+
             ensure_trial_defaults(chat_id)
             allowed, left = try_consume_trial(chat_id, "trial_pump_left", 1)
             if allowed:
-                message_text = message_text + i18n.t(
+                trial_suffix = i18n.t(
                     lang,
                     "TRIAL_SUFFIX_PD",
                     left=left,
                     limit=TRIAL_PUMP_LIMIT,
                 )
-                await bot.send_message(chat_id, message_text, parse_mode="Markdown")
+                collapsed_with_trial = collapsed_text + trial_suffix
+                expanded_with_trial = expanded_text + trial_suffix
+                sent_message = await bot.send_message(chat_id, collapsed_with_trial, parse_mode="Markdown")
+                _save_pump_message_state(
+                    chat_id=chat_id,
+                    message_id=int(sent_message.message_id),
+                    collapsed_text=collapsed_with_trial,
+                    expanded_text=expanded_with_trial,
+                    lang=lang,
+                )
+                with suppress(Exception):
+                    await bot.edit_message_reply_markup(
+                        chat_id=chat_id,
+                        message_id=int(sent_message.message_id),
+                        reply_markup=_pump_toggle_inline_kb(
+                            lang=lang,
+                            chat_id=chat_id,
+                            message_id=int(sent_message.message_id),
+                            expanded=False,
+                        ),
+                    )
                 increment_pumpdump_daily_count(chat_id, date_key)
                 sent_count += 1
                 recipient_count += 1
@@ -5449,6 +5586,7 @@ async def _deliver_pumpdump_signal_stats(
         "subscribers": len(subscribers),
         "recipient_count": recipient_count,
     }
+
 
 
 async def _deliver_pumpdump_signal(

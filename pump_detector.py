@@ -475,7 +475,7 @@ def _format_symbol_pair(symbol: str) -> str:
     return f"{symbol} / USDT"
 
 
-def format_pump_message(signal: Dict[str, Any], lang: str = "ru") -> str:
+def _format_pump_base_message(signal: Dict[str, Any], lang: str = "ru") -> str:
     symbol_pair = _format_symbol_pair(signal["symbol"])
     price = signal["price"]
     ch1 = signal["change_1m"]
@@ -487,7 +487,7 @@ def format_pump_message(signal: Dict[str, Any], lang: str = "ru") -> str:
         "PUMP_HEADER_PUMP" if signal["type"] == "pump" else "PUMP_HEADER_DUMP",
     )
 
-    text = (
+    return (
         f"{header}\n\n"
         f"{i18n.t(lang, 'PUMP_COIN_LINE', symbol=symbol_pair)}\n"
         f"{i18n.t(lang, 'PUMP_PRICE_LINE', price=_format_price(price))}\n\n"
@@ -495,12 +495,20 @@ def format_pump_message(signal: Dict[str, Any], lang: str = "ru") -> str:
         f"{i18n.t(lang, 'PUMP_MOVE_1M', change=_format_signed(ch1))}\n"
         f"{i18n.t(lang, 'PUMP_MOVE_5M', change=_format_signed(ch5))}\n"
         f"{i18n.t(lang, 'PUMP_VOLUME_LINE', volume=volume_mul)}\n\n"
+        f"{i18n.t(lang, 'PUMP_SOURCE')}"
+    )
+
+
+def format_pump_message(signal: Dict[str, Any], lang: str = "ru", expanded: bool = False) -> str:
+    text = _format_pump_base_message(signal, lang)
+    if expanded:
+        return (
+            f"{text}\n\n"
         f"{i18n.t(lang, 'PUMP_NOTE_1')}\n"
         f"{i18n.t(lang, 'PUMP_NOTE_2')}\n\n"
         f"{i18n.t(lang, 'PUMP_RISK_1')}\n"
-        f"{i18n.t(lang, 'PUMP_RISK_2')}\n\n"
-        f"{i18n.t(lang, 'PUMP_SOURCE')}"
-    )
+            f"{i18n.t(lang, 'PUMP_RISK_2')}"
+        )
     return text
 
 
