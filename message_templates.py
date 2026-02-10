@@ -215,7 +215,7 @@ def format_signal_activation_message(
     lines = [
         header,
         "",
-        f"{symbol} · {side_value}",
+        f"{symbol} - {side_value}",
         f"Score: {max(0, min(100, int(score)))}",
         "",
         f"🔹 {i18n.t(lang, 'SIGNAL_ACTIVATED_ENTRY_LABEL')}: {_format_price(float(entry_price), 4)}",

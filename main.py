@@ -1360,6 +1360,27 @@ def _is_final_signal_status(status: str) -> bool:
     return normalized in {"TP1", "TP2", "BE", "SL", "EXP", "NF"}
 
 
+def _alerts_bucket_from_score(score: int) -> str:
+    return "elite" if int(score) >= 90 else "regular"
+
+
+def _alerts_pref_key_for_bucket(bucket: str) -> str:
+    return "notif_elite_enabled" if bucket == "elite" else "notif_regular_enabled"
+
+
+def _status_toggle_inline_kb(*, lang: str, score: int, enabled: bool) -> InlineKeyboardMarkup:
+    bucket = _alerts_bucket_from_score(score)
+    label_key = "SIGNAL_STATUS_TOGGLE_ON" if enabled else "SIGNAL_STATUS_TOGGLE_OFF"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(
+                text=i18n.t(lang, label_key),
+                callback_data=f"toggle_alerts:{bucket}",
+            )
+        ]]
+    )
+
+
 def _format_short_result_message(event: dict, lang: str) -> str | None:
     status_raw = str(event.get("result") or event.get("status") or "OPEN")
     status = _normalize_signal_status(status_raw)
@@ -1376,38 +1397,53 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
 
     header = ""
     detail_lines: list[str] = []
-    extra_lines: list[str] = []
 
-    if entry_from or entry_to:
+    entry_price = float(event.get("entry_price") or 0.0)
+    if status in {"TP1", "TP2", "SL"} and entry_price > 0:
+        entry_value = _format_price(entry_price)
+    elif entry_from or entry_to:
         if entry_from and entry_to:
             entry_value = f"{_format_price(entry_from)}–{_format_price(entry_to)}"
         else:
             entry_value = _format_price(entry_from or entry_to)
-        extra_lines.append(
-            i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=entry_value)
-        )
-    extra_lines.append(
-        i18n.t(lang, "SIGNAL_RESULT_SL_LINE", price=_format_price(sl))
-    )
-    if tp1:
-        extra_lines.append(
-            i18n.t(lang, "SIGNAL_RESULT_TP1_LINE", price=_format_price(tp1))
-        )
-    if tp2:
-        extra_lines.append(
-            i18n.t(lang, "SIGNAL_RESULT_TP2_LINE", price=_format_price(tp2))
-        )
+    else:
+        entry_value = ""
 
+    body_lines: list[str] = []
     if status == "TP1":
-        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_TP1")
-        detail_lines = [
-            f"{symbol} {side}",
-        ]
+        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_TP")
+        detail_lines = [f"{symbol} {side}"]
+        if entry_value:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=entry_value))
+        if tp1:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_EXIT_LINE", price=_format_price(tp1)))
+        pnl_pct = event.get("pnl_pct")
+        if pnl_pct is None and entry_price > 0 and tp1 > 0:
+            side_mult = 1.0 if side == "LONG" else -1.0
+            pnl_pct = ((tp1 - entry_price) / entry_price) * 100.0 * side_mult
+        if pnl_pct is not None:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_PNL_LINE", pnl=f"{float(pnl_pct):.2f}"))
+        if tp1:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP1_LINE", price=_format_price(tp1)))
+        if tp2:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP2_LINE", price=_format_price(tp2)))
     elif status == "TP2":
-        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_TP2")
-        detail_lines = [
-            f"{symbol} {side}",
-        ]
+        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_TP")
+        detail_lines = [f"{symbol} {side}"]
+        if entry_value:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=entry_value))
+        if tp2:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_EXIT_LINE", price=_format_price(tp2)))
+        pnl_pct = event.get("pnl_pct")
+        if pnl_pct is None and entry_price > 0 and tp2 > 0:
+            side_mult = 1.0 if side == "LONG" else -1.0
+            pnl_pct = ((tp2 - entry_price) / entry_price) * 100.0 * side_mult
+        if pnl_pct is not None:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_PNL_LINE", pnl=f"{float(pnl_pct):.2f}"))
+        if tp1:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP1_LINE", price=_format_price(tp1)))
+        if tp2:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP2_LINE", price=_format_price(tp2)))
     elif status == "BE":
         header = i18n.t(lang, "SIGNAL_RESULT_HEADER_BE")
         detail_lines = [
@@ -1431,11 +1467,18 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
     else:
         return None
 
-    detail_lines.extend(extra_lines)
+    if status in {"SL", "EXP", "NF", "BE"}:
+        if entry_value:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=entry_value))
+        if status in {"SL", "EXP"}:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_SL_LINE", price=_format_price(sl)))
+        if tp1:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP1_LINE", price=_format_price(tp1)))
+        if tp2:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP2_LINE", price=_format_price(tp2)))
+    detail_lines.extend(body_lines)
     if status in {"TP1", "TP2", "SL"}:
-        detail_lines.append(
-            i18n.t(lang, "SIGNAL_RESULT_SCORE_LINE", score=score)
-        )
+        detail_lines.append(i18n.t(lang, "SIGNAL_RESULT_SCORE_LINE", score=score))
     return "\n".join([header, "", *detail_lines])
 
 
@@ -1463,8 +1506,16 @@ async def notify_signal_result_short(signal: dict) -> bool:
     if not message_text:
         return False
 
+    score = int(signal.get("score", 0))
+    bucket = _alerts_bucket_from_score(score)
+    pref_key = _alerts_pref_key_for_bucket(bucket)
+    bucket_enabled = bool(get_user_pref(user_id, pref_key, 1))
     try:
-        await bot.send_message(user_id, message_text)
+        await bot.send_message(
+            user_id,
+            message_text,
+            reply_markup=_status_toggle_inline_kb(lang=lang, score=score, enabled=bucket_enabled),
+        )
     except Exception as exc:
         print(f"[ai_signals] Failed to send result notification to {user_id}: {exc}")
         return False
@@ -1528,8 +1579,16 @@ async def notify_signal_activation(signal: dict) -> bool:
             tp1=float(signal.get("tp1", 0.0) or 0.0),
             tp2=float(signal.get("tp2", 0.0) or 0.0),
         )
+        score = int(float(signal.get("score", 0.0) or 0.0))
+        bucket = _alerts_bucket_from_score(score)
+        pref_key = _alerts_pref_key_for_bucket(bucket)
+        bucket_enabled = bool(get_user_pref(user_id, pref_key, 1))
         try:
-            await bot.send_message(user_id, message_text)
+            await bot.send_message(
+                user_id,
+                message_text,
+                reply_markup=_status_toggle_inline_kb(lang=lang, score=score, enabled=bucket_enabled),
+            )
             sent = True
         except Exception as exc:
             print(f"[ai_signals] Failed to send activation notification to {user_id}: {exc}")
@@ -2314,6 +2373,32 @@ async def sig_collapse_callback(callback: CallbackQuery):
         disable_web_page_preview=True,
     )
     await callback.answer()
+
+
+@dp.callback_query(F.data.regexp(r"^toggle_alerts:(regular|elite)$"))
+async def toggle_alerts_callback(callback: CallbackQuery):
+    if callback.from_user is None or callback.message is None:
+        return
+    match = re.match(r"^toggle_alerts:(regular|elite)$", callback.data or "")
+    if not match:
+        await callback.answer()
+        return
+    bucket = match.group(1)
+    user_id = callback.from_user.id
+    lang = get_user_lang(user_id) or "ru"
+    pref_key = _alerts_pref_key_for_bucket(bucket)
+    current_enabled = bool(get_user_pref(user_id, pref_key, 1))
+    next_enabled = not current_enabled
+    set_user_pref(user_id, pref_key, 1 if next_enabled else 0)
+
+    score = 95 if bucket == "elite" else 89
+    with suppress(Exception):
+        await callback.message.edit_reply_markup(
+            reply_markup=_status_toggle_inline_kb(lang=lang, score=score, enabled=next_enabled)
+        )
+
+    toast_key = "SIGNAL_STATUS_TOGGLE_TOAST_ON" if next_enabled else "SIGNAL_STATUS_TOGGLE_TOAST_OFF"
+    await callback.answer(i18n.t(lang, toast_key))
 
 
 @dp.callback_query(F.data == "sig_regular_toggle")
@@ -4885,17 +4970,15 @@ async def send_signal_to_all(
 
         signal_score_value = int(round(float(signal_dict.get("score", 0) or 0)))
         is_regular_bucket = signal_score_value < 90
-        if chat_id != admin_chat_id and is_regular_bucket and not get_user_pref(
-            chat_id,
-            "notif_regular_enabled",
-            1,
-        ):
-            stats["skipped_notifications_off"] += 1
-            print(
-                f"[{log_tag}] skip regular_bucket_off user_id={chat_id} "
-                f"chat_id={chat_id}"
-            )
-            continue
+        if chat_id != admin_chat_id:
+            bucket_pref_key = _alerts_pref_key_for_bucket(_alerts_bucket_from_score(signal_score_value))
+            if not get_user_pref(chat_id, bucket_pref_key, 1):
+                stats["skipped_notifications_off"] += 1
+                print(
+                    f"[{log_tag}] skip bucket_off={bucket_pref_key} user_id={chat_id} "
+                    f"chat_id={chat_id}"
+                )
+                continue
 
         # индивидуальный cooldown на пользователя
         if not effective_bypass_cooldown:
