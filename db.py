@@ -622,6 +622,90 @@ def count_signal_history(
         return int(row["cnt"]) if row is not None else 0
     finally:
         conn.close()
+
+
+def get_history_winrate_summary(
+    time_window: str,
+    user_id: int | None = None,
+) -> dict[str, dict[str, int | None]]:
+    since_ts = _history_since_ts(time_window)
+    conn = get_conn()
+    try:
+        clauses = ["(is_test IS NULL OR is_test = 0)"]
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
+        if since_ts is not None:
+            clauses.append("ts >= ?")
+            params.append(int(since_ts))
+        clauses.append(
+            "NOT ("
+            "symbol LIKE 'TEST%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
+        )
+        _append_blocked_symbols_filter(clauses, params)
+        where_clause = " AND ".join(clauses)
+
+        cur = conn.execute(
+            f"""
+            SELECT
+                CAST(ROUND(score) AS INTEGER) AS score,
+                UPPER(TRIM(COALESCE(result, status, ''))) AS outcome
+            FROM signal_events
+            WHERE {where_clause}
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    win_statuses = {"TP", "TP1", "TP2", "BE", "PASSED"}
+    loss_statuses = {"SL", "FAILED"}
+    closed_statuses = win_statuses | loss_statuses | {
+        "NEUTRAL",
+        "NO_FILL",
+        "NF",
+        "EXP",
+        "EXPIRED",
+        "AMBIGUOUS",
+    }
+
+    summary: dict[str, dict[str, int | None]] = {
+        "90_100": {"wins": 0, "losses": 0, "winrate": None},
+        "80_89": {"wins": 0, "losses": 0, "winrate": None},
+    }
+
+    for row in rows:
+        score = int(row["score"] or 0)
+        if 90 <= score <= 100:
+            bucket = summary["90_100"]
+        elif 80 <= score <= 89:
+            bucket = summary["80_89"]
+        else:
+            continue
+
+        outcome = str(row["outcome"] or "")
+        if outcome not in closed_statuses:
+            continue
+        if outcome in win_statuses:
+            bucket["wins"] = int(bucket["wins"] or 0) + 1
+        elif outcome in loss_statuses:
+            bucket["losses"] = int(bucket["losses"] or 0) + 1
+
+    for bucket in summary.values():
+        wins = int(bucket["wins"] or 0)
+        losses = int(bucket["losses"] or 0)
+        total = wins + losses
+        bucket["winrate"] = round((wins / total) * 100) if total else None
+
+    return summary
+
+
 def list_signal_events(
     *,
     user_id: int | None,
