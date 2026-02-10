@@ -196,3 +196,33 @@ def format_scenario_message(
         i18n.t(lang, "SCENARIO_DISCLAIMER_3"),
     ]
     return "\n".join(lines)
+
+
+def format_signal_activation_message(
+    *,
+    lang: str,
+    symbol: str,
+    side: str,
+    score: int,
+    entry_price: float,
+    sl: float,
+    tp1: float,
+    tp2: float,
+) -> str:
+    header = i18n.t(lang, "SIGNAL_ACTIVATED_HEADER")
+    waiting = i18n.t(lang, "SIGNAL_ACTIVATED_WAITING")
+    side_value = str(side).upper()
+    lines = [
+        header,
+        "",
+        f"{symbol} · {side_value}",
+        f"Score: {max(0, min(100, int(score)))}",
+        "",
+        f"🔹 {i18n.t(lang, 'SIGNAL_ACTIVATED_ENTRY_LABEL')}: {_format_price(float(entry_price), 4)}",
+        f"🛑 {i18n.t(lang, 'SIGNAL_ACTIVATED_SL_LABEL')}: {_format_price(float(sl), 4)}",
+        f"🎯 TP1: {_format_price(float(tp1), 4)}",
+        f"🎯 TP2: {_format_price(float(tp2), 4)}",
+        "",
+        waiting,
+    ]
+    return "\n".join(lines)
