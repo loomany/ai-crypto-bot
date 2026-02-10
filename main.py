@@ -1115,18 +1115,30 @@ def _history_status_icon(status_key: str) -> str:
     return icon_map.get(status_key, "🟡")
 
 
+def _signal_side_label(side: Any) -> str:
+    normalized_side = str(side or "").upper().strip()
+    if normalized_side in {"LONG", "BUY"}:
+        return "LONG"
+    if normalized_side in {"SHORT", "SELL"}:
+        return "SHORT"
+    return "SHORT"
+
+
 def _format_signal_list_row(
     *,
+    side: Any,
     icon: str,
     score: Any,
     symbol: Any,
     created_at: Any,
 ) -> str:
+    side_label = _signal_side_label(side)
+    side_prefix = side_label.ljust(5)
     icon_value = str(icon or "🟡").strip() or "🟡"
     score_value = _safe_int(score, 0)
     symbol_value = _short_symbol(str(symbol or "—"))
     created_at_value = _safe_int(created_at, 0)
-    return f"{icon_value} | Score {score_value} | {symbol_value} | {_format_event_time(created_at_value)}"
+    return f"{side_prefix} {icon_value} | Score {score_value} | {symbol_value} | {_format_event_time(created_at_value)}"
 
 
 def _get_history_page(
@@ -1160,6 +1172,7 @@ def _format_history_item(row: dict[str, Any], lang: str) -> str:
     status_key = _normalize_history_status(str(row.get("outcome") or ""))
     icon = _history_status_icon(status_key)
     return _format_signal_list_row(
+        side=row.get("side"),
         icon=icon,
         score=row.get("score"),
         symbol=row.get("symbol"),
@@ -2205,6 +2218,7 @@ def _archive_inline_kb(
             [
                 InlineKeyboardButton(
                     text=_format_signal_list_row(
+                        side=event.get("side"),
                         icon=status_icon,
                         score=event.get("score"),
                         symbol=event.get("symbol"),
