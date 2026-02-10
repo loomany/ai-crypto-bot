@@ -823,7 +823,7 @@ def _status_icon(status: str | None) -> str:
     if normalized in failed:
         return "🔴"
     if normalized in neutral:
-        return "⚪️"
+        return "⚪"
     if normalized in {"ACTIVE"}:
         return "🟡"
     return "🟡"
@@ -1108,11 +1108,25 @@ def _history_status_icon(status_key: str) -> str:
     icon_map = {
         "TP": "🟢",
         "SL": "🔴",
-        "EXPIRED_NO_ENTRY": "⚪️",
-        "NO_CONFIRMATION": "⚪️",
+        "EXPIRED_NO_ENTRY": "⚪",
+        "NO_CONFIRMATION": "⚪",
         "IN_PROGRESS": "🟡",
     }
     return icon_map.get(status_key, "🟡")
+
+
+def _format_signal_list_row(
+    *,
+    icon: str,
+    score: Any,
+    symbol: Any,
+    created_at: Any,
+) -> str:
+    icon_value = str(icon or "🟡").strip() or "🟡"
+    score_value = _safe_int(score, 0)
+    symbol_value = _short_symbol(str(symbol or "—"))
+    created_at_value = _safe_int(created_at, 0)
+    return f"{icon_value} | Score {score_value} | {symbol_value} | {_format_event_time(created_at_value)}"
 
 
 def _get_history_page(
@@ -1142,13 +1156,15 @@ def _get_history_page(
 
 
 def _format_history_item(row: dict[str, Any], lang: str) -> str:
-    raw_symbol = str(row.get("symbol") or "—")
-    symbol = _short_symbol(raw_symbol)
-    score = _safe_int(row.get("score"), 0)
-    created_at = _safe_int(row.get("created_at") or row.get("ts"), 0)
+    del lang
     status_key = _normalize_history_status(str(row.get("outcome") or ""))
     icon = _history_status_icon(status_key)
-    return f"{icon} | Score {score} | {symbol} | {_format_event_time(created_at)}"
+    return _format_signal_list_row(
+        icon=icon,
+        score=row.get("score"),
+        symbol=row.get("symbol"),
+        created_at=row.get("created_at") or row.get("ts"),
+    )
 
 
 def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str:
@@ -2185,15 +2201,14 @@ def _archive_inline_kb(
     for event in events:
         event_status = str(event.get("status", ""))
         status_icon = _status_icon(event_status)
-        created_at = _safe_int(event.get("created_at") or event.get("ts"), 0)
-        symbol = _short_symbol(str(event.get("symbol") or "—"))
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=(
-                        f"{status_icon} | Score {_safe_int(event.get('score', 0))} | "
-                        f"{symbol} | "
-                        f"{_format_event_time(created_at)}"
+                    text=_format_signal_list_row(
+                        icon=status_icon,
+                        score=event.get("score"),
+                        symbol=event.get("symbol"),
+                        created_at=event.get("created_at") or event.get("ts"),
                     ),
                     callback_data=f"history_open:{event.get('id')}",
                 )
