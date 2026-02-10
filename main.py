@@ -1024,6 +1024,17 @@ def _history_status_label(status_key: str, lang: str) -> str:
     return status_labels.get(status_key, status_labels["IN_PROGRESS"])
 
 
+def _history_status_icon(status_key: str) -> str:
+    icon_map = {
+        "TP": "🟢",
+        "SL": "🔴",
+        "EXPIRED_NO_ENTRY": "⚪",
+        "NO_CONFIRMATION": "🔵",
+        "IN_PROGRESS": "🟡",
+    }
+    return icon_map.get(status_key, "🟡")
+
+
 def _get_history_page(*, time_window: str, page: int, page_size: int = 12) -> tuple[int, int, int, list[dict]]:
     total = count_signal_history(time_window=time_window, user_id=None, min_score=None)
     pages = max(1, (total + page_size - 1) // page_size)
@@ -1043,9 +1054,8 @@ def _format_history_item(row: dict[str, Any], lang: str) -> str:
     side = str(row.get("side") or "—").upper()
     score = _safe_int(row.get("score"), 0)
     status_key = _normalize_history_status(str(row.get("outcome") or ""))
-    status_text = _history_status_label(status_key, lang)
-    icon = status_text.split(" ", 1)[0]
-    return f"{icon} | {i18n.t(lang, 'history_score_label_short', value=score)} | {symbol} | {side} | {status_text}"
+    icon = _history_status_icon(status_key)
+    return f"{icon} | {i18n.t(lang, 'history_score_label_short', value=score)} | {symbol} | {side}"
 
 
 def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str:
