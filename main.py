@@ -83,6 +83,7 @@ from health import (
     load_module_statuses,
 )
 
+from cutoff_config import allow_legacy_for_user, get_stats_cutoff_ts
 from db import (
     init_db as init_storage_db,
     get_user_pref,
@@ -802,6 +803,19 @@ def _format_event_time(ts: int) -> str:
     return dt.strftime("%d.%m %H:%M")
 
 
+
+def _format_cutoff_note_date(lang: str) -> str | None:
+    cutoff_ts = get_stats_cutoff_ts()
+    if cutoff_ts <= 0:
+        return None
+    try:
+        dt = datetime.fromtimestamp(cutoff_ts, tz=ALMATY_TZ)
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
+    if lang == "ru":
+        return dt.strftime("%d.%m.%Y")
+    return dt.strftime("%Y-%m-%d")
+
 def _safe_float(value: Any) -> float | None:
     try:
         return float(value)
@@ -1044,8 +1058,19 @@ def _history_status_icon(status_key: str) -> str:
     return icon_map.get(status_key, "🟡")
 
 
-def _get_history_page(*, time_window: str, page: int, page_size: int = 12) -> tuple[int, int, int, list[dict]]:
-    total = count_signal_history(time_window=time_window, user_id=None, min_score=None)
+def _get_history_page(
+    *,
+    time_window: str,
+    page: int,
+    page_size: int = 12,
+    include_legacy: bool = False,
+) -> tuple[int, int, int, list[dict]]:
+    total = count_signal_history(
+        time_window=time_window,
+        user_id=None,
+        min_score=None,
+        include_legacy=include_legacy,
+    )
     pages = max(1, (total + page_size - 1) // page_size)
     page_value = max(1, min(page, pages))
     offset = (page_value - 1) * page_size
@@ -1054,6 +1079,7 @@ def _get_history_page(*, time_window: str, page: int, page_size: int = 12) -> tu
         user_id=None,
         limit=page_size,
         offset=offset,
+        include_legacy=include_legacy,
     )
     return page_value, pages, total, [dict(row) for row in rows]
 
@@ -1130,11 +1156,18 @@ def _build_history_text(
     rows: list[dict],
     lang: str,
     history_summary: dict[str, Any],
+    include_legacy: bool,
 ) -> str:
     period_label = _period_label(time_window, lang)
     lines = [
         i18n.t(lang, "history_title", period=period_label),
         i18n.t(lang, "page_total", page=page, pages=pages, total=total),
+    ]
+    if not include_legacy:
+        cutoff_label = _format_cutoff_note_date(lang)
+        if cutoff_label:
+            lines.extend([i18n.t(lang, "stats_since_date_note", date=cutoff_label), ""])
+    lines.extend([
         "",
         _format_history_pro_block(lang, history_summary),
         "",
@@ -1143,7 +1176,7 @@ def _build_history_text(
         "━━━━━━━━━━━━━━━━",
         i18n.t(lang, "explanation_line_1"),
         i18n.t(lang, "explanation_line_2"),
-    ]
+    ])
     if not rows:
         lines.append("")
         lines.append(i18n.t(lang, "HISTORY_EMPTY_PERIOD"))
@@ -1207,9 +1240,18 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
     if callback.message is None or callback.from_user is None:
         return
     lang = _resolve_user_lang(callback.from_user.id)
-    page_value, pages, total, rows = _get_history_page(time_window=time_window, page=page)
+    include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
+    page_value, pages, total, rows = _get_history_page(
+        time_window=time_window,
+        page=page,
+        include_legacy=include_legacy,
+    )
 
-    history_summary = get_history_winrate_summary(time_window=time_window, user_id=None)
+    history_summary = get_history_winrate_summary(
+        time_window=time_window,
+        user_id=None,
+        include_legacy=include_legacy,
+    )
 
     _set_history_context(
         callback.from_user.id,
@@ -1225,6 +1267,7 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         rows=rows,
         lang=lang,
         history_summary=history_summary,
+        include_legacy=include_legacy,
     )
     markup = _history_nav_kb(
         lang=lang,
@@ -2031,14 +2074,13 @@ async def sig_open(callback: CallbackQuery):
     try:
         logger.info("sig_open callback: %s", callback.data)
         event_id = int((callback.data or "").split(":", 1)[1])
-        event_row = get_signal_by_id(event_id)
+        lang = get_user_lang(callback.from_user.id) or "ru"
+        include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
+        event_row = get_signal_by_id(event_id, include_legacy=include_legacy)
         if event_row is None:
-            lang = get_user_lang(callback.from_user.id) or "ru"
-            await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+            await callback.answer(i18n.t(lang, "legacy_hidden_notice"), show_alert=True)
             return
         event = dict(event_row)
-        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-        lang = lang or "ru"
         back_callback = "history:all:page=1"
         context = _get_history_context(callback.from_user.id)
         if context:
@@ -2106,8 +2148,6 @@ async def sig_refresh(callback: CallbackQuery):
             await callback.answer(f"Подождите {retry_after} сек.", show_alert=True)
             return
 
-        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-        lang = lang or "ru"
         report_text = _format_refresh_report(refreshed, lang)
 
         if callback.message is None:
@@ -2144,7 +2184,11 @@ async def sig_refresh(callback: CallbackQuery):
                 await callback.message.answer(report_text)
                 return
 
-        event = get_signal_event(user_id=None, event_id=event_id)
+        event = get_signal_event(
+            user_id=None,
+            event_id=event_id,
+            include_legacy=allow_legacy_for_user(is_admin_user=True),
+        )
         if event is None:
             await callback.message.answer(report_text)
             return
@@ -3684,8 +3728,6 @@ async def show_system_menu(message: Message) -> None:
 async def about_back_callback(callback: CallbackQuery):
     await callback.answer()
     if callback.message:
-        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-        lang = lang or "ru"
         await callback.message.answer(
             i18n.t(lang, "SYSTEM_SECTION_TEXT"),
             reply_markup=build_system_menu_kb(
@@ -3699,8 +3741,6 @@ async def about_back_callback(callback: CallbackQuery):
 async def system_back_callback(callback: CallbackQuery):
     await callback.answer()
     if callback.message:
-        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-        lang = lang or "ru"
         await callback.message.answer(
             i18n.t(lang, "SYSTEM_SECTION_TEXT"),
             reply_markup=build_system_menu_kb(

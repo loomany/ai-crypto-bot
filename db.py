@@ -3,6 +3,7 @@ import sqlite3
 import time
 from typing import Iterable, List, Optional, Tuple
 
+from cutoff_config import get_effective_cutoff_ts
 from db_path import get_db_path
 from symbol_cache import get_blocked_symbols
 
@@ -569,11 +570,25 @@ def _history_since_ts(time_window: str, now_ts: int | None = None) -> int | None
     return None
 
 
+def _append_cutoff_filter(
+    clauses: list[str],
+    params: list[object],
+    *,
+    include_legacy: bool,
+    field_name: str = "ts",
+) -> None:
+    cutoff_ts = get_effective_cutoff_ts(include_legacy=include_legacy)
+    if cutoff_ts > 0:
+        clauses.append(f"{field_name} >= ?")
+        params.append(int(cutoff_ts))
+
+
 def get_signal_history(
     time_window: str,
     user_id: int | None = None,
     limit: int = 10,
     offset: int = 0,
+    include_legacy: bool = False,
 ) -> list[sqlite3.Row]:
     since_ts = _history_since_ts(time_window)
     conn = get_conn()
@@ -594,6 +609,7 @@ def get_signal_history(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         params.extend([int(limit), int(offset)])
@@ -628,6 +644,7 @@ def count_signal_history(
     time_window: str,
     user_id: int | None = None,
     min_score: float | None = None,
+    include_legacy: bool = False,
 ) -> int:
     since_ts = _history_since_ts(time_window)
     conn = get_conn()
@@ -651,6 +668,7 @@ def count_signal_history(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
@@ -666,6 +684,7 @@ def count_signal_history(
 def get_history_winrate_summary(
     time_window: str,
     user_id: int | None = None,
+    include_legacy: bool = False,
 ) -> dict[str, object]:
     since_ts = _history_since_ts(time_window)
     conn = get_conn()
@@ -686,6 +705,7 @@ def get_history_winrate_summary(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
 
@@ -811,6 +831,7 @@ def list_signal_events(
     min_score: float | None,
     limit: int,
     offset: int,
+    include_legacy: bool = False,
 ) -> List[sqlite3.Row]:
     conn = get_conn()
     try:
@@ -833,6 +854,7 @@ def list_signal_events(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         params.extend([int(limit), int(offset)])
@@ -855,6 +877,7 @@ def get_signals_for_period(
     *,
     user_id: int | None,
     since_ts: int | None,
+    include_legacy: bool = False,
 ) -> List[sqlite3.Row]:
     conn = get_conn()
     try:
@@ -874,6 +897,7 @@ def get_signals_for_period(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
@@ -891,7 +915,7 @@ def get_signals_for_period(
         conn.close()
 
 
-def list_open_signal_events(*, max_age_sec: int | None = None) -> List[sqlite3.Row]:
+def list_open_signal_events(*, max_age_sec: int | None = None, include_legacy: bool = True) -> List[sqlite3.Row]:
     conn = get_conn()
     try:
         clauses = ["status IN ('OPEN', 'ACTIVE')", "(is_test IS NULL OR is_test = 0)"]
@@ -908,6 +932,7 @@ def list_open_signal_events(*, max_age_sec: int | None = None) -> List[sqlite3.R
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
@@ -929,6 +954,7 @@ def count_signal_events(
     user_id: int | None,
     since_ts: int | None,
     min_score: float | None,
+    include_legacy: bool = False,
 ) -> int:
     conn = get_conn()
     try:
@@ -951,6 +977,7 @@ def count_signal_events(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
@@ -1003,6 +1030,7 @@ def get_signal_outcome_counts(
     user_id: int | None,
     since_ts: int | None,
     min_score: float | None,
+    include_legacy: bool = False,
 ) -> dict:
     conn = get_conn()
     try:
@@ -1025,6 +1053,7 @@ def get_signal_outcome_counts(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
@@ -1076,6 +1105,7 @@ def get_signal_score_bucket_counts(
     user_id: int | None,
     since_ts: int | None,
     min_score: float | None,
+    include_legacy: bool = False,
 ) -> dict[str, dict[str, int]]:
     conn = get_conn()
     try:
@@ -1098,6 +1128,7 @@ def get_signal_score_bucket_counts(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
@@ -1222,6 +1253,7 @@ def get_signal_avg_rr(
     min_score: float | None,
     score_min: float | None,
     score_max: float | None,
+    include_legacy: bool = False,
 ) -> dict[str, float | int]:
     conn = get_conn()
     try:
@@ -1250,6 +1282,7 @@ def get_signal_avg_rr(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
@@ -1282,6 +1315,7 @@ def get_signal_event(
     *,
     user_id: int | None,
     event_id: int,
+    include_legacy: bool = False,
 ) -> Optional[sqlite3.Row]:
     conn = get_conn()
     try:
@@ -1298,6 +1332,7 @@ def get_signal_event(
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
             "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
         )
+        _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
@@ -1309,8 +1344,8 @@ def get_signal_event(
         conn.close()
 
 
-def get_signal_by_id(signal_id: int) -> Optional[sqlite3.Row]:
-    return get_signal_event(user_id=None, event_id=signal_id)
+def get_signal_by_id(signal_id: int, *, include_legacy: bool = False) -> Optional[sqlite3.Row]:
+    return get_signal_event(user_id=None, event_id=signal_id, include_legacy=include_legacy)
 
 
 def update_signal_event_refresh(
