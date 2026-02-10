@@ -104,6 +104,7 @@ from db import (
     list_open_signal_events,
     count_signal_events,
     get_signal_outcome_counts,
+    get_signal_score_bucket_counts,
     get_signal_avg_rr,
     get_signal_event,
     get_signal_by_id,
@@ -1029,21 +1030,22 @@ def _history_since_ts(period: str) -> int | None:
     return None
 
 
-def _compute_bucket_winrate(rows: list[dict[str, Any]], score_min: int, score_max: int) -> tuple[int, int]:
-    bucket_rows = [r for r in rows if score_min <= _safe_int(r.get("score"), 0) <= score_max]
-    tp_set = {"TP", "TP1", "TP2", "PASSED"}
-    sl_set = {"SL", "FAILED"}
+
+def _bucket_tp_sl_counts(rows: list[dict[str, Any]], score_min: int, score_max: int) -> tuple[int, int]:
+    tp_statuses = {"TP", "TP1", "TP2", "PASSED"}
+    sl_statuses = {"SL", "FAILED"}
     tp_count = 0
     sl_count = 0
-    for row in bucket_rows:
+    for row in rows:
+        score = _safe_int(row.get("score"), 0)
+        if score < score_min or score > score_max:
+            continue
         status = str(row.get("result") or row.get("status") or "").upper().strip()
-        if status in tp_set:
+        if status in tp_statuses:
             tp_count += 1
-        elif status in sl_set:
+        elif status in sl_statuses:
             sl_count += 1
-    denom = tp_count + sl_count
-    winrate = int(round((tp_count / denom) * 100)) if denom > 0 else 0
-    return len(bucket_rows), winrate
+    return tp_count, sl_count
 
 
 def _history_header_text(
@@ -1140,7 +1142,7 @@ async def render_history_screen(callback: CallbackQuery, period: str, page: int)
             batch = list_signal_events(
                 user_id=callback.from_user.id,
                 since_ts=since_ts,
-                min_score=None,
+                min_score=80,
                 limit=200,
                 offset=offset,
             )
@@ -1151,8 +1153,21 @@ async def render_history_screen(callback: CallbackQuery, period: str, page: int)
             if len(batch) < 200:
                 break
 
-        count_90_100, winrate_90_100 = _compute_bucket_winrate(period_rows, 90, 100)
-        count_80_89, winrate_80_89 = _compute_bucket_winrate(period_rows, 80, 89)
+        bucket_counts = get_signal_score_bucket_counts(
+            user_id=callback.from_user.id,
+            since_ts=since_ts,
+            min_score=80,
+        )
+        count_90_100 = int(bucket_counts.get("90-100", {}).get("passed", 0)) + int(bucket_counts.get("90-100", {}).get("failed", 0)) + int(bucket_counts.get("90-100", {}).get("neutral", 0)) + int(bucket_counts.get("90-100", {}).get("in_progress", 0))
+        count_80_89 = int(bucket_counts.get("80-89", {}).get("passed", 0)) + int(bucket_counts.get("80-89", {}).get("failed", 0)) + int(bucket_counts.get("80-89", {}).get("neutral", 0)) + int(bucket_counts.get("80-89", {}).get("in_progress", 0))
+
+        tp_90_100, sl_90_100 = _bucket_tp_sl_counts(period_rows, 90, 100)
+        denom_90_100 = tp_90_100 + sl_90_100
+        winrate_90_100 = int(round((tp_90_100 / denom_90_100) * 100)) if denom_90_100 > 0 else 0
+
+        tp_80_89, sl_80_89 = _bucket_tp_sl_counts(period_rows, 80, 89)
+        denom_80_89 = tp_80_89 + sl_80_89
+        winrate_80_89 = int(round((tp_80_89 / denom_80_89) * 100)) if denom_80_89 > 0 else 0
 
         outcome_counts = get_signal_outcome_counts(user_id=callback.from_user.id, since_ts=since_ts, min_score=None)
         rr_data = get_signal_avg_rr(
@@ -1781,22 +1796,7 @@ async def history_callback(callback: CallbackQuery):
         return
     period = match.group(1)
     page = max(0, int(match.group(2)))
-    try:
-        await render_history_screen(callback, period, page)
-    except Exception:
-        user_id = callback.from_user.id if callback.from_user else None
-        logger.exception(
-            "history_callback failed: period=%s page=%s user_id=%s",
-            period,
-            page,
-            user_id,
-        )
-        lang = _resolve_user_lang(user_id)
-        with suppress(Exception):
-            await callback.message.edit_text(
-                "Не удалось загрузить историю. Попробуй ещё раз позже." if lang == "ru" else "Failed to load history. Please try again later.",
-                reply_markup=_history_period_keyboard(lang),
-            )
+    await render_history_screen(callback, period, page)
 
 
 @dp.callback_query(F.data.regexp(r"^hist:"))
