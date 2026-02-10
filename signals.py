@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import time
+import traceback
 from statistics import mean
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -130,6 +131,7 @@ except (TypeError, ValueError):
 AI_FALLBACK_DIRECT = 0
 
 logger = logging.getLogger(__name__)
+DIVISION_EPS = 1e-12
 _BLUECHIP_SET = {item.strip().upper() for item in AI_BLUECHIPS.split(",") if item.strip()}
 _CONFIRM_RETRY_STATE_KEY = "ai_confirm_retry_state_v1"
 _CONFIRM_RETRY_LOCK = asyncio.Lock()
@@ -151,6 +153,12 @@ def _getenv_int(key: str, default: int) -> int:
 
 def _clamp(value: float, min_value: float, max_value: float) -> float:
     return max(min_value, min(value, max_value))
+
+
+def safe_div(a: float, b: float | None, default: float | None = None, eps: float = DIVISION_EPS) -> float | None:
+    if b is None or abs(b) <= eps:
+        return default
+    return a / b
 
 
 AI_ATR_DYNAMIC_ENABLED = os.getenv("AI_ATR_DYNAMIC_ENABLED", "0") == "1"
@@ -248,12 +256,12 @@ def _atr_pct(symbol: str, candles_dict: Dict[str, List[Candle]], entry_ref: floa
     tf = AI_ATR_DYNAMIC_TF
     period = AI_ATR_DYNAMIC_PERIOD
     candles_tf = candles_dict.get(tf) or []
-    if entry_ref <= 0 or len(candles_tf) < period + 1:
+    if entry_ref <= DIVISION_EPS or len(candles_tf) < period + 1:
         return None
     atr_value = get_cached_atr(symbol, tf, candles_tf[-60:], period)
     if not atr_value:
         return None
-    return (atr_value / entry_ref) * 100
+    return safe_div(atr_value * 100, entry_ref, default=None)
 
 
 def _dynamic_sl_pct(atr_pct: float, setup_type: str) -> Tuple[float, float, float]:
@@ -566,7 +574,7 @@ def _volume_ratio(volumes: Sequence[float]) -> Tuple[float, float]:
     avg = mean(volumes[:-1]) if len(volumes) > 1 else volumes[0]
     avg = avg if avg > 0 else 0.0
     last = volumes[-1]
-    ratio = last / avg if avg else 0.0
+    ratio = safe_div(last, avg, default=0.0) or 0.0
     return ratio, avg
 
 
@@ -1049,7 +1057,7 @@ async def _prepare_signal(
             _trend_detected("none")
             _trend_failed("fail_trend_no_trend")
             return None
-        slope_pct = (ema_base_now - ema_base_prev) / ema_base_now * 100
+        slope_pct = safe_div((ema_base_now - ema_base_prev) * 100, ema_base_now, default=0.0) or 0.0
         last_close = closes[-1]
         side_value: Optional[str] = None
         trend_label: Optional[str] = None
@@ -1130,7 +1138,7 @@ async def _prepare_signal(
                 )
         risk_pre_value = abs(entry_ref_value - sl_value)
         reward_pre_value = abs(tp1_value - entry_ref_value)
-        rr_pre_value = reward_pre_value / risk_pre_value if risk_pre_value > 0 else 0.0
+        rr_pre_value = safe_div(reward_pre_value, risk_pre_value, default=0.0) or 0.0
         min_rr_required = AI_TREND_MIN_RR if AI_TREND_MIN_RR else AI_MIN_RR
         if rr_pre_value < min_rr_required:
             _trend_failed("fail_trend_rr_low")
@@ -1281,7 +1289,11 @@ async def _prepare_signal(
     min_rr_required = AI_TREND_MIN_RR if setup_type == "trend" else AI_MIN_RR
 
     if AI_ATR_DYNAMIC_ENABLED:
-        atr_pct_value = _atr_pct(symbol, candles, entry_ref)
+        if entry_ref <= DIVISION_EPS:
+            _inc_fail("fail_bad_close_zero")
+            atr_pct_value = None
+        else:
+            atr_pct_value = _atr_pct(symbol, candles, entry_ref)
         if atr_pct_value is not None:
             sl_pct_value, _, mult_value = _dynamic_sl_pct(atr_pct_value, setup_type)
             risk = entry_ref * sl_pct_value / 100
@@ -1318,8 +1330,13 @@ async def _prepare_signal(
     level_score = max(0.0, 30.0 * (1.0 - min(level_distance, level_near_pct) / level_near_pct))
 
     risk_pre = abs(entry_ref - sl)
+    if risk_pre <= DIVISION_EPS:
+        if setup_type == "trend":
+            _trend_failed("fail_rr_zero_risk")
+        _fail_setup("fail_rr_zero_risk")
+        return None
     reward_pre = abs(tp1 - entry_ref)
-    rr_pre = reward_pre / risk_pre if risk_pre > 0 else 0.0
+    rr_pre = safe_div(reward_pre, risk_pre, default=0.0) or 0.0
     min_rr_pre = (
         AI_TREND_MIN_RR if setup_type == "trend" else (MIN_RR_FREE if free_mode else 2.0)
     )
@@ -1367,7 +1384,7 @@ async def _prepare_signal(
     allowed_dist_pct: float | None = None
     if setup_type != "trend":
         if ema50_1h:
-            dist_to_ema50_pct = abs(current_price - ema50_1h) / ema50_1h * 100
+            dist_to_ema50_pct = safe_div(abs(current_price - ema50_1h) * 100, ema50_1h, default=0.0) or 0.0
             if dist_to_ema50_pct > AI_EMA50_NEAR_PCT:
                 near_limit = AI_EMA50_NEAR_PCT * 1.1
                 if AI_TREND_MODE_ENABLED:
@@ -1402,7 +1419,7 @@ async def _prepare_signal(
                         risk = abs(entry_ref - sl)
                         risk_pre = abs(entry_ref - sl)
                         reward_pre = abs(tp1 - entry_ref)
-                        rr_pre = reward_pre / risk_pre if risk_pre > 0 else 0.0
+                        rr_pre = safe_div(reward_pre, risk_pre, default=0.0) or 0.0
                         atr_ok = True
                         if atr_15m and risk > 0:
                             min_stop = atr_15m * 0.5
@@ -1752,8 +1769,19 @@ async def _prepare_signal(
         return None
 
     risk = abs(entry_ref - sl)
+    if risk <= DIVISION_EPS:
+        _inc_fail("fail_rr_zero_risk")
+        _inc_final_fail("fail_rr_zero_risk")
+        _log_final_fail(
+            "fail_rr_zero_risk",
+            score_pre=score_pre,
+            final_score=raw_score,
+            details={"entry_ref": round(entry_ref, 6), "sl": round(sl, 6)},
+        )
+        _store_final_sample(False, "fail_rr_zero_risk")
+        return None
     reward = abs(tp1 - entry_ref)
-    rr = reward / risk if risk > 0 else 0.0
+    rr = safe_div(reward, risk, default=0.0) or 0.0
     min_rr = AI_TREND_MIN_RR if setup_type == "trend" else (MIN_RR_FREE if free_mode else 2.0)
 
     rsi_1h_value = get_cached_rsi(symbol, "1h", candles_1h)
@@ -1765,6 +1793,10 @@ async def _prepare_signal(
 
     volume_ratio, volume_avg = _volume_ratio([c.volume for c in candles_1h])
     min_volume_ratio = MIN_VOLUME_RATIO_FREE if free_mode else 1.3
+    volume_ratio_valid = volume_avg > DIVISION_EPS
+    if not volume_ratio_valid:
+        volume_ratio = 0.0
+        _inc_fail("fail_bad_avg_volume")
 
     support_level = nearest_low if nearest_low is not None else level_touched
     resistance_level = nearest_high if nearest_high is not None else level_touched
@@ -1838,6 +1870,16 @@ async def _prepare_signal(
                 )
                 _add_score_adjustment("rr_low_penalty", 0.0, value=round(rr, 2))
                 _store_final_sample(False, "fail_rr")
+                return None
+            if not volume_ratio_valid:
+                _inc_final_fail("fail_bad_avg_volume")
+                _log_final_fail(
+                    "fail_bad_avg_volume",
+                    score_pre=score_pre,
+                    final_score=raw_score,
+                    details={"volume_avg": round(volume_avg, 8)},
+                )
+                _store_final_sample(False, "fail_bad_avg_volume")
                 return None
             if volume_ratio < min_volume_ratio:
                 _inc_fail("fail_volume")
@@ -2034,6 +2076,17 @@ async def _prepare_signal(
             return None
 
     # Требуем хотя бы 30% всплеска объёма
+    if not volume_ratio_valid:
+        _inc_final_fail("fail_bad_avg_volume")
+        _log_final_fail(
+            "fail_bad_avg_volume",
+            score_pre=score_pre,
+            final_score=raw_score,
+            details={"volume_avg": round(volume_avg, 8)},
+        )
+        _store_final_sample(False, "fail_bad_avg_volume")
+        return None
+
     if volume_ratio < min_volume_ratio:
         _inc_fail("fail_volume")
         _inc_final_fail("fail_volume")
@@ -2248,8 +2301,10 @@ async def scan_market(
                     limit=AI_CHEAP_LIMIT,
                     timings=timings,
                 )
-            except Exception:
+            except Exception as exc:
                 fails["fail_symbol_error"] = fails.get("fail_symbol_error", 0) + 1
+                logger.exception("[ai_signals] symbol crash symbol=%s stage=prescore err=%s", symbol, exc)
+                logger.error(traceback.format_exc())
                 return symbol, None, None
             if not quick:
                 return symbol, None, None
@@ -2391,24 +2446,32 @@ async def scan_market(
                 progress_cb(symbol)
             try:
                 klines = await _with_semaphore(_gather_klines, symbol, timings=timings)
-            except Exception:
+            except Exception as exc:
                 fails["fail_symbol_error"] = fails.get("fail_symbol_error", 0) + 1
+                logger.exception("[ai_signals] symbol crash symbol=%s stage=klines err=%s", symbol, exc)
+                logger.error(traceback.format_exc())
                 return symbol, None, False, False
             if not klines:
                 return symbol, None, False, False
-            signal = await _prepare_signal(
-                symbol,
-                klines,
-                free_mode=free_mode,
-                min_score=min_score,
-                stats=fails if return_stats else None,
-                near_miss=near_miss if return_stats else None,
-                setup_stats=setup_stage_stats if return_stats else None,
-                debug_state=debug_state,
-                final_stats=final_stage_stats if return_stats else None,
-                fetch_orderflow=symbol in orderflow_candidates,
-                timings=timings,
-            )
+            try:
+                signal = await _prepare_signal(
+                    symbol,
+                    klines,
+                    free_mode=free_mode,
+                    min_score=min_score,
+                    stats=fails if return_stats else None,
+                    near_miss=near_miss if return_stats else None,
+                    setup_stats=setup_stage_stats if return_stats else None,
+                    debug_state=debug_state,
+                    final_stats=final_stage_stats if return_stats else None,
+                    fetch_orderflow=symbol in orderflow_candidates,
+                    timings=timings,
+                )
+            except Exception as exc:
+                fails["fail_symbol_error"] = fails.get("fail_symbol_error", 0) + 1
+                logger.exception("[ai_signals] symbol crash symbol=%s stage=prepare err=%s", symbol, exc)
+                logger.error(traceback.format_exc())
+                return symbol, None, True, False
             return symbol, signal, True, False
         finally:
             _update_total(symbol, time.perf_counter() - symbol_start)
