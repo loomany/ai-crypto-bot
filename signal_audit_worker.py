@@ -13,11 +13,12 @@ from health import (
     update_current_symbol,
 )
 from db import list_signal_events_by_identity, update_signal_events_status
-from signal_audit_db import fetch_open_signals, mark_signal_activated, mark_signal_closed
+from signal_audit_db import fetch_open_signals, mark_signal_closed, mark_signal_state
 from settings import SIGNAL_TTL_SECONDS
 
 _signal_result_notifier = None
 _signal_activation_notifier = None
+_signal_poi_touched_notifier = None
 
 
 def set_signal_result_notifier(handler) -> None:
@@ -28,6 +29,11 @@ def set_signal_result_notifier(handler) -> None:
 def set_signal_activation_notifier(handler) -> None:
     global _signal_activation_notifier
     _signal_activation_notifier = handler
+
+
+def set_signal_poi_touched_notifier(handler) -> None:
+    global _signal_poi_touched_notifier
+    _signal_poi_touched_notifier = handler
 
 
 def _parse_kline(kline: list[Any]) -> Optional[Dict[str, float]]:
@@ -47,6 +53,69 @@ def _entry_filled(candle: Dict[str, float], entry_from: float, entry_to: float, 
     if mode == "close":
         return entry_from <= candle["close"] <= entry_to
     return candle["low"] <= entry_to and candle["high"] >= entry_from
+
+
+def _price_inside_poi(last_price: float, poi_from: float, poi_to: float) -> bool:
+    low = min(poi_from, poi_to)
+    high = max(poi_from, poi_to)
+    return low <= last_price <= high
+
+
+def _is_close_inside_poi(close_price: float, poi_from: float, poi_to: float) -> bool:
+    return _price_inside_poi(close_price, poi_from, poi_to)
+
+
+def _is_directional_close_outside_poi(close_price: float, direction: str, poi_from: float, poi_to: float) -> bool:
+    low = min(poi_from, poi_to)
+    high = max(poi_from, poi_to)
+    if direction == "long":
+        return close_price > high
+    return close_price < low
+
+
+def _resolve_confirm_tf() -> str:
+    raw = str(os.getenv("ELITE_CONFIRM_TF", "5m") or "5m").strip().lower()
+    return raw or "5m"
+
+
+def _require_two_closes() -> bool:
+    value = str(os.getenv("CONFIRM_REQUIRE_TWO_CLOSES", "1") or "1").strip().lower()
+    return value not in {"0", "false", "no"}
+
+
+def _find_activation_from_candles(signal: Dict[str, Any], candles: list[Dict[str, float]]) -> tuple[int, float] | None:
+    if not candles:
+        return None
+    direction = str(signal.get("direction", "")).lower()
+    poi_from = float(signal["entry_from"])
+    poi_to = float(signal["entry_to"])
+
+    first_idx = None
+    seen_poi_touch = False
+    for idx, candle in enumerate(candles):
+        if not seen_poi_touch and _entry_filled(candle, min(poi_from, poi_to), max(poi_from, poi_to)):
+            seen_poi_touch = True
+        close_price = float(candle["close"])
+        if seen_poi_touch and _is_directional_close_outside_poi(close_price, direction, poi_from, poi_to):
+            first_idx = idx
+            break
+    if first_idx is None:
+        return None
+
+    first_candle = candles[first_idx]
+    first_close = float(first_candle["close"])
+    if not _require_two_closes():
+        return int(first_candle["open_time"] / 1000), first_close
+
+    next_idx = first_idx + 1
+    if next_idx >= len(candles):
+        return None
+    next_close = float(candles[next_idx]["close"])
+    if _is_close_inside_poi(next_close, poi_from, poi_to):
+        return None
+    if not _is_directional_close_outside_poi(next_close, direction, poi_from, poi_to):
+        return None
+    return int(first_candle["open_time"] / 1000), first_close
 
 
 def _check_hits(
@@ -101,15 +170,25 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
     tp1_r = abs(tp1 - entry_ref) / r_value
     tp2_r = abs(tp2 - entry_ref) / r_value
 
-    filled_at: int | None = None
+    activated_at = signal.get("activated_at")
+    if activated_at is None:
+        age_sec = int(time.time()) - sent_at
+        if age_sec >= ttl_sec:
+            return {
+                "outcome": "NO_FILL",
+                "pnl_r": None,
+                "filled_at": None,
+                "notes": "closed_without_entry",
+            }
+        return None
+
+    filled_at: int | None = int(activated_at)
     tp1_hit = False
 
     for candle in candles:
-        if filled_at is None:
-            if _entry_filled(candle, entry_from, entry_to, use_mode):
-                filled_at = int(candle["open_time"] / 1000)
-            else:
-                continue
+        candle_ts = int(candle["open_time"] / 1000)
+        if candle_ts < int(activated_at):
+            continue
 
         sl_hit, tp1_hit_candle, tp2_hit_candle, be_hit = _check_hits(
             candle, direction, sl, tp1, tp2, entry_ref
@@ -155,14 +234,6 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
         return None
 
     last_close = candles[-1]["close"] if candles else None
-    if filled_at is None:
-        return {
-            "outcome": "NO_FILL",
-            "pnl_r": None,
-            "filled_at": None,
-            "notes": None,
-        }
-
     pnl_r = None
     if last_close is not None:
         if direction == "long":
@@ -195,10 +266,11 @@ async def evaluate_open_signals(
         try:
             symbol = signal["symbol"]
             sent_at = int(signal["sent_at"])
+            confirm_tf = _resolve_confirm_tf()
             with binance_request_context("signal_audit"):
                 data = await fetch_klines(
                     symbol,
-                    "5m",
+                    confirm_tf,
                     500,
                     start_ms=sent_at * 1000,
                 )
@@ -214,22 +286,61 @@ async def evaluate_open_signals(
             if not candles:
                 continue
 
-            if signal.get("activated_at") is None:
-                for candle in candles:
-                    if _entry_filled(candle, float(signal["entry_from"]), float(signal["entry_to"])):
-                        activated_at = int(candle["open_time"] / 1000)
-                        entry_price = float(candle["close"])
-                        marked = mark_signal_activated(
-                            str(signal["signal_id"]),
-                            activated_at=activated_at,
-                            entry_price=entry_price,
-                        )
-                        if marked > 0:
-                            signal["activated_at"] = activated_at
-                            signal["entry_price"] = entry_price
-                            if _signal_activation_notifier is not None:
-                                await _signal_activation_notifier(signal)
-                        break
+            state = str(signal.get("state") or "WAITING_ENTRY").upper()
+            ttl_minutes = int(signal.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
+            ttl_sec = max(60, ttl_minutes * 60)
+            now_ts = int(time.time())
+            if now_ts > sent_at + ttl_sec and state != "ACTIVE_CONFIRMED":
+                mark_signal_closed(
+                    signal_id=signal["signal_id"],
+                    outcome="NO_FILL",
+                    pnl_r=None,
+                    filled_at=None,
+                    notes="closed_without_entry",
+                    close_state="EXPIRED",
+                )
+                update_signal_events_status(
+                    module=str(signal.get("module", "")),
+                    symbol=symbol,
+                    ts=sent_at,
+                    status="NO_FILL",
+                )
+                continue
+
+            if state == "WAITING_ENTRY":
+                last_price = float(candles[-1]["close"])
+                if _price_inside_poi(last_price, float(signal["entry_from"]), float(signal["entry_to"])):
+                    touched_at = int(time.time())
+                    marked = mark_signal_state(
+                        str(signal["signal_id"]),
+                        from_states=("WAITING_ENTRY",),
+                        to_state="POI_TOUCHED",
+                        poi_touched_at=touched_at,
+                    )
+                    if marked > 0:
+                        signal["state"] = "POI_TOUCHED"
+                        signal["poi_touched_at"] = touched_at
+                        if _signal_poi_touched_notifier is not None:
+                            await _signal_poi_touched_notifier(signal)
+                        state = "POI_TOUCHED"
+
+            if state in {"WAITING_ENTRY", "POI_TOUCHED"}:
+                activation = _find_activation_from_candles(signal, candles)
+                if activation is not None:
+                    activated_at, entry_price = activation
+                    marked = mark_signal_state(
+                        str(signal["signal_id"]),
+                        from_states=("WAITING_ENTRY", "POI_TOUCHED"),
+                        to_state="ACTIVE_CONFIRMED",
+                        activated_at=activated_at,
+                        entry_price=entry_price,
+                    )
+                    if marked > 0:
+                        signal["state"] = "ACTIVE_CONFIRMED"
+                        signal["activated_at"] = activated_at
+                        signal["entry_price"] = entry_price
+                        if _signal_activation_notifier is not None:
+                            await _signal_activation_notifier(signal)
 
             result = _evaluate_signal(signal, candles)
             if result is None:
@@ -241,6 +352,7 @@ async def evaluate_open_signals(
                 pnl_r=result["pnl_r"],
                 filled_at=result["filled_at"],
                 notes=result["notes"],
+                close_state=("EXPIRED" if result["outcome"] == "NO_FILL" else None),
             )
             status_map = {
                 "TP1": "TP1",

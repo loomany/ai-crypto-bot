@@ -118,6 +118,17 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signal_events ADD COLUMN activated_at INTEGER")
         if "entry_price" not in cols:
             conn.execute("ALTER TABLE signal_events ADD COLUMN entry_price REAL")
+        if "state" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN state TEXT NOT NULL DEFAULT 'WAITING_ENTRY'")
+        if "poi_touched_at" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN poi_touched_at INTEGER")
+        conn.execute(
+            """
+            UPDATE signal_events
+            SET state = 'WAITING_ENTRY'
+            WHERE COALESCE(state, '') = '' AND status IN ('OPEN', 'ACTIVE')
+            """
+        )
         conn.commit()
     finally:
         conn.close()
@@ -529,12 +540,32 @@ def activate_signal_events(
             SET status = 'ACTIVE',
                 result = COALESCE(result, 'ACTIVE'),
                 entry_touched = 1,
+                state = 'ACTIVE_CONFIRMED',
                 activated_at = COALESCE(activated_at, ?),
                 entry_price = COALESCE(entry_price, ?),
                 updated_at = ?
             WHERE module = ? AND symbol = ? AND ts = ? AND status = 'OPEN'
             """,
             (int(activated_at), float(entry_price), int(time.time()), module, symbol, int(ts)),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
+def mark_signal_events_poi_touched(*, module: str, symbol: str, ts: int, poi_touched_at: int) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE signal_events
+            SET state = 'POI_TOUCHED',
+                poi_touched_at = COALESCE(poi_touched_at, ?),
+                updated_at = ?
+            WHERE module = ? AND symbol = ? AND ts = ? AND status = 'OPEN'
+            """,
+            (int(poi_touched_at), int(time.time()), module, symbol, int(ts)),
         )
         conn.commit()
         return int(cur.rowcount or 0)
