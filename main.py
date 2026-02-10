@@ -1142,13 +1142,13 @@ def _get_history_page(
 
 
 def _format_history_item(row: dict[str, Any], lang: str) -> str:
-    symbol = str(row.get("symbol") or "—")
-    side = str(row.get("side") or "—").upper()
+    raw_symbol = str(row.get("symbol") or "—")
+    symbol = _short_symbol(raw_symbol)
     score = _safe_int(row.get("score"), 0)
     created_at = _safe_int(row.get("created_at") or row.get("ts"), 0)
     status_key = _normalize_history_status(str(row.get("outcome") or ""))
     icon = _history_status_icon(status_key)
-    return f"{icon} | Score {score} | {symbol} | {side} | {_format_event_time(created_at)}"
+    return f"{icon} | Score {score} | {symbol} | {_format_event_time(created_at)}"
 
 
 def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str:
@@ -2186,12 +2186,13 @@ def _archive_inline_kb(
         event_status = str(event.get("status", ""))
         status_icon = _status_icon(event_status)
         created_at = _safe_int(event.get("created_at") or event.get("ts"), 0)
+        symbol = _short_symbol(str(event.get("symbol") or "—"))
         rows.append(
             [
                 InlineKeyboardButton(
                     text=(
                         f"{status_icon} | Score {_safe_int(event.get('score', 0))} | "
-                        f"{event.get('symbol')} | {str(event.get('side') or '—').upper()} | "
+                        f"{symbol} | "
                         f"{_format_event_time(created_at)}"
                     ),
                     callback_data=f"history_open:{event.get('id')}",
