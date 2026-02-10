@@ -37,7 +37,9 @@ def init_signal_audit_tables() -> None:
                 closed_at INTEGER,
                 pnl_r REAL,
                 notes TEXT,
-                ttl_minutes INTEGER NOT NULL DEFAULT 720
+                ttl_minutes INTEGER NOT NULL DEFAULT 720,
+                activated_at INTEGER,
+                entry_price REAL
             )
             """
         )
@@ -48,6 +50,10 @@ def init_signal_audit_tables() -> None:
         cols = {row[1] for row in cur.fetchall()}
         if "ttl_minutes" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN ttl_minutes INTEGER NOT NULL DEFAULT 720")
+        if "activated_at" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN activated_at INTEGER")
+        if "entry_price" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN entry_price REAL")
         conn.commit()
     finally:
         conn.close()
@@ -175,6 +181,26 @@ def mark_signal_closed(
             ),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_signal_activated(signal_id: str, *, activated_at: int, entry_price: float) -> int:
+    conn = sqlite3.connect(get_db_path())
+    try:
+        cur = conn.execute(
+            """
+            UPDATE signal_audit
+            SET activated_at = ?,
+                entry_price = ?
+            WHERE signal_id = ?
+              AND activated_at IS NULL
+              AND status = 'open'
+            """,
+            (int(activated_at), float(entry_price), signal_id),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
     finally:
         conn.close()
 

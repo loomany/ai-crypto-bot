@@ -102,6 +102,7 @@ from db import (
     purge_symbol,
     insert_signal_event,
     list_signal_events,
+    list_signal_events_by_identity,
     get_signal_history,
     count_signal_history,
     get_history_winrate_summary,
@@ -114,6 +115,7 @@ from db import (
     get_signal_by_id,
     update_signal_event_refresh,
     update_signal_event_status_by_id,
+    activate_signal_events,
     mark_signal_result_notified,
     set_last_pumpdump_signal,
     purge_test_signals,
@@ -122,7 +124,7 @@ from db_path import ensure_db_writable, get_db_path
 from market_cache import get_ticker_request_count, reset_ticker_request_count
 from alert_dedup_db import init_alert_dedup, can_send
 from status_utils import is_notify_enabled
-from message_templates import format_scenario_message
+from message_templates import format_scenario_message, format_signal_activation_message
 from signal_audit_db import (
     get_public_stats,
     get_last_signal_audit,
@@ -130,7 +132,11 @@ from signal_audit_db import (
     init_signal_audit_tables,
     insert_signal_audit,
 )
-from signal_audit_worker import signal_audit_worker_loop, set_signal_result_notifier
+from signal_audit_worker import (
+    signal_audit_worker_loop,
+    set_signal_activation_notifier,
+    set_signal_result_notifier,
+)
 import i18n
 from keyboards import (
     ai_signals_inline_kb,
@@ -760,12 +766,15 @@ def _status_icon(status: str | None) -> str:
         return "❌"
     if normalized in neutral:
         return "⏳"
+    if normalized in {"ACTIVE"}:
+        return "🟡"
     return "🕒"
 
 
 def _format_signal_event_status(raw_status: str, lang: str) -> str:
     status_map = {
         "OPEN": i18n.t(lang, "STATUS_OPEN"),
+        "ACTIVE": i18n.t(lang, "STATUS_ACTIVE_WAITING"),
         "TP1": "TP1",
         "TP2": "TP2",
         "SL": "SL",
@@ -1418,6 +1427,68 @@ async def notify_signal_result_short(signal: dict) -> bool:
     return True
 
 
+async def notify_signal_activation(signal: dict) -> bool:
+    if bot is None:
+        return False
+
+    module = str(signal.get("module", ""))
+    symbol = str(signal.get("symbol", ""))
+    ts_value = int(signal.get("sent_at", 0))
+    if not module or not symbol or ts_value <= 0:
+        return False
+
+    activated_at = int(signal.get("activated_at") or time.time())
+    entry_price = float(signal.get("entry_price") or 0.0)
+    if entry_price <= 0:
+        return False
+
+    updated_rows = activate_signal_events(
+        module=module,
+        symbol=symbol,
+        ts=ts_value,
+        activated_at=activated_at,
+        entry_price=entry_price,
+    )
+    if updated_rows <= 0:
+        return False
+
+    events = list_signal_events_by_identity(module=module, symbol=symbol, ts=ts_value)
+    if not events:
+        return False
+
+    sent = False
+    for row in events:
+        event = dict(row)
+        if str(event.get("status", "")).upper() != "ACTIVE":
+            continue
+        user_id = int(event.get("user_id", 0))
+        if user_id <= 0:
+            continue
+        if is_user_locked(user_id) or not is_sub_active(user_id):
+            continue
+        if not is_notify_enabled(user_id, "ai_signals"):
+            continue
+
+        lang = _resolve_user_lang(user_id)
+        message_text = format_signal_activation_message(
+            lang=lang,
+            symbol=symbol,
+            side=str(signal.get("direction", "")).upper(),
+            score=int(float(signal.get("score", 0.0) or 0.0)),
+            entry_price=entry_price,
+            sl=float(signal.get("sl", 0.0) or 0.0),
+            tp1=float(signal.get("tp1", 0.0) or 0.0),
+            tp2=float(signal.get("tp2", 0.0) or 0.0),
+        )
+        try:
+            await bot.send_message(user_id, message_text)
+            sent = True
+        except Exception as exc:
+            print(f"[ai_signals] Failed to send activation notification to {user_id}: {exc}")
+
+    return sent
+
+
 def _format_outcome_block(event: dict) -> list[str]:
     status_raw = str(event.get("result") or event.get("status") or "OPEN")
     status = _normalize_signal_status(status_raw)
@@ -1466,16 +1537,24 @@ def _format_outcome_block(event: dict) -> list[str]:
         lines.append(f"💬 Комментарий: {comment}")
         return lines
 
-    ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
-    remaining = ttl_minutes * 60 - (now - created_at)
-    status_hint = "ожидает подтверждение" if entry_touched else "ожидает вход"
-    lines.extend(
-        [
-            "📌 Итог: ⏰ В процессе",
-            f"🕒 До истечения: {_format_duration(remaining)}",
-            f"💬 Сейчас: {status_hint}",
-        ]
-    )
+    if status == "ACTIVE":
+        lines.extend(
+            [
+                "📌 Итог: 🟡 Активирован — ожидается результат",
+                "💬 Сейчас: Активирован — ожидается результат",
+            ]
+        )
+    else:
+        ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
+        remaining = ttl_minutes * 60 - (now - created_at)
+        status_hint = "ожидает подтверждение" if entry_touched else "ожидает вход"
+        lines.extend(
+            [
+                "📌 Итог: ⏰ В процессе",
+                f"🕒 До истечения: {_format_duration(remaining)}",
+                f"💬 Сейчас: {status_hint}",
+            ]
+        )
     if last_checked_at:
         lines.append(f"🔎 Последняя проверка: {_format_event_time(last_checked_at)}")
     return lines
@@ -1539,9 +1618,9 @@ def _format_refresh_report(event: dict, lang: str) -> str:
     lines.append(f"Последняя проверка: {_format_event_time(last_checked_at)}")
     lines.append("")
     if status_raw == "OPEN":
-        status_label = (
-            "OPEN / активирован" if entry_touched else "OPEN / ожидает вход"
-        )
+        status_label = "OPEN / ожидает вход"
+    elif status_raw == "ACTIVE":
+        status_label = i18n.t(lang, "STATUS_ACTIVE_WAITING")
     lines.append(f"Статус: {status_label}")
     if status_raw == "OPEN":
         touched_label = "тронуто" if entry_touched else "не тронуто"
@@ -1549,6 +1628,10 @@ def _format_refresh_report(event: dict, lang: str) -> str:
         ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
         remaining = ttl_minutes * 60 - (int(time.time()) - created_at)
         lines.append(f"• до конца жизни: {_format_duration(remaining)}")
+    elif status_raw == "ACTIVE":
+        lines.append(f"• entry: {entry_from:.4f}–{entry_to:.4f} (тронуто)")
+        if event.get("entry_price") is not None:
+            lines.append(f"• цена входа: {_format_price(float(event.get('entry_price')))}")
     elif status_raw in {"NO_FILL"}:
         ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
         lines.append(f"• прошло ~{ttl_minutes}м")
@@ -1757,6 +1840,7 @@ def _format_archive_detail(event: dict, lang: str) -> str:
                 sign = "−" if delta_value < 0 else "+"
                 breakdown_lines.append(f"• {label}: {sign}{abs(delta_value)}")
 
+    status_raw = str(event.get("result") or event.get("status") or "OPEN").upper()
     lines = [
         f"📌 {event.get('symbol')} {event.get('side')} {score}",
         f"🕒 {_format_event_time(int(event.get('ts', 0)))}",
@@ -1764,12 +1848,15 @@ def _format_archive_detail(event: dict, lang: str) -> str:
         f"SL: {float(event.get('sl')):.4f}",
         f"TP1: {float(event.get('tp1')):.4f}",
         f"TP2: {float(event.get('tp2')):.4f}",
-        i18n.t(
-            lang,
-            "ARCHIVE_DETAIL_LIFETIME",
-            hours=max(1, int(round(float(event.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60))),
-        ),
     ]
+    if status_raw == "OPEN":
+        lines.append(
+            i18n.t(
+                lang,
+                "ARCHIVE_DETAIL_LIFETIME",
+                hours=max(1, int(round(float(event.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60))),
+            )
+        )
     lines.extend(["", *_format_outcome_block(event)])
     lines.extend(_format_issue_hint_block(event))
     if breakdown_lines:
@@ -5375,6 +5462,7 @@ async def main():
     global bot
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     set_signal_result_notifier(notify_signal_result_short)
+    set_signal_activation_notifier(notify_signal_activation)
     print("Бот запущен!")
     init_app_db()
 

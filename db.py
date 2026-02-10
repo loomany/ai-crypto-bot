@@ -113,6 +113,10 @@ def init_db() -> None:
             )
         if "ttl_minutes" not in cols:
             conn.execute("ALTER TABLE signal_events ADD COLUMN ttl_minutes INTEGER NOT NULL DEFAULT 720")
+        if "activated_at" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN activated_at INTEGER")
+        if "entry_price" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN entry_price REAL")
         conn.commit()
     finally:
         conn.close()
@@ -500,6 +504,36 @@ def update_signal_events_status(
         conn.close()
 
 
+
+
+def activate_signal_events(
+    *,
+    module: str,
+    symbol: str,
+    ts: int,
+    activated_at: int,
+    entry_price: float,
+) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE signal_events
+            SET status = 'ACTIVE',
+                result = COALESCE(result, 'ACTIVE'),
+                entry_touched = 1,
+                activated_at = COALESCE(activated_at, ?),
+                entry_price = COALESCE(entry_price, ?),
+                updated_at = ?
+            WHERE module = ? AND symbol = ? AND ts = ? AND status = 'OPEN'
+            """,
+            (int(activated_at), float(entry_price), int(time.time()), module, symbol, int(ts)),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
 def list_signal_events_by_identity(
     *,
     module: str,
@@ -860,7 +894,7 @@ def get_signals_for_period(
 def list_open_signal_events(*, max_age_sec: int | None = None) -> List[sqlite3.Row]:
     conn = get_conn()
     try:
-        clauses = ["status = 'OPEN'", "(is_test IS NULL OR is_test = 0)"]
+        clauses = ["status IN ('OPEN', 'ACTIVE')", "(is_test IS NULL OR is_test = 0)"]
         params: list[object] = []
         if max_age_sec is not None:
             since_ts = int(time.time()) - int(max_age_sec)

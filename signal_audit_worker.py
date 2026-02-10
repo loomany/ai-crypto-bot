@@ -13,15 +13,21 @@ from health import (
     update_current_symbol,
 )
 from db import list_signal_events_by_identity, update_signal_events_status
-from signal_audit_db import fetch_open_signals, mark_signal_closed
+from signal_audit_db import fetch_open_signals, mark_signal_activated, mark_signal_closed
 from settings import SIGNAL_TTL_SECONDS
 
 _signal_result_notifier = None
+_signal_activation_notifier = None
 
 
 def set_signal_result_notifier(handler) -> None:
     global _signal_result_notifier
     _signal_result_notifier = handler
+
+
+def set_signal_activation_notifier(handler) -> None:
+    global _signal_activation_notifier
+    _signal_activation_notifier = handler
 
 
 def _parse_kline(kline: list[Any]) -> Optional[Dict[str, float]]:
@@ -207,6 +213,23 @@ async def evaluate_open_signals(
 
             if not candles:
                 continue
+
+            if signal.get("activated_at") is None:
+                for candle in candles:
+                    if _entry_filled(candle, float(signal["entry_from"]), float(signal["entry_to"])):
+                        activated_at = int(candle["open_time"] / 1000)
+                        entry_price = float(candle["close"])
+                        marked = mark_signal_activated(
+                            str(signal["signal_id"]),
+                            activated_at=activated_at,
+                            entry_price=entry_price,
+                        )
+                        if marked > 0:
+                            signal["activated_at"] = activated_at
+                            signal["entry_price"] = entry_price
+                            if _signal_activation_notifier is not None:
+                                await _signal_activation_notifier(signal)
+                        break
 
             result = _evaluate_signal(signal, candles)
             if result is None:
