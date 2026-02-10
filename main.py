@@ -1017,7 +1017,7 @@ def _history_status_label(status_key: str, lang: str) -> str:
     if status_key == "sl":
         return "❌ SL"
     if status_key == "neutral":
-        return "⏳ Neutral"
+        return f"⏳ {i18n.t(lang, 'totals_no_entry_label')}"
     return "🕒 В процессе" if lang == "ru" else "🕒 In progress"
 
 
@@ -1085,7 +1085,7 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
                 "📈 Итоги",
                 f"🟢 TP: {tp_total}",
                 f"🔴 SL: {sl_total}",
-                f"⏳ Neutral: {neutral_total}",
+                f"⏳ {i18n.t(lang, 'totals_no_entry_label')}: {neutral_total}",
                 f"🕒 В процессе: {in_progress_total}",
             ]
         )
@@ -1099,7 +1099,7 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
             "📈 Totals",
             f"🟢 TP: {tp_total}",
             f"🔴 SL: {sl_total}",
-            f"⏳ Neutral: {neutral_total}",
+            f"⏳ {i18n.t(lang, 'totals_no_entry_label')}: {neutral_total}",
             f"🕒 In progress: {in_progress_total}",
         ]
     )
@@ -1121,6 +1121,8 @@ def _build_history_text(
         i18n.t(lang, "HISTORY_PAGE_INFO", page=page, pages=pages, total=total),
         "",
         _format_history_pro_block(lang, history_summary),
+        "",
+        i18n.t(lang, "explanation_block"),
     ]
     if not rows:
         lines.append("")
@@ -1155,7 +1157,12 @@ def _history_nav_kb(
     if page > 1:
         nav.append(InlineKeyboardButton(text="◀️", callback_data=f"history:{time_window}:page={page - 1}"))
     if page < pages:
-        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"history:{time_window}:page={page + 1}"))
+        nav.append(
+            InlineKeyboardButton(
+                text=i18n.t(lang, "pagination_next_label"),
+                callback_data=f"history:{time_window}:page={page + 1}",
+            )
+        )
     if nav:
         kb_rows.append(nav)
     kb_rows.append([InlineKeyboardButton(text=i18n.t(lang, "NAV_BACK"), callback_data="hist_back")])
