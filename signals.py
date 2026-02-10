@@ -16,6 +16,7 @@ from db import get_state, set_state
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
 from market_regime import get_market_regime
+from btc_context import BTC_REGIME_CHOP, BTC_REGIME_RISK_OFF, BTC_REGIME_RISK_ON
 from indicators_cache import get_cached_atr, get_cached_ema, get_cached_rsi
 from utils_klines import normalize_klines
 from trading_core import (
@@ -123,6 +124,16 @@ ELITE_REQUIRE_CONFIRM = os.getenv("ELITE_REQUIRE_CONFIRM", "0").lower() in (
     "y",
 )
 ELITE_CONFIRM_TF = os.getenv("ELITE_CONFIRM_TF", "5m").strip().lower()
+SOFT_BTC_GATE_ENABLED = os.getenv("SOFT_BTC_GATE_ENABLED", "0").lower() in (
+    "1",
+    "true",
+    "yes",
+    "y",
+)
+SOFT_BTC_CHOP_SCORE_MIN = float(os.getenv("SOFT_BTC_CHOP_SCORE_MIN", "90") or "90")
+SKIP_BTC_CHOP_LT90 = "skip_btc_chop_score_lt90"
+SKIP_BTC_RISK_ON_SHORT_LT90 = "skip_btc_risk_on_short_score_lt90"
+SKIP_BTC_RISK_OFF_LONG_LT90 = "skip_btc_risk_off_long_score_lt90"
 try:
     ELITE_SCORE_GATE = float(os.getenv("ELITE_SCORE_GATE", "90"))
 except (TypeError, ValueError):
@@ -200,6 +211,34 @@ def _parse_tf_seconds(tf: str) -> int:
         return int(float(value) * units[unit])
     except (TypeError, ValueError):
         return 0
+
+
+def apply_btc_soft_gate(
+    signal: Dict[str, Any],
+    btc_context: Dict[str, Any] | None,
+) -> tuple[bool, str | None, bool]:
+    if not SOFT_BTC_GATE_ENABLED:
+        return True, None, False
+    if not isinstance(signal, dict):
+        return False, "skip_btc_invalid_signal", False
+
+    context = btc_context if isinstance(btc_context, dict) else {}
+    regime = str(context.get("btc_regime") or BTC_REGIME_CHOP).upper()
+    direction = str(signal.get("direction") or "").lower()
+    score = float(signal.get("score", 0.0) or 0.0)
+
+    if regime == BTC_REGIME_CHOP:
+        if score < SOFT_BTC_CHOP_SCORE_MIN:
+            return False, SKIP_BTC_CHOP_LT90, False
+        return True, None, True
+
+    if regime == BTC_REGIME_RISK_ON and direction == "short" and score < SOFT_BTC_CHOP_SCORE_MIN:
+        return False, SKIP_BTC_RISK_ON_SHORT_LT90, False
+
+    if regime == BTC_REGIME_RISK_OFF and direction == "long" and score < SOFT_BTC_CHOP_SCORE_MIN:
+        return False, SKIP_BTC_RISK_OFF_LONG_LT90, False
+
+    return True, None, False
 
 
 def _normalize_structure_state(structure: Dict[str, Any]) -> str:

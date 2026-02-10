@@ -61,6 +61,7 @@ from signals import (
     AI_STRUCTURE_PENALTY_NEUTRAL,
     AI_STRUCTURE_HARD_FAIL_ON_OPPOSITE,
     AI_STRUCTURE_WINDOW,
+    apply_btc_soft_gate,
 )
 from config import cfg
 from symbol_cache import (
@@ -125,6 +126,7 @@ from db import (
 )
 from db_path import ensure_db_writable, get_db_path
 from market_cache import get_ticker_request_count, reset_ticker_request_count
+from btc_context import get_btc_regime
 from alert_dedup_db import init_alert_dedup, can_send
 from status_utils import is_notify_enabled
 from message_templates import (
@@ -1621,6 +1623,12 @@ async def notify_signal_activation(signal: dict) -> bool:
 
     activated_at = int(signal.get("activated_at") or time.time())
     entry_price = float(signal.get("entry_price") or 0.0)
+    print(
+        "[ai_signals] activation confirmed "
+        f"{symbol} {signal.get('direction', '')} "
+        f"confirm_strict={bool(signal.get('confirm_strict', False))} "
+        f"confirm_count={int(signal.get('confirm_count', 0) or 0)}"
+    )
     if entry_price <= 0:
         return False
 
@@ -3554,6 +3562,28 @@ def _format_filters_section(st, lang: str) -> str:
                 reasons=_format_reason_counts(final_stage.get("fail_reasons", {})),
             )
         )
+    if st and isinstance(st.state, dict):
+        gate_enabled = str(os.getenv("SOFT_BTC_GATE_ENABLED", "0") or "0").strip().lower() in {"1", "true", "yes", "y"}
+        details.append(f"BTC soft gate: {'enabled' if gate_enabled else 'disabled'}")
+        btc_regime = st.state.get("btc_regime")
+        if btc_regime:
+            details.append(f"btc_regime: {btc_regime}")
+        btc_reasons = st.state.get("btc_regime_reasons")
+        if isinstance(btc_reasons, list) and btc_reasons:
+            details.append(f"btc_regime_reasons: {', '.join(str(item) for item in btc_reasons[:4])}")
+        skipped_total = int(st.state.get("skipped_by_btc_gate_total", 0) or 0)
+        details.append(f"skipped_by_btc_gate_total: {skipped_total}")
+        skipped_reasons = st.state.get("skipped_by_btc_gate_reasons")
+        if isinstance(skipped_reasons, dict) and skipped_reasons:
+            top_items = sorted(
+                ((str(key), int(value or 0)) for key, value in skipped_reasons.items()),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:5]
+            details.append(
+                "skipped_by_btc_gate_reasons(top): "
+                + ", ".join(f"{key}={value}" for key, value in top_items)
+            )
     details.extend(_format_confirm_retry_info(st.state if st else None, lang))
     if st and st.fails_top:
         if isinstance(st.fails_top, dict):
@@ -5923,6 +5953,13 @@ async def ai_scan_once() -> None:
         module_state = MODULES.get("ai_signals")
         if module_state:
             module_state.state["last_cycle_ts"] = time.time()
+        btc_context = await get_btc_regime()
+        if module_state and isinstance(module_state.state, dict):
+            module_state.state["soft_btc_gate_enabled"] = str(os.getenv("SOFT_BTC_GATE_ENABLED", "0") or "0").strip().lower() in {"1", "true", "yes", "y"}
+            module_state.state["btc_regime"] = btc_context.get("btc_regime", "CHOP")
+            module_state.state["btc_regime_reasons"] = btc_context.get("reasons", [])
+            module_state.state.setdefault("skipped_by_btc_gate_total", 0)
+            module_state.state.setdefault("skipped_by_btc_gate_reasons", {})
         reset_binance_metrics("ai_signals")
         reset_ticker_request_count("ai_signals")
         mark_tick("ai_signals", extra="сканирую рынок...")
@@ -5936,12 +5973,33 @@ async def ai_scan_once() -> None:
             if time.time() - start > BUDGET:
                 print("[AI] budget exceeded during confirm retry sends")
                 break
+            allow_send, skip_reason, confirm_strict = apply_btc_soft_gate(signal, btc_context)
+            if not allow_send:
+                if module_state and isinstance(module_state.state, dict):
+                    module_state.state["skipped_by_btc_gate_total"] = int(
+                        module_state.state.get("skipped_by_btc_gate_total", 0) or 0
+                    ) + 1
+                    reasons = module_state.state.get("skipped_by_btc_gate_reasons")
+                    if not isinstance(reasons, dict):
+                        reasons = {}
+                    reason_key = skip_reason or "skip_btc_unknown"
+                    reasons[reason_key] = int(reasons.get(reason_key, 0) or 0) + 1
+                    module_state.state["skipped_by_btc_gate_reasons"] = reasons
+                print(
+                    f"[ai_signals] BTC gate skip(retry) {signal.get('symbol', '')} "
+                    f"{signal.get('direction', '')} score={signal.get('score', 0)} reason={skip_reason}"
+                )
+                continue
+            if confirm_strict:
+                signal["confirm_strict"] = True
+            else:
+                signal.pop("confirm_strict", None)
             try:
                 update_current_symbol("ai_signals", signal.get("symbol", ""))
                 print(
                     "[ai_signals] RETRY SEND "
                     f"{signal.get('symbol', '')} {signal.get('direction', '')} "
-                    f"score={signal.get('score', 0)}"
+                    f"score={signal.get('score', 0)} confirm_strict={bool(signal.get('confirm_strict', False))}"
                 )
                 await send_signal_to_all(signal)
                 meta = signal.get("meta") if isinstance(signal, dict) else None
@@ -6110,9 +6168,30 @@ async def ai_scan_once() -> None:
             score = signal.get("score", 0)
             if score < FREE_MIN_SCORE:
                 continue
+            allow_send, skip_reason, confirm_strict = apply_btc_soft_gate(signal, btc_context)
+            if not allow_send:
+                if module_state and isinstance(module_state.state, dict):
+                    module_state.state["skipped_by_btc_gate_total"] = int(
+                        module_state.state.get("skipped_by_btc_gate_total", 0) or 0
+                    ) + 1
+                    reasons = module_state.state.get("skipped_by_btc_gate_reasons")
+                    if not isinstance(reasons, dict):
+                        reasons = {}
+                    reason_key = skip_reason or "skip_btc_unknown"
+                    reasons[reason_key] = int(reasons.get(reason_key, 0) or 0) + 1
+                    module_state.state["skipped_by_btc_gate_reasons"] = reasons
+                print(
+                    f"[ai_signals] BTC gate skip {signal.get('symbol', '')} "
+                    f"{signal.get('direction', '')} score={score} reason={skip_reason}"
+                )
+                continue
+            if confirm_strict:
+                signal["confirm_strict"] = True
+            else:
+                signal.pop("confirm_strict", None)
             try:
                 update_current_symbol("ai_signals", signal.get("symbol", ""))
-                print(f"[ai_signals] DIRECT SEND {signal['symbol']} {signal['direction']} score={score}")
+                print(f"[ai_signals] DIRECT SEND {signal['symbol']} {signal['direction']} score={score} confirm_strict={bool(signal.get('confirm_strict', False))}")
                 await send_signal_to_all(signal)
                 meta = signal.get("meta") if isinstance(signal, dict) else None
                 setup_id = meta.get("setup_id") if isinstance(meta, dict) else None

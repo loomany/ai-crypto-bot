@@ -87,39 +87,54 @@ def _require_two_closes() -> bool:
     return value not in {"0", "false", "no"}
 
 
-def _find_activation_from_candles(signal: Dict[str, Any], candles: list[Dict[str, float]]) -> tuple[int, float] | None:
+def _find_activation_from_candles(signal: Dict[str, Any], candles: list[Dict[str, float]]) -> tuple[int, float, int] | None:
     if not candles:
         return None
     direction = str(signal.get("direction", "")).lower()
     poi_from = float(signal["entry_from"])
     poi_to = float(signal["entry_to"])
 
-    first_idx = None
     seen_poi_touch = False
+    strict = bool(signal.get("confirm_strict", False))
+    required_closes = 1
+    if strict:
+        try:
+            required_closes = int(
+                os.getenv("SOFT_BTC_STRICT_CONFIRM_N", os.getenv("SOFT_BTC_STRICT_CONFIRM_CLOSES", "2"))
+                or "2"
+            )
+        except (TypeError, ValueError):
+            required_closes = 2
+        required_closes = max(2, required_closes)
+    elif _require_two_closes():
+        required_closes = 2
+
+    consecutive = 0
+    first_confirm_idx = None
     for idx, candle in enumerate(candles):
         if not seen_poi_touch and _entry_filled(candle, min(poi_from, poi_to), max(poi_from, poi_to)):
             seen_poi_touch = True
+
+        if not seen_poi_touch:
+            continue
+
         close_price = float(candle["close"])
-        if seen_poi_touch and _is_directional_close_outside_poi(close_price, direction, poi_from, poi_to):
-            first_idx = idx
-            break
-    if first_idx is None:
-        return None
+        if _is_close_inside_poi(close_price, poi_from, poi_to):
+            consecutive = 0
+            first_confirm_idx = None
+            continue
 
-    first_candle = candles[first_idx]
-    first_close = float(first_candle["close"])
-    if not _require_two_closes():
-        return int(first_candle["open_time"] / 1000), first_close
-
-    next_idx = first_idx + 1
-    if next_idx >= len(candles):
-        return None
-    next_close = float(candles[next_idx]["close"])
-    if _is_close_inside_poi(next_close, poi_from, poi_to):
-        return None
-    if not _is_directional_close_outside_poi(next_close, direction, poi_from, poi_to):
-        return None
-    return int(first_candle["open_time"] / 1000), first_close
+        if _is_directional_close_outside_poi(close_price, direction, poi_from, poi_to):
+            if consecutive == 0:
+                first_confirm_idx = idx
+            consecutive += 1
+            if consecutive >= required_closes and first_confirm_idx is not None:
+                first_candle = candles[first_confirm_idx]
+                return int(first_candle["open_time"] / 1000), float(first_candle["close"]), consecutive
+        else:
+            consecutive = 0
+            first_confirm_idx = None
+    return None
 
 
 def _check_hits(
@@ -335,18 +350,27 @@ async def evaluate_open_signals(
             if state in {"WAITING_ENTRY", "POI_TOUCHED"}:
                 activation = _find_activation_from_candles(signal, candles)
                 if activation is not None:
-                    activated_at, entry_price = activation
+                    activated_at, entry_price, confirm_count = activation
                     marked = mark_signal_state(
                         str(signal["signal_id"]),
                         from_states=("WAITING_ENTRY", "POI_TOUCHED"),
                         to_state="ACTIVE_CONFIRMED",
                         activated_at=activated_at,
                         entry_price=entry_price,
+                        confirm_count=confirm_count,
                     )
                     if marked > 0:
                         signal["state"] = "ACTIVE_CONFIRMED"
                         signal["activated_at"] = activated_at
                         signal["entry_price"] = entry_price
+                        signal["confirm_count"] = confirm_count
+                        logger.info(
+                            "[signal_audit] activated signal_id=%s symbol=%s strict=%s confirm_count=%s",
+                            signal.get("signal_id"),
+                            signal.get("symbol"),
+                            bool(signal.get("confirm_strict", False)),
+                            confirm_count,
+                        )
                         if _signal_activation_notifier is not None:
                             await _signal_activation_notifier(signal)
 
