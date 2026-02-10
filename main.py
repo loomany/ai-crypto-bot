@@ -102,7 +102,6 @@ from db import (
     insert_signal_event,
     list_signal_events,
     get_signal_history,
-    get_signal_history_full,
     count_signal_history,
     list_open_signal_events,
     count_signal_events,
@@ -1044,115 +1043,6 @@ def _build_history_text(*, time_window: str, page: int, pages: int, total: int, 
     return "\n".join(lines)
 
 
-def _extract_rr_from_reason_json(row: dict[str, Any]) -> float | None:
-    raw_reason = row.get("reason_json")
-    if not raw_reason:
-        return None
-    try:
-        payload = json.loads(str(raw_reason))
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    rr_value = payload.get("rr")
-    try:
-        rr = float(rr_value)
-    except (TypeError, ValueError):
-        return None
-    return rr if rr > 0 else None
-
-
-def _compute_history_header_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    bucket_stats: dict[str, dict[str, Any]] = {
-        "90-100": {"tp": 0, "sl": 0, "count": 0, "rr_values": []},
-        "80-89": {"tp": 0, "sl": 0, "count": 0, "rr_values": []},
-    }
-    totals = {"tp": 0, "sl": 0, "neutral": 0, "in_progress": 0}
-
-    for row in rows:
-        outcome_key = _normalize_history_status(str(row.get("outcome") or ""))
-        if outcome_key in totals:
-            totals[outcome_key] += 1
-        score = _safe_int(row.get("score"), 0)
-        bucket_key = "90-100" if 90 <= score <= 100 else "80-89" if 80 <= score <= 89 else None
-        if bucket_key is None:
-            continue
-
-        bucket = bucket_stats[bucket_key]
-        bucket["count"] += 1
-        if outcome_key == "tp":
-            bucket["tp"] += 1
-        elif outcome_key == "sl":
-            bucket["sl"] += 1
-
-        rr_value = _extract_rr_from_reason_json(row)
-        if rr_value is not None and outcome_key in {"tp", "sl"}:
-            bucket["rr_values"].append(rr_value)
-
-    return {
-        "bucket_stats": bucket_stats,
-        "totals": totals,
-    }
-
-
-def _format_bucket_avg_rr(bucket: dict[str, Any]) -> str:
-    values = bucket.get("rr_values") or []
-    if not values:
-        return "—"
-    return f"~1 : {sum(values) / len(values):.2f}"
-
-
-def _format_history_bucket_winrate(tp_count: int, sl_count: int) -> str:
-    denominator = tp_count + sl_count
-    if denominator <= 0:
-        return "—"
-    return f"{round((tp_count / denominator) * 100):.0f}%"
-
-
-def _build_history_pro_header(*, lang: str, time_window: str, page: int, pages: int, total: int, rows: list[dict[str, Any]]) -> str:
-    stats = _compute_history_header_stats(rows)
-    bucket_90 = stats["bucket_stats"]["90-100"]
-    bucket_80 = stats["bucket_stats"]["80-89"]
-    totals = stats["totals"]
-
-    lines = [
-        i18n.t(lang, "HISTORY_LIST_TITLE", period=_period_label(time_window, lang)),
-        i18n.t(lang, "HISTORY_PAGE_INFO", page=page, pages=pages, total=total),
-        "",
-        i18n.t(lang, "HISTORY_PRO_RECOMMENDED_TITLE"),
-        i18n.t(lang, "HISTORY_PRO_BUCKET_90"),
-        i18n.t(lang, "HISTORY_PRO_WINRATE", value=_format_history_bucket_winrate(bucket_90["tp"], bucket_90["sl"])),
-        i18n.t(lang, "HISTORY_PRO_AVG_RR", value=_format_bucket_avg_rr(bucket_90)),
-        i18n.t(lang, "HISTORY_PRO_TOTAL_SIGNALS", value=bucket_90["count"]),
-        i18n.t(lang, "HISTORY_PRO_STATUS_PRIMARY"),
-        i18n.t(lang, "HISTORY_PRO_RR_NOTE"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_DIVIDER"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_HIGH_RISK_TITLE"),
-        i18n.t(lang, "HISTORY_PRO_BUCKET_80"),
-        i18n.t(lang, "HISTORY_PRO_WINRATE", value=_format_history_bucket_winrate(bucket_80["tp"], bucket_80["sl"])),
-        i18n.t(lang, "HISTORY_PRO_AVG_RR", value=_format_bucket_avg_rr(bucket_80)),
-        i18n.t(lang, "HISTORY_PRO_TOTAL_SIGNALS", value=bucket_80["count"]),
-        i18n.t(lang, "HISTORY_PRO_STATUS_SELECTIVE"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_DIVIDER_SHORT"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_BELOW_80_TITLE"),
-        i18n.t(lang, "HISTORY_PRO_BELOW_80_LINE1"),
-        i18n.t(lang, "HISTORY_PRO_BELOW_80_LINE2"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_DIVIDER_SHORT"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_TOTALS_TITLE"),
-        i18n.t(lang, "HISTORY_PRO_TOTALS_TP", value=totals["tp"]),
-        i18n.t(lang, "HISTORY_PRO_TOTALS_SL", value=totals["sl"]),
-        i18n.t(lang, "HISTORY_PRO_TOTALS_NEUTRAL", value=totals["neutral"]),
-        i18n.t(lang, "HISTORY_PRO_TOTALS_IN_PROGRESS", value=totals["in_progress"]),
-    ]
-    return "\n".join(lines)
-
-
 def _history_nav_kb(
     *,
     lang: str,
@@ -1182,9 +1072,6 @@ def _history_nav_kb(
         nav.append(InlineKeyboardButton(text="▶️", callback_data=f"history:{time_window}:page={page + 1}"))
     if nav:
         kb_rows.append(nav)
-    if not events:
-        period_kb = stats_inline_kb(lang)
-        kb_rows.extend(period_kb.inline_keyboard)
     kb_rows.append([InlineKeyboardButton(text=i18n.t(lang, "NAV_BACK"), callback_data="hist_back")])
     return InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
@@ -1194,15 +1081,14 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         return
     lang = _resolve_user_lang(callback.from_user.id)
     page_value, pages, total, rows = _get_history_page(time_window=time_window, page=page)
-    stats_rows = [dict(row) for row in get_signal_history_full(time_window=time_window, user_id=None)]
     _set_history_context(callback.from_user.id, time_window, page_value)
-    text = _build_history_pro_header(
-        lang=lang,
+    text = _build_history_text(
         time_window=time_window,
         page=page_value,
         pages=pages,
         total=total,
-        rows=stats_rows,
+        rows=rows,
+        lang=lang,
     )
     markup = _history_nav_kb(
         lang=lang,
@@ -1796,10 +1682,7 @@ async def history_callback(callback: CallbackQuery):
         )
         lang = _resolve_user_lang(user_id)
         with suppress(Exception):
-            await callback.message.answer(
-                i18n.t(lang, "HISTORY_LOAD_ERROR"),
-                reply_markup=stats_inline_kb(lang),
-            )
+            await callback.message.answer(i18n.t(lang, "HISTORY_LOAD_ERROR"))
 
 
 @dp.callback_query(F.data.regexp(r"^history:"))
