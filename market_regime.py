@@ -9,6 +9,9 @@ from utils_klines import normalize_klines
 from trading_core import _compute_rsi_series, compute_ema, detect_trend_and_structure
 
 
+DIVISION_EPS = 1e-12
+
+
 async def get_market_regime() -> Dict[str, Any]:
     """
     Определяет режим рынка по BTCUSDT.
@@ -42,11 +45,21 @@ async def get_market_regime() -> Dict[str, Any]:
 
     start = closes[0]
     end = closes[-1]
+    if abs(start) <= DIVISION_EPS:
+        return {
+            "regime": "neutral",
+            "description": "Некорректные данные BTC (нулевая базовая цена).",
+            "reason": "Некорректные данные BTC (нулевая базовая цена).",
+        }
     change_pct = (end - start) / start * 100
 
     # волатильность (среднее абсолютное изменение дня к дню)
-    day_moves = [abs(closes[i] - closes[i - 1]) / closes[i - 1] * 100 for i in range(1, len(closes))]
-    vol = sum(day_moves) / len(day_moves)
+    day_moves = [
+        abs(closes[i] - closes[i - 1]) / closes[i - 1] * 100
+        for i in range(1, len(closes))
+        if abs(closes[i - 1]) > DIVISION_EPS
+    ]
+    vol = sum(day_moves) / len(day_moves) if day_moves else 0.0
 
     regime = "neutral"
     desc_parts = [f"Изменение BTC за 30д: {change_pct:+.2f}%;", f"средняя дневная волатильность: {vol:.2f}%"]
