@@ -3206,7 +3206,16 @@ async def _answer_long_message(
         await message.answer(text, reply_markup=reply_markup)
         return
 
-    lines = text.splitlines()
+    lines: list[str] = []
+    for line in text.splitlines():
+        if len(line) <= max_len:
+            lines.append(line)
+            continue
+        start = 0
+        while start < len(line):
+            lines.append(line[start : start + max_len])
+            start += max_len
+
     chunks: list[str] = []
     current: list[str] = []
     current_len = 0
