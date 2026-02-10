@@ -1560,10 +1560,6 @@ async def notify_signal_result_short(signal: dict) -> bool:
     if not message_text:
         return False
 
-    score = int(signal.get("score", 0))
-    bucket = _alerts_bucket_from_score(score)
-    pref_key = _alerts_pref_key_for_bucket(bucket)
-    bucket_enabled = bool(get_user_pref(user_id, pref_key, 1))
     try:
         await bot.send_message(
             user_id,
@@ -1572,7 +1568,6 @@ async def notify_signal_result_short(signal: dict) -> bool:
                 user_id=user_id,
                 event_type=status,
             ),
-            reply_markup=_status_toggle_inline_kb(lang=lang, score=score, enabled=bucket_enabled),
         )
     except Exception as exc:
         print(f"[ai_signals] Failed to send result notification to {user_id}: {exc}")
@@ -1637,10 +1632,6 @@ async def notify_signal_activation(signal: dict) -> bool:
             tp1=float(signal.get("tp1", 0.0) or 0.0),
             tp2=float(signal.get("tp2", 0.0) or 0.0),
         )
-        score = int(float(signal.get("score", 0.0) or 0.0))
-        bucket = _alerts_bucket_from_score(score)
-        pref_key = _alerts_pref_key_for_bucket(bucket)
-        bucket_enabled = bool(get_user_pref(user_id, pref_key, 1))
         try:
             await bot.send_message(
                 user_id,
@@ -1649,7 +1640,6 @@ async def notify_signal_activation(signal: dict) -> bool:
                     user_id=user_id,
                     event_type="ACTIVE_CONFIRMED",
                 ),
-                reply_markup=_status_toggle_inline_kb(lang=lang, score=score, enabled=bucket_enabled),
             )
             sent = True
         except Exception as exc:
@@ -1703,10 +1693,6 @@ async def notify_signal_poi_touched(signal: dict) -> bool:
             poi_from=float(signal.get("entry_from", 0.0) or 0.0),
             poi_to=float(signal.get("entry_to", 0.0) or 0.0),
         )
-        score = int(float(signal.get("score", 0.0) or 0.0))
-        bucket = _alerts_bucket_from_score(score)
-        pref_key = _alerts_pref_key_for_bucket(bucket)
-        bucket_enabled = bool(get_user_pref(user_id, pref_key, 1))
         try:
             await bot.send_message(
                 user_id,
@@ -1715,7 +1701,6 @@ async def notify_signal_poi_touched(signal: dict) -> bool:
                     user_id=user_id,
                     event_type="POI_TOUCHED",
                 ),
-                reply_markup=_status_toggle_inline_kb(lang=lang, score=score, enabled=bucket_enabled),
             )
             sent = True
         except Exception as exc:
@@ -5215,14 +5200,6 @@ async def send_signal_to_all(
         signal_parse_mode = None if is_test else "HTML"
         paywall_parse_mode = None if is_test else "HTML"
 
-        signal_reply_markup = None
-        if kind == "signal" and not is_test and is_regular_bucket:
-            signal_reply_markup = _compact_signal_inline_kb(
-                lang=lang,
-                signal_id=0,
-                regular_enabled=_is_signal_entry_sound_enabled(chat_id),
-            )
-
         try:
             if kind == "paywall":
                 res = await _send_with_safe_fallback(
@@ -5238,7 +5215,6 @@ async def send_signal_to_all(
                     message_text,
                     event_type="NEW_SIGNAL",
                     parse_mode=signal_parse_mode,
-                    reply_markup=signal_reply_markup,
                     disable_web_page_preview=True,
                 )
             stats["sent"] += 1
@@ -5267,7 +5243,6 @@ async def send_signal_to_all(
                         message_text,
                         event_type="NEW_SIGNAL",
                         parse_mode=signal_parse_mode,
-                        reply_markup=signal_reply_markup,
                         disable_web_page_preview=True,
                     )
                 stats["sent"] += 1
@@ -5373,17 +5348,6 @@ async def send_signal_to_all(
                 breakdown_json=breakdown_json,
                 ttl_minutes=int(signal_dict.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60),
             )
-            if is_regular_bucket and event_id > 0:
-                with suppress(Exception):
-                    await bot.edit_message_reply_markup(
-                        chat_id=chat_id,
-                        message_id=int(res.message_id),
-                        reply_markup=_compact_signal_inline_kb(
-                            lang=lang,
-                            signal_id=event_id,
-                            regular_enabled=_is_signal_entry_sound_enabled(chat_id),
-                        ),
-                    )
         except Exception as exc:
             print(f"[ai_signals] Failed to log signal event for {chat_id}: {exc}")
         await asyncio.sleep(random.uniform(0.05, 0.15))
@@ -5515,17 +5479,6 @@ async def _deliver_pumpdump_signal_stats(
                     expanded_text=expanded_text,
                     lang=lang,
                 )
-                with suppress(Exception):
-                    await bot.edit_message_reply_markup(
-                        chat_id=chat_id,
-                        message_id=int(sent_message.message_id),
-                        reply_markup=_pump_toggle_inline_kb(
-                            lang=lang,
-                            chat_id=chat_id,
-                            message_id=int(sent_message.message_id),
-                            expanded=False,
-                        ),
-                    )
                 increment_pumpdump_daily_count(chat_id, date_key)
                 sent_count += 1
                 recipient_count += 1
@@ -5550,17 +5503,6 @@ async def _deliver_pumpdump_signal_stats(
                     expanded_text=expanded_with_trial,
                     lang=lang,
                 )
-                with suppress(Exception):
-                    await bot.edit_message_reply_markup(
-                        chat_id=chat_id,
-                        message_id=int(sent_message.message_id),
-                        reply_markup=_pump_toggle_inline_kb(
-                            lang=lang,
-                            chat_id=chat_id,
-                            message_id=int(sent_message.message_id),
-                            expanded=False,
-                        ),
-                    )
                 increment_pumpdump_daily_count(chat_id, date_key)
                 sent_count += 1
                 recipient_count += 1
