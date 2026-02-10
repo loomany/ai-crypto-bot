@@ -783,6 +783,32 @@ def get_signal_outcome_counts(
         conn.close()
 
 
+def count_signal_events_grouped_outcome(
+    time_window: str,
+    *,
+    user_id: int | None = None,
+    min_score: float | None = None,
+) -> dict[str, int]:
+    """Backward-compatible wrapper for legacy callers.
+
+    Keeps period stats buttons resilient if old code path still calls this API.
+    """
+    since_ts: int | None
+    if time_window == "1d":
+        since_ts = int(time.time()) - 24 * 3600
+    elif time_window == "7d":
+        since_ts = int(time.time()) - 7 * 24 * 3600
+    elif time_window == "30d":
+        since_ts = int(time.time()) - 30 * 24 * 3600
+    else:
+        since_ts = None
+    return get_signal_outcome_counts(
+        user_id=user_id,
+        since_ts=since_ts,
+        min_score=min_score,
+    )
+
+
 def get_signal_score_bucket_counts(
     *,
     user_id: int | None,

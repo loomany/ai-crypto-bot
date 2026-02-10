@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sqlite3
+import traceback
 import time
 import random
 import re
@@ -100,7 +101,6 @@ from db import (
     purge_symbol,
     insert_signal_event,
     list_signal_events,
-    get_signals_for_period,
     list_open_signal_events,
     count_signal_events,
     get_signal_outcome_counts,
@@ -400,6 +400,17 @@ def get_user_lang(chat_id: int) -> str | None:
     return _clean_lang(row[0])
 
 
+def _resolve_user_lang(chat_id: int | None, fallback: str = "ru") -> str:
+    if chat_id is None:
+        return fallback
+    try:
+        lang = get_user_lang(chat_id)
+    except Exception as exc:
+        logger.exception("get_user_lang failed for chat_id=%s: %s", chat_id, exc)
+        return fallback
+    return lang or fallback
+
+
 def set_user_lang(chat_id: int, lang: str) -> None:
     normalized = i18n.normalize_lang(lang)
     conn = sqlite3.connect(get_db_path())
@@ -643,7 +654,7 @@ async def lang_select_callback(callback: CallbackQuery):
 
 @dp.message(F.text.in_(i18n.all_labels("MENU_AI")))
 async def ai_signals_menu(message: Message):
-    lang = get_user_lang(message.chat.id) or "ru"
+    lang = _resolve_user_lang(message.chat.id)
     status = (
         i18n.t(lang, "STATUS_ON")
         if get_user_pref(message.chat.id, "ai_signals_enabled", 0)
@@ -657,7 +668,7 @@ async def ai_signals_menu(message: Message):
 
 @dp.message(F.text.in_(i18n.all_labels("MENU_PD")))
 async def pumpdump_menu(message: Message):
-    lang = get_user_lang(message.chat.id) or "ru"
+    lang = _resolve_user_lang(message.chat.id)
     status = (
         i18n.t(lang, "STATUS_ON")
         if get_user_pref(message.chat.id, "pumpdump_enabled", 0)
@@ -811,38 +822,43 @@ def _calc_rr(row: dict[str, Any]) -> float | None:
     return reward / risk
 
 
-def build_pro_stats_text(rows: list[dict[str, Any]], period_key: str, lang: str) -> str:
-    filtered_rows: list[dict[str, Any]] = []
-    for row in rows:
-        score = _safe_float(row.get("score"))
-        if score is None or score < 80:
-            continue
-        filtered_rows.append(row)
+def _format_bucket_winrate(bucket: dict[str, int]) -> str:
+    passed = int(bucket.get("passed", 0) or 0)
+    failed = int(bucket.get("failed", 0) or 0)
+    denominator = passed + failed
+    if denominator <= 0:
+        return "—"
+    return f"{(passed / denominator) * 100:.1f}%"
 
-    if not filtered_rows:
-        return i18n.t(lang, "HISTORY_EMPTY_PERIOD")
 
-    rows_90_100 = [row for row in filtered_rows if 90 <= (_safe_float(row.get("score")) or -1) <= 100]
-    rows_80_89 = [row for row in filtered_rows if 80 <= (_safe_float(row.get("score")) or -1) < 90]
+def _format_avg_rr(rr_value: float | None) -> str:
+    if rr_value is None or rr_value <= 0:
+        return "—"
+    return f"~1 : {rr_value:.2f}"
 
-    def _bucket_winrate(bucket_rows: list[dict[str, Any]]) -> str:
-        tp_count = sum(1 for row in bucket_rows if _signal_status_group(row) == "tp")
-        sl_count = sum(1 for row in bucket_rows if _signal_status_group(row) == "sl")
-        denom = tp_count + sl_count
-        if denom == 0:
-            return "—"
-        return f"{(tp_count / denom) * 100:.1f}%"
 
-    winrate_90_text = _bucket_winrate(rows_90_100)
-    winrate_80_text = _bucket_winrate(rows_80_89)
+def build_pro_stats_text(
+    *,
+    period_key: str,
+    lang: str,
+    outcome_counts: dict[str, int],
+    score_bucket_counts: dict[str, dict[str, int]],
+    avg_rr_90_100: float | None,
+) -> str:
+    bucket_90 = score_bucket_counts.get("90-100", {})
+    bucket_80 = score_bucket_counts.get("80-89", {})
 
-    rr_values = [rr for rr in (_calc_rr(row) for row in rows_90_100) if rr is not None]
-    avg_rr_text = f"1 : {sum(rr_values) / len(rr_values):.2f}" if rr_values else "—"
+    winrate_90_text = _format_bucket_winrate(bucket_90)
+    winrate_80_text = _format_bucket_winrate(bucket_80)
+    avg_rr_text = _format_avg_rr(avg_rr_90_100)
 
-    tp_total = sum(1 for row in filtered_rows if _signal_status_group(row) == "tp")
-    sl_total = sum(1 for row in filtered_rows if _signal_status_group(row) == "sl")
-    neutral_total = sum(1 for row in filtered_rows if _signal_status_group(row) == "neutral")
-    in_progress_total = sum(1 for row in filtered_rows if _signal_status_group(row) == "in_progress")
+    count_90_100 = sum(int(bucket_90.get(key, 0) or 0) for key in ("passed", "failed", "neutral", "in_progress"))
+    count_80_89 = sum(int(bucket_80.get(key, 0) or 0) for key in ("passed", "failed", "neutral", "in_progress"))
+
+    tp_total = int(outcome_counts.get("passed", 0) or 0)
+    sl_total = int(outcome_counts.get("failed", 0) or 0)
+    neutral_total = int(outcome_counts.get("neutral", 0) or 0)
+    in_progress_total = int(outcome_counts.get("in_progress", 0) or 0)
 
     lines = [
         i18n.t(lang, "STATS_PRO_TITLE"),
@@ -853,7 +869,7 @@ def build_pro_stats_text(rows: list[dict[str, Any]], period_key: str, lang: str)
         i18n.t(lang, "STATS_PRO_SCORE_RANGE_90_100"),
         i18n.t(lang, "STATS_PRO_WINRATE_LINE", winrate=winrate_90_text),
         i18n.t(lang, "STATS_PRO_AVG_RR_LINE", avg_rr=avg_rr_text),
-        i18n.t(lang, "STATS_PRO_TOTAL_SIGNALS_LINE", count=len(rows_90_100)),
+        i18n.t(lang, "STATS_PRO_TOTAL_SIGNALS_LINE", count=count_90_100),
         i18n.t(lang, "STATS_PRO_STATUS_PRIMARY"),
         "",
         i18n.t(lang, "STATS_PRO_RR_NOTE"),
@@ -865,7 +881,7 @@ def build_pro_stats_text(rows: list[dict[str, Any]], period_key: str, lang: str)
         "",
         i18n.t(lang, "STATS_PRO_SCORE_RANGE_80_89"),
         i18n.t(lang, "STATS_PRO_WINRATE_LINE", winrate=winrate_80_text),
-        i18n.t(lang, "STATS_PRO_TOTAL_SIGNALS_LINE", count=len(rows_80_89)),
+        i18n.t(lang, "STATS_PRO_TOTAL_SIGNALS_LINE", count=count_80_89),
         i18n.t(lang, "STATS_PRO_STATUS_SELECTIVE"),
         "",
         i18n.t(lang, "STATS_PRO_DIVIDER"),
@@ -997,10 +1013,10 @@ def _get_history_page(
             min_score=80,
         )
         outcome_counts = {
-            "tp_count": raw_outcomes.get("tp1", 0) + raw_outcomes.get("tp2", 0),
-            "sl_count": raw_outcomes.get("sl", 0),
-            "neutral_count": raw_outcomes.get("neutral", 0),
-            "in_progress_count": raw_outcomes.get("in_progress", 0),
+            "passed": int(raw_outcomes.get("passed", 0) or 0),
+            "failed": int(raw_outcomes.get("failed", 0) or 0),
+            "neutral": int(raw_outcomes.get("neutral", 0) or 0),
+            "in_progress": int(raw_outcomes.get("in_progress", 0) or 0),
         }
         score_bucket_counts = get_signal_score_bucket_counts(
             user_id=None,
@@ -1019,7 +1035,21 @@ def _get_history_page(
         return page, pages, events, outcome_counts, score_bucket_counts, avg_rr_90_100
     except Exception as exc:
         logger.exception("history page load failed: %s", exc)
-        return 0, 1, [], {}, {}, None
+        return 0, 1, [], {"passed": 0, "failed": 0, "neutral": 0, "in_progress": 0}, {"90-100": {}, "80-89": {}}, None
+
+def _build_period_stats_text(time_window: str, lang: str) -> str:
+    _, _, _, outcome_counts, score_bucket_counts, avg_rr_90_100 = _get_history_page(
+        time_window=time_window,
+        page=0,
+    )
+    return build_pro_stats_text(
+        period_key=time_window,
+        lang=lang,
+        outcome_counts=outcome_counts,
+        score_bucket_counts=score_bucket_counts,
+        avg_rr_90_100=avg_rr_90_100,
+    )
+
 
 
 async def _render_history(
@@ -1030,14 +1060,14 @@ async def _render_history(
 ) -> None:
     if callback.message is None or callback.from_user is None:
         return
-    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-    lang = lang or "ru"
-    _set_history_context(callback.from_user.id, time_window, page)
-    since_ts = window_since(time_window, int(time.time()))
-    rows = [dict(row) for row in get_signals_for_period(user_id=None, since_ts=since_ts)]
+    lang = _resolve_user_lang(callback.from_user.id if callback.from_user else None)
+    try:
+        _set_history_context(callback.from_user.id, time_window, page)
+    except Exception as exc:
+        logger.exception("history context save failed: user_id=%s window=%s page=%s err=%s", callback.from_user.id, time_window, page, exc)
     await _edit_message_with_chunks(
         callback.message,
-        build_pro_stats_text(rows, time_window, lang),
+        _build_period_stats_text(time_window, lang),
         reply_markup=stats_inline_kb(lang),
     )
 
@@ -1214,7 +1244,7 @@ async def notify_signal_result_short(signal: dict) -> bool:
     if not is_notify_enabled(user_id, "ai_signals"):
         return False
 
-    lang = get_user_lang(user_id) or "ru"
+    lang = _resolve_user_lang(user_id)
     message_text = _format_short_result_message(signal, lang)
     if not message_text:
         return False
@@ -1590,7 +1620,7 @@ def _format_archive_detail(event: dict, lang: str) -> str:
 
 @dp.message(F.text.in_(i18n.all_labels("MENU_STATS")))
 async def stats_menu(message: Message):
-    lang = get_user_lang(message.chat.id) or "ru"
+    lang = _resolve_user_lang(message.chat.id)
     await message.answer(
         i18n.t(lang, "STATS_PICK_TEXT"),
         reply_markup=stats_inline_kb(lang),
@@ -1603,15 +1633,13 @@ async def stats_period_callback(callback: CallbackQuery):
         return
     _, period = callback.data.split(":", 1)
     user_id = callback.from_user.id
-    lang = get_user_lang(user_id) or "ru"
+    lang = _resolve_user_lang(user_id)
     try:
         await callback.answer()
     except Exception:
         pass
     try:
-        since_ts = window_since(period, int(time.time()))
-        rows = [dict(row) for row in get_signals_for_period(user_id=None, since_ts=since_ts)]
-        text = build_pro_stats_text(rows, period, lang)
+        text = _build_period_stats_text(period, lang)
         await _edit_message_with_chunks(
             callback.message,
             text,
@@ -1624,8 +1652,23 @@ async def stats_period_callback(callback: CallbackQuery):
             period,
             user_id,
         )
-        with suppress(Exception):
-            await callback.message.answer(i18n.t(lang, "STATS_LOAD_ERROR"))
+        traceback.print_exc()
+        try:
+            fallback_text = _build_period_stats_text(period, lang)
+            await _edit_message_with_chunks(
+                callback.message,
+                fallback_text,
+                reply_markup=stats_inline_kb(lang),
+            )
+        except Exception:
+            logger.exception(
+                "stats_period_callback fallback failed: period=%s user_id=%s",
+                period,
+                user_id,
+            )
+            traceback.print_exc()
+            with suppress(Exception):
+                await callback.message.answer(i18n.t(lang, "STATS_LOAD_ERROR"))
 
 
 @dp.callback_query(F.data.regexp(r"^stats:"))
@@ -1634,7 +1677,7 @@ async def stats_unknown_period(callback: CallbackQuery):
         return
     user_id = callback.from_user.id
     logger.warning("stats_unknown_period: data=%s user_id=%s", callback.data, user_id)
-    lang = get_user_lang(user_id) or "ru"
+    lang = _resolve_user_lang(user_id)
     await callback.answer(i18n.t(lang, "UNKNOWN_PERIOD"), show_alert=True)
 
 
@@ -1660,7 +1703,7 @@ async def history_callback(callback: CallbackQuery):
             user_id,
             exc,
         )
-        lang = get_user_lang(user_id) or "ru"
+        lang = _resolve_user_lang(user_id)
         with suppress(Exception):
             await callback.message.answer(i18n.t(lang, "HISTORY_LOAD_ERROR"))
 
@@ -4163,7 +4206,7 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
     if isinstance(prefix, dict):
         prefix = prefix.get(lang) or prefix.get("ru")
     if prefix:
-        return f"{prefix}{text}"
+        return f"{text}\n\n{prefix}"
     return text
 
 
