@@ -758,7 +758,7 @@ def _status_icon(status: str | None) -> str:
         return "❌"
     if normalized in neutral:
         return "⏳"
-    return "⏰"
+    return "🕒"
 
 
 def _format_signal_event_status(raw_status: str, lang: str) -> str:
@@ -987,9 +987,9 @@ def _get_history_context(user_id: int) -> tuple[str, int] | None:
 
 def _normalize_history_status(raw_status: str | None) -> str:
     normalized = str(raw_status or "").upper().strip()
-    if normalized in {"TP", "TP1", "TP2", "BE"}:
+    if normalized in {"TP", "TP1", "TP2", "BE", "PASSED"}:
         return "tp"
-    if normalized == "SL":
+    if normalized in {"SL", "FAILED"}:
         return "sl"
     if normalized in {"NEUTRAL", "NO_FILL", "NF", "EXP", "EXPIRED"}:
         return "neutral"
@@ -1006,7 +1006,7 @@ def _history_status_label(status_key: str, lang: str) -> str:
     return "🕒 В процессе" if lang == "ru" else "🕒 In progress"
 
 
-def _get_history_page(*, time_window: str, page: int, page_size: int = 10) -> tuple[int, int, int, list[dict]]:
+def _get_history_page(*, time_window: str, page: int, page_size: int = 12) -> tuple[int, int, int, list[dict]]:
     total = count_signal_history(time_window=time_window, user_id=None, min_score=None)
     pages = max(1, (total + page_size - 1) // page_size)
     page_value = max(1, min(page, pages))
@@ -1020,38 +1020,14 @@ def _get_history_page(*, time_window: str, page: int, page_size: int = 10) -> tu
     return page_value, pages, total, [dict(row) for row in rows]
 
 
-def _format_history_item(index: int, row: dict[str, Any], lang: str) -> str:
+def _format_history_item(row: dict[str, Any], lang: str) -> str:
     symbol = str(row.get("symbol") or "—")
-    side = str(row.get("side") or "—")
+    side = str(row.get("side") or "—").upper()
     score = _safe_int(row.get("score"), 0)
     status_key = _normalize_history_status(str(row.get("outcome") or ""))
-    status_label = _history_status_label(status_key, lang)
-
-    entry_low = _safe_float(row.get("entry_low"))
-    entry_high = _safe_float(row.get("entry_high"))
-    entry_line = "—"
-    if entry_low is not None and entry_high is not None:
-        entry_line = f"{_format_price(entry_low)}–{_format_price(entry_high)}"
-
-    lines = [
-        f"{index}) {symbol} — {side} | Score {score}",
-        f"   {i18n.t(lang, 'HISTORY_RESULT_LABEL')} {status_label}",
-        f"   {i18n.t(lang, 'HISTORY_ENTRY_LABEL')} {entry_line}",
-    ]
-
-    sl_price = _safe_float(row.get("sl_price"))
-    if sl_price is not None:
-        lines.append(f"   🛑 SL: {_format_price(sl_price)}")
-
-    tp1 = _safe_float(row.get("tp1"))
-    tp2 = _safe_float(row.get("tp2"))
-    tp1_text = _format_price(tp1) if tp1 is not None else "—"
-    tp2_text = _format_price(tp2) if tp2 is not None else "—"
-    lines.append(f"   🎯 TP1: {tp1_text}  🎯 TP2: {tp2_text}")
-
+    icon = _history_status_label(status_key, lang).split(" ", 1)[0]
     created_at = _safe_int(row.get("created_at"), 0)
-    lines.append(f"   {i18n.t(lang, 'HISTORY_DATE_LABEL')} {_format_event_time(created_at)}")
-    return "\n".join(lines)
+    return f"{icon} | Score {score} | {symbol} {side} | {_format_event_time(created_at)}"
 
 
 def _build_history_text(*, time_window: str, page: int, pages: int, total: int, rows: list[dict], lang: str) -> str:
@@ -1065,19 +1041,18 @@ def _build_history_text(*, time_window: str, page: int, pages: int, total: int, 
         lines.append(i18n.t(lang, "HISTORY_EMPTY_PERIOD"))
         return "\n".join(lines)
 
-    for idx, row in enumerate(rows, start=(page - 1) * 10 + 1):
-        lines.append(_format_history_item(idx, row, lang))
-        lines.append("")
-    return "\n".join(lines).rstrip()
+    for row in rows:
+        lines.append(_format_history_item(row, lang))
+    return "\n".join(lines)
 
 
 def _history_nav_kb(*, lang: str, time_window: str, page: int, pages: int) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     nav: list[InlineKeyboardButton] = []
     if page > 1:
-        nav.append(InlineKeyboardButton(text="◀️ " + i18n.t(lang, "NAV_PREV_SHORT"), callback_data=f"history:{time_window}:page={page - 1}"))
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"history:{time_window}:page={page - 1}"))
     if page < pages:
-        nav.append(InlineKeyboardButton(text=i18n.t(lang, "NAV_NEXT_SHORT") + " ▶️", callback_data=f"history:{time_window}:page={page + 1}"))
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"history:{time_window}:page={page + 1}"))
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton(text=i18n.t(lang, "NAV_BACK"), callback_data="hist_back")])
@@ -1088,8 +1063,8 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
     if callback.message is None or callback.from_user is None:
         return
     lang = _resolve_user_lang(callback.from_user.id)
-    _set_history_context(callback.from_user.id, time_window, page)
     page_value, pages, total, rows = _get_history_page(time_window=time_window, page=page)
+    _set_history_context(callback.from_user.id, time_window, page_value)
     text = _build_history_text(
         time_window=time_window,
         page=page_value,
@@ -1728,7 +1703,7 @@ def _archive_inline_kb(
                         f"{event.get('symbol')} {event.get('side')} | "
                         f"{_format_event_time(_safe_int(event.get('ts', 0)))}"
                     ),
-                    callback_data=f"sig_open:{time_window}:{event.get('id')}",
+                    callback_data=f"history_open:{event.get('id')}",
                 )
             ]
         )
@@ -1799,7 +1774,7 @@ def _archive_detail_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@dp.callback_query(F.data.regexp(r"^sig_open:(1d|7d|30d|all):\d+$"))
+@dp.callback_query(F.data.regexp(r"^history_open:\d+$"))
 async def sig_open(callback: CallbackQuery):
     logger.warning("SIG_OPEN HANDLER FIRED: %s", callback.data)
     if callback.message is None or callback.from_user is None:
@@ -1807,8 +1782,7 @@ async def sig_open(callback: CallbackQuery):
     await callback.answer()
     try:
         logger.info("sig_open callback: %s", callback.data)
-        _, time_window, event_id_raw = callback.data.split(":")
-        event_id = int(event_id_raw)
+        event_id = int((callback.data or "").split(":", 1)[1])
         event_row = get_signal_by_id(event_id)
         if event_row is None:
             lang = get_user_lang(callback.from_user.id) or "ru"
@@ -1817,11 +1791,11 @@ async def sig_open(callback: CallbackQuery):
         event = dict(event_row)
         lang = get_user_lang(callback.from_user.id) if callback.from_user else None
         lang = lang or "ru"
-        back_callback = f"history:{time_window}:page=1"
+        back_callback = "history:all:page=1"
         context = _get_history_context(callback.from_user.id)
         if context:
             stored_window, page = context
-            back_callback = f"history:{stored_window}:page={max(1, page + 1)}"
+            back_callback = f"history:{stored_window}:page={max(1, page)}"
         detail_text = _format_archive_detail(event, lang)
         detail_markup = _archive_detail_kb(
             lang=lang,
