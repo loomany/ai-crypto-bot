@@ -829,14 +829,14 @@ def _format_bucket_winrate(bucket: dict[str, int]) -> str:
     failed = int(bucket.get("failed", 0) or 0)
     denominator = passed + failed
     if denominator <= 0:
-        return "—"
+        return "0%"
     return f"{(passed / denominator) * 100:.1f}%"
 
 
 def _format_avg_rr(rr_value: float | None) -> str:
     if rr_value is None or rr_value <= 0:
-        return "—"
-    return f"~1 : {rr_value:.2f}"
+        return "1 : —"
+    return f"1 : {rr_value:.2f}"
 
 
 def build_pro_stats_text(
@@ -863,12 +863,9 @@ def build_pro_stats_text(
     in_progress_total = int(outcome_counts.get("in_progress", 0) or 0)
 
     lines = [
-        i18n.t(lang, "STATS_PRO_TITLE"),
-        "",
         i18n.t(lang, "STATS_PRO_RECOMMENDED_HEADER"),
-        i18n.t(lang, "STATS_PRO_RECOMMENDED_SUB"),
-        "",
         i18n.t(lang, "STATS_PRO_SCORE_RANGE_90_100"),
+        "",
         i18n.t(lang, "STATS_PRO_WINRATE_LINE", winrate=winrate_90_text),
         i18n.t(lang, "STATS_PRO_AVG_RR_LINE", avg_rr=avg_rr_text),
         i18n.t(lang, "STATS_PRO_TOTAL_SIGNALS_LINE", count=count_90_100),
@@ -879,17 +876,13 @@ def build_pro_stats_text(
         i18n.t(lang, "STATS_PRO_DIVIDER"),
         "",
         i18n.t(lang, "STATS_PRO_HIGH_RISK_HEADER"),
-        i18n.t(lang, "STATS_PRO_HIGH_RISK_SUB"),
-        "",
         i18n.t(lang, "STATS_PRO_SCORE_RANGE_80_89"),
+        "",
         i18n.t(lang, "STATS_PRO_WINRATE_LINE", winrate=winrate_80_text),
         i18n.t(lang, "STATS_PRO_TOTAL_SIGNALS_LINE", count=count_80_89),
         i18n.t(lang, "STATS_PRO_STATUS_SELECTIVE"),
         "",
         i18n.t(lang, "STATS_PRO_DIVIDER"),
-        "",
-        i18n.t(lang, "STATS_PRO_BELOW_THRESHOLD_HEADER"),
-        i18n.t(lang, "STATS_PRO_BELOW_THRESHOLD_SUB"),
         "",
         i18n.t(lang, "STATS_PRO_BELOW_THRESHOLD_SCORE"),
         i18n.t(lang, "STATS_PRO_BELOW_THRESHOLD_LINE1"),
@@ -898,25 +891,11 @@ def build_pro_stats_text(
         i18n.t(lang, "STATS_PRO_DIVIDER"),
         "",
         i18n.t(lang, "STATS_PRO_SUMMARY_HEADER"),
-        i18n.t(lang, "STATS_PRO_SUMMARY_SUB", period=_period_label(period_key, lang)),
         "",
         i18n.t(lang, "STATS_PRO_TP_TOTAL", tp_total=tp_total),
         i18n.t(lang, "STATS_PRO_SL_TOTAL", sl_total=sl_total),
         i18n.t(lang, "STATS_PRO_NEUTRAL_TOTAL", neutral_total=neutral_total),
         i18n.t(lang, "STATS_PRO_IN_PROGRESS_TOTAL", in_progress_total=in_progress_total),
-        "",
-        i18n.t(lang, "STATS_PRO_NEUTRAL_NOTE"),
-        i18n.t(lang, "STATS_PRO_NEUTRAL_NOTE_2"),
-        "",
-        i18n.t(lang, "STATS_PRO_DIVIDER"),
-        "",
-        i18n.t(lang, "STATS_PRO_USAGE_HEADER"),
-        i18n.t(lang, "STATS_PRO_USAGE_PRIMARY"),
-        i18n.t(lang, "STATS_PRO_USAGE_HIGH_RISK"),
-        i18n.t(lang, "STATS_PRO_USAGE_AVOID"),
-        "",
-        i18n.t(lang, "STATS_PRO_RISK_NOTE"),
-        i18n.t(lang, "STATS_PRO_LEVERAGE_NOTE"),
     ]
     return "\n".join(lines)
 
@@ -1020,6 +999,34 @@ def _get_history_page(*, time_window: str, page: int, page_size: int = 12) -> tu
     return page_value, pages, total, [dict(row) for row in rows]
 
 
+def _history_since_ts(time_window: str) -> int | None:
+    now_ts = int(time.time())
+    day_seconds = 24 * 60 * 60
+    if time_window == "1d":
+        return now_ts - day_seconds
+    if time_window == "7d":
+        return now_ts - (7 * day_seconds)
+    if time_window == "30d":
+        return now_ts - (30 * day_seconds)
+    return None
+
+
+def _get_history_summary(*, time_window: str) -> tuple[dict[str, int], dict[str, dict[str, int]], float | None]:
+    since_ts = _history_since_ts(time_window)
+    outcome_counts = get_signal_outcome_counts(user_id=None, since_ts=since_ts, min_score=None)
+    score_bucket_counts = get_signal_score_bucket_counts(user_id=None, since_ts=since_ts, min_score=None)
+    avg_rr_data = get_signal_avg_rr(
+        user_id=None,
+        since_ts=since_ts,
+        min_score=None,
+        score_min=90,
+        score_max=100,
+    )
+    avg_rr_value = float(avg_rr_data.get("avg_rr", 0.0) or 0.0)
+    samples = int(avg_rr_data.get("samples", 0) or 0)
+    return outcome_counts, score_bucket_counts, (avg_rr_value if samples > 0 else None)
+
+
 def _format_history_item(row: dict[str, Any], lang: str) -> str:
     symbol = str(row.get("symbol") or "—")
     side = str(row.get("side") or "—").upper()
@@ -1030,16 +1037,24 @@ def _format_history_item(row: dict[str, Any], lang: str) -> str:
     return f"{icon} | Score {score} | {symbol} {side} | {_format_event_time(created_at)}"
 
 
-def _build_history_text(*, time_window: str, page: int, pages: int, total: int, rows: list[dict], lang: str) -> str:
+def _build_history_text(
+    *,
+    time_window: str,
+    page: int,
+    pages: int,
+    total: int,
+    rows: list[dict],
+    lang: str,
+    pro_header_block: str,
+) -> str:
     period_label = _period_label(time_window, lang)
     lines = [
         i18n.t(lang, "HISTORY_LIST_TITLE", period=period_label),
         i18n.t(lang, "HISTORY_PAGE_INFO", page=page, pages=pages, total=total),
     ]
+    lines.extend(["", pro_header_block])
     if not rows:
-        lines.append("")
-        lines.append(i18n.t(lang, "HISTORY_EMPTY_PERIOD"))
-        return "\n".join(lines)
+        lines.extend(["", i18n.t(lang, "HISTORY_EMPTY_PERIOD")])
     return "\n".join(lines)
 
 
@@ -1081,7 +1096,15 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         return
     lang = _resolve_user_lang(callback.from_user.id)
     page_value, pages, total, rows = _get_history_page(time_window=time_window, page=page)
+    outcome_counts, score_bucket_counts, avg_rr_90_100 = _get_history_summary(time_window=time_window)
     _set_history_context(callback.from_user.id, time_window, page_value)
+    pro_header_block = build_pro_stats_text(
+        period_key=time_window,
+        lang=lang,
+        outcome_counts=outcome_counts,
+        score_bucket_counts=score_bucket_counts,
+        avg_rr_90_100=avg_rr_90_100,
+    )
     text = _build_history_text(
         time_window=time_window,
         page=page_value,
@@ -1089,6 +1112,7 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         total=total,
         rows=rows,
         lang=lang,
+        pro_header_block=pro_header_block,
     )
     markup = _history_nav_kb(
         lang=lang,
@@ -1682,7 +1706,10 @@ async def history_callback(callback: CallbackQuery):
         )
         lang = _resolve_user_lang(user_id)
         with suppress(Exception):
-            await callback.message.answer(i18n.t(lang, "HISTORY_LOAD_ERROR"))
+            await callback.message.edit_text(
+                i18n.t(lang, "HISTORY_LOAD_ERROR"),
+                reply_markup=stats_inline_kb(lang),
+            )
 
 
 @dp.callback_query(F.data.regexp(r"^history:"))
