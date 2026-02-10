@@ -516,6 +516,111 @@ def list_signal_events_by_identity(
         conn.close()
 
 
+
+
+def _history_since_ts(time_window: str, now_ts: int | None = None) -> int | None:
+    now = int(now_ts or time.time())
+    day_seconds = 24 * 60 * 60
+    if time_window == "1d":
+        return now - day_seconds
+    if time_window == "7d":
+        return now - (7 * day_seconds)
+    if time_window == "30d":
+        return now - (30 * day_seconds)
+    return None
+
+
+def get_signal_history(
+    time_window: str,
+    user_id: int | None = None,
+    limit: int = 10,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    since_ts = _history_since_ts(time_window)
+    conn = get_conn()
+    try:
+        clauses = ["(is_test IS NULL OR is_test = 0)"]
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
+        if since_ts is not None:
+            clauses.append("ts >= ?")
+            params.append(int(since_ts))
+        clauses.append(
+            "NOT ("
+            "symbol LIKE 'TEST%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
+        )
+        _append_blocked_symbols_filter(clauses, params)
+        where_clause = " AND ".join(clauses)
+        params.extend([int(limit), int(offset)])
+        cur = conn.execute(
+            f"""
+            SELECT
+                symbol,
+                side,
+                CAST(ROUND(score) AS INTEGER) AS score,
+                COALESCE(result, status) AS outcome,
+                ts AS created_at,
+                poi_low AS entry_low,
+                poi_high AS entry_high,
+                tp1,
+                tp2,
+                sl AS sl_price,
+                timeframe
+            FROM signal_events
+            WHERE {where_clause}
+            ORDER BY ts DESC
+            LIMIT ? OFFSET ?
+            """,
+            params,
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def count_signal_history(
+    time_window: str,
+    user_id: int | None = None,
+    min_score: float | None = None,
+) -> int:
+    since_ts = _history_since_ts(time_window)
+    conn = get_conn()
+    try:
+        clauses = ["(is_test IS NULL OR is_test = 0)"]
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
+        if since_ts is not None:
+            clauses.append("ts >= ?")
+            params.append(int(since_ts))
+        if min_score is not None:
+            clauses.append("score >= ?")
+            params.append(float(min_score))
+        clauses.append(
+            "NOT ("
+            "symbol LIKE 'TEST%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')"
+        )
+        _append_blocked_symbols_filter(clauses, params)
+        where_clause = " AND ".join(clauses)
+        cur = conn.execute(
+            f"SELECT COUNT(*) AS cnt FROM signal_events WHERE {where_clause}",
+            params,
+        )
+        row = cur.fetchone()
+        return int(row["cnt"]) if row is not None else 0
+    finally:
+        conn.close()
 def list_signal_events(
     *,
     user_id: int | None,
