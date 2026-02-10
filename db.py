@@ -627,7 +627,7 @@ def count_signal_history(
 def get_history_winrate_summary(
     time_window: str,
     user_id: int | None = None,
-) -> dict[str, dict[str, int | None]]:
+) -> dict[str, object]:
     since_ts = _history_since_ts(time_window)
     conn = get_conn()
     try:
@@ -654,7 +654,11 @@ def get_history_winrate_summary(
             f"""
             SELECT
                 CAST(ROUND(score) AS INTEGER) AS score,
-                UPPER(TRIM(COALESCE(result, status, ''))) AS outcome
+                UPPER(TRIM(COALESCE(result, status, ''))) AS outcome,
+                poi_low,
+                poi_high,
+                sl,
+                tp1
             FROM signal_events
             WHERE {where_clause}
             """,
@@ -675,21 +679,54 @@ def get_history_winrate_summary(
         "AMBIGUOUS",
     }
 
-    summary: dict[str, dict[str, int | None]] = {
-        "90_100": {"wins": 0, "losses": 0, "winrate": None},
-        "80_89": {"wins": 0, "losses": 0, "winrate": None},
+    summary: dict[str, object] = {
+        "90_100": {"wins": 0, "losses": 0, "closed": 0, "winrate": None, "avg_rr": None},
+        "80_89": {"wins": 0, "losses": 0, "closed": 0, "winrate": None},
+        "totals": {"tp": 0, "sl": 0, "neutral": 0, "in_progress": 0},
     }
+
+    rr_sum_90_100 = 0.0
+    rr_count_90_100 = 0
 
     for row in rows:
         score = int(row["score"] or 0)
+        outcome = str(row["outcome"] or "")
+        totals = summary["totals"]
+        if isinstance(totals, dict):
+            if outcome in win_statuses:
+                totals["tp"] = int(totals.get("tp", 0) or 0) + 1
+            elif outcome in loss_statuses:
+                totals["sl"] = int(totals.get("sl", 0) or 0) + 1
+            elif outcome in {"NEUTRAL", "NO_FILL", "NF", "EXP", "EXPIRED", "AMBIGUOUS"}:
+                totals["neutral"] = int(totals.get("neutral", 0) or 0) + 1
+            else:
+                totals["in_progress"] = int(totals.get("in_progress", 0) or 0) + 1
+
         if 90 <= score <= 100:
             bucket = summary["90_100"]
+            if isinstance(bucket, dict):
+                try:
+                    poi_low = float(row["poi_low"])
+                    poi_high = float(row["poi_high"])
+                    sl = float(row["sl"])
+                    tp1 = float(row["tp1"])
+                    entry_mid = (poi_low + poi_high) / 2.0
+                    risk = abs(entry_mid - sl)
+                    reward = abs(tp1 - entry_mid)
+                    rr = (reward / risk) if risk > 0 and reward > 0 else None
+                except (TypeError, ValueError):
+                    rr = None
+                if rr is not None:
+                    rr_sum_90_100 += float(rr)
+                    rr_count_90_100 += 1
         elif 80 <= score <= 89:
             bucket = summary["80_89"]
         else:
             continue
 
-        outcome = str(row["outcome"] or "")
+        if not isinstance(bucket, dict):
+            continue
+
         if outcome not in closed_statuses:
             continue
         if outcome in win_statuses:
@@ -697,11 +734,19 @@ def get_history_winrate_summary(
         elif outcome in loss_statuses:
             bucket["losses"] = int(bucket["losses"] or 0) + 1
 
-    for bucket in summary.values():
+    for key in ("90_100", "80_89"):
+        bucket = summary.get(key)
+        if not isinstance(bucket, dict):
+            continue
         wins = int(bucket["wins"] or 0)
         losses = int(bucket["losses"] or 0)
         total = wins + losses
+        bucket["closed"] = total
         bucket["winrate"] = round((wins / total) * 100) if total else None
+
+    bucket_90 = summary.get("90_100")
+    if isinstance(bucket_90, dict):
+        bucket_90["avg_rr"] = (rr_sum_90_100 / rr_count_90_100) if rr_count_90_100 else None
 
     return summary
 
