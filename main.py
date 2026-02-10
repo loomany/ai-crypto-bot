@@ -1016,7 +1016,7 @@ def _history_status_label(status_key: str, lang: str) -> str:
     if status_key == "sl":
         return "❌ SL"
     if status_key == "neutral":
-        return "⚪️ Без входа" if lang == "ru" else "⏳ Neutral"
+        return "⏳ Neutral"
     return "🕒 В процессе" if lang == "ru" else "🕒 In progress"
 
 
@@ -1084,15 +1084,8 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
                 "📈 Итоги",
                 f"🟢 TP: {tp_total}",
                 f"🔴 SL: {sl_total}",
-                f"⚪️ Без входа: {neutral_total}",
+                f"⏳ Neutral: {neutral_total}",
                 f"🕒 В процессе: {in_progress_total}",
-                "",
-                "━━━━━━━━━━━━━━━━",
-                "ℹ️ Пояснение",
-                "━━━━━━━━━━━━━━━━",
-                "• Score ≥ 80 — расчёт winrate и RR",
-                "• Score < 80 — анализ рынка",
-                "• «Без входа» — не дошли до подтверждения/входа, либо сценарий отменился",
             ]
         )
 
