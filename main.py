@@ -103,6 +103,7 @@ from db import (
     list_signal_events,
     get_signal_history,
     count_signal_history,
+    get_history_winrate_summary,
     list_open_signal_events,
     count_signal_events,
     get_signal_outcome_counts,
@@ -961,12 +962,19 @@ def _history_state_key(user_id: int) -> str:
     return f"history_ctx:{user_id}"
 
 
-def _set_history_context(user_id: int, time_window: str, page: int) -> None:
-    payload = json.dumps({"window": time_window, "page": page})
-    set_state(_history_state_key(user_id), payload)
+def _set_history_context(
+    user_id: int,
+    time_window: str,
+    page: int,
+    winrate_summary: dict[str, dict[str, int | None]] | None = None,
+) -> None:
+    payload: dict[str, Any] = {"window": time_window, "page": page}
+    if winrate_summary is not None:
+        payload["winrate_summary"] = winrate_summary
+    set_state(_history_state_key(user_id), json.dumps(payload))
 
 
-def _get_history_context(user_id: int) -> tuple[str, int] | None:
+def _get_history_context(user_id: int) -> tuple[str, int, dict[str, dict[str, int | None]] | None] | None:
     payload = get_state(_history_state_key(user_id))
     if not payload:
         return None
@@ -982,7 +990,13 @@ def _get_history_context(user_id: int) -> tuple[str, int] | None:
         page_value = int(page)
     except (TypeError, ValueError):
         return None
-    return time_window, max(1, page_value)
+
+    raw_summary = parsed.get("winrate_summary")
+    winrate_summary: dict[str, dict[str, int | None]] | None = None
+    if isinstance(raw_summary, dict):
+        winrate_summary = raw_summary
+
+    return time_window, max(1, page_value), winrate_summary
 
 
 def _normalize_history_status(raw_status: str | None) -> str:
@@ -1030,11 +1044,47 @@ def _format_history_item(row: dict[str, Any], lang: str) -> str:
     return f"{icon} | Score {score} | {symbol} {side} | {_format_event_time(created_at)}"
 
 
-def _build_history_text(*, time_window: str, page: int, pages: int, total: int, rows: list[dict], lang: str) -> str:
+def _format_history_winrate_block(lang: str, winrate_summary: dict[str, dict[str, int | None]]) -> str:
+    lines = [
+        i18n.t(lang, "HISTORY_WINRATE_TITLE"),
+        "",
+    ]
+
+    for bucket_key, label_key in (
+        ("90_100", "HISTORY_WINRATE_BUCKET_90_100"),
+        ("80_89", "HISTORY_WINRATE_BUCKET_80_89"),
+    ):
+        bucket = winrate_summary.get(bucket_key, {})
+        wins = _safe_int(bucket.get("wins"), 0)
+        losses = _safe_int(bucket.get("losses"), 0)
+        winrate = bucket.get("winrate")
+
+        lines.append(i18n.t(lang, label_key))
+        if winrate is None:
+            lines.append(i18n.t(lang, "HISTORY_WINRATE_NO_DATA"))
+        else:
+            lines.append(f"✅ {wins} / ❌ {losses} ({int(winrate)}%)")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
+def _build_history_text(
+    *,
+    time_window: str,
+    page: int,
+    pages: int,
+    total: int,
+    rows: list[dict],
+    lang: str,
+    winrate_summary: dict[str, dict[str, int | None]],
+) -> str:
     period_label = _period_label(time_window, lang)
     lines = [
         i18n.t(lang, "HISTORY_LIST_TITLE", period=period_label),
         i18n.t(lang, "HISTORY_PAGE_INFO", page=page, pages=pages, total=total),
+        "",
+        _format_history_winrate_block(lang, winrate_summary),
     ]
     if not rows:
         lines.append("")
@@ -1081,7 +1131,19 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         return
     lang = _resolve_user_lang(callback.from_user.id)
     page_value, pages, total, rows = _get_history_page(time_window=time_window, page=page)
-    _set_history_context(callback.from_user.id, time_window, page_value)
+
+    context = _get_history_context(callback.from_user.id)
+    if context and context[0] == time_window and context[2] is not None:
+        winrate_summary = context[2]
+    else:
+        winrate_summary = get_history_winrate_summary(time_window=time_window, user_id=None)
+
+    _set_history_context(
+        callback.from_user.id,
+        time_window,
+        page_value,
+        winrate_summary=winrate_summary,
+    )
     text = _build_history_text(
         time_window=time_window,
         page=page_value,
@@ -1089,6 +1151,7 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         total=total,
         rows=rows,
         lang=lang,
+        winrate_summary=winrate_summary,
     )
     markup = _history_nav_kb(
         lang=lang,
@@ -1817,7 +1880,7 @@ async def sig_open(callback: CallbackQuery):
         back_callback = "history:all:page=1"
         context = _get_history_context(callback.from_user.id)
         if context:
-            stored_window, page = context
+            stored_window, page, _ = context
             back_callback = f"history:{stored_window}:page={max(1, page)}"
         detail_text = _format_archive_detail(event, lang)
         detail_markup = _archive_detail_kb(
@@ -1890,7 +1953,7 @@ async def sig_refresh(callback: CallbackQuery):
         if callback.message.text and callback.message.text.startswith("📊"):
             context = _get_history_context(callback.from_user.id)
             if context:
-                time_window, page = context
+                time_window, page, _ = context
                 page, pages, events, outcome_counts, score_bucket_counts, avg_rr_90_100 = _get_history_page(
                     time_window=time_window,
                     page=page,
@@ -1926,7 +1989,7 @@ async def sig_refresh(callback: CallbackQuery):
         back_callback = "hist_back"
         context = _get_history_context(callback.from_user.id)
         if context:
-            time_window, page = context
+            time_window, page, _ = context
             back_callback = f"history:{time_window}:page={max(1, page + 1)}"
         with suppress(Exception):
             await callback.message.edit_text(
