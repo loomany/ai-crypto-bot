@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -36,7 +37,9 @@ def _parse_kline(kline: list[Any]) -> Optional[Dict[str, float]]:
         return None
 
 
-def _entry_filled(candle: Dict[str, float], entry_from: float, entry_to: float) -> bool:
+def _entry_filled(candle: Dict[str, float], entry_from: float, entry_to: float, mode: str = "wick") -> bool:
+    if mode == "close":
+        return entry_from <= candle["close"] <= entry_to
     return candle["low"] <= entry_to and candle["high"] >= entry_from
 
 
@@ -62,6 +65,18 @@ def _check_hits(
 
 
 def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) -> Optional[dict]:
+    default_mode = os.getenv("AUDIT_ENTRY_MODE", "wick").lower()
+    elite_mode = os.getenv("AUDIT_ELITE_ENTRY_MODE", "close").lower()
+    try:
+        elite_gate = float(os.getenv("AUDIT_ELITE_SCORE_GATE", "90"))
+    except (TypeError, ValueError):
+        elite_gate = 90.0
+
+    score = float(signal.get("score", 0.0) or 0.0)
+    use_mode = elite_mode if score >= elite_gate else default_mode
+    if use_mode not in ("wick", "close"):
+        use_mode = "wick"
+
     entry_from = float(signal["entry_from"])
     entry_to = float(signal["entry_to"])
     direction = signal["direction"]
@@ -83,7 +98,7 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
 
     for candle in candles:
         if filled_at is None:
-            if _entry_filled(candle, entry_from, entry_to):
+            if _entry_filled(candle, entry_from, entry_to, use_mode):
                 filled_at = int(candle["open_time"] / 1000)
             else:
                 continue
