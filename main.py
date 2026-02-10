@@ -161,6 +161,7 @@ from keyboards import (
     stats_inline_kb,
 )
 from settings import SIGNAL_TTL_SECONDS
+from alt_chop_filter import compute_alt_chop_state
 
 logger = logging.getLogger(__name__)
 DEFAULT_LANG = "ru"
@@ -623,6 +624,63 @@ AI_PRIORITY_N = int(os.getenv("AI_PRIORITY_N", "15"))
 AI_UNIVERSE_TOP_N = int(os.getenv("AI_UNIVERSE_TOP_N", "250"))
 AI_DEEP_TOP_K = int(os.getenv("AI_DEEP_TOP_K", os.getenv("AI_MAX_DEEP_PER_CYCLE", "3")))
 AI_EXCLUDE_SYMBOLS_DEFAULT = "BTCUSDT"
+ALT_CHOP_FILTER_ENABLED_ENV = os.getenv("ALT_CHOP_FILTER_ENABLED", "0")
+ALT_CHOP_FILTER_MODE_ENV = str(os.getenv("ALT_CHOP_FILTER_MODE", "log") or "log").strip().lower()
+ALT_CHOP_LOOKBACK_SYMBOLS = int(os.getenv("ALT_CHOP_LOOKBACK_SYMBOLS", "20"))
+ALT_CHOP_SAMPLE_MAX = int(os.getenv("ALT_CHOP_SAMPLE_MAX", "12"))
+ALT_CHOP_TF_ENTRY = str(os.getenv("ALT_CHOP_TF_ENTRY", "15m") or "15m").strip().lower()
+ALT_CHOP_TF_CHECK = str(os.getenv("ALT_CHOP_TF_CHECK", "1h") or "1h").strip().lower()
+ALT_CHOP_ATR_TF = str(os.getenv("ALT_CHOP_ATR_TF", "15m") or "15m").strip().lower()
+ALT_CHOP_ATR_PERIOD = int(os.getenv("ALT_CHOP_ATR_PERIOD", "14"))
+ALT_CHOP_FT_MEDIAN_MAX = float(os.getenv("ALT_CHOP_FT_MEDIAN_MAX", "0.70"))
+ALT_CHOP_MIN_VALID = int(os.getenv("ALT_CHOP_MIN_VALID", "6"))
+ALT_CHOP_APPLY_TO_SETUPS = str(os.getenv("ALT_CHOP_APPLY_TO_SETUPS", "trend") or "trend").strip().lower()
+ALT_CHOP_STRICT_CONFIRM_N = int(os.getenv("ALT_CHOP_STRICT_CONFIRM_N", "2"))
+SOFT_BTC_STRICT_CONFIRM_N = int(os.getenv("SOFT_BTC_STRICT_CONFIRM_N", os.getenv("SOFT_BTC_STRICT_CONFIRM_CLOSES", "2")) or "2")
+ALT_CHOP_MODE_CYCLE = ("off", "log", "soft", "hard")
+ALT_CHOP_MODE_STATE_KEY = "alt_chop_filter_mode"
+
+
+def _alt_chop_mode_from_env() -> str:
+    if str(ALT_CHOP_FILTER_ENABLED_ENV or "0").strip().lower() not in {"1", "true", "yes", "y"}:
+        return "off"
+    mode = ALT_CHOP_FILTER_MODE_ENV
+    return mode if mode in {"log", "soft", "hard"} else "log"
+
+
+def get_alt_chop_runtime_mode() -> str:
+    stored = str(get_state(ALT_CHOP_MODE_STATE_KEY, "") or "").strip().lower()
+    if stored in ALT_CHOP_MODE_CYCLE:
+        return stored
+    return _alt_chop_mode_from_env()
+
+
+def _alt_chop_mode_source() -> str:
+    stored = str(get_state(ALT_CHOP_MODE_STATE_KEY, "") or "").strip().lower()
+    return "admin" if stored in ALT_CHOP_MODE_CYCLE else "env"
+
+
+def _alt_chop_effective_state() -> dict[str, Any]:
+    mode = get_alt_chop_runtime_mode()
+    enabled = 0 if mode == "off" else 1
+    return {
+        "enabled": enabled,
+        "mode": mode,
+        "apply_to": ALT_CHOP_APPLY_TO_SETUPS,
+        "runtime_mode": mode,
+        "source": _alt_chop_mode_source(),
+    }
+
+
+def _next_alt_chop_mode(mode: str) -> str:
+    mode = mode if mode in ALT_CHOP_MODE_CYCLE else "off"
+    idx = ALT_CHOP_MODE_CYCLE.index(mode)
+    return ALT_CHOP_MODE_CYCLE[(idx + 1) % len(ALT_CHOP_MODE_CYCLE)]
+
+
+def _alt_chop_toggle_label(lang: str) -> str:
+    mode = get_alt_chop_runtime_mode()
+    return i18n.t(lang, "ALT_CHOP_TOGGLE_LABEL", mode=mode.upper())
 
 
 def _get_ai_excluded_symbols() -> set[str]:
@@ -3563,6 +3621,45 @@ def _format_filters_section(st, lang: str) -> str:
             )
         )
     if st and isinstance(st.state, dict):
+        alt_eff = _alt_chop_effective_state()
+        details.append(
+            i18n.t(
+                lang,
+                "DIAG_ALT_CHOP_MODE_LINE",
+                enabled=alt_eff["enabled"],
+                mode=alt_eff["mode"],
+                apply_to=alt_eff["apply_to"],
+                source=alt_eff.get("source", "env"),
+            )
+        )
+        details.append(
+            i18n.t(
+                lang,
+                "DIAG_ALT_CHOP_STATE_LINE",
+                alt_chop=st.state.get("alt_chop", False),
+                ft_median=st.state.get("alt_chop_ft_median", 0.0),
+                valid=st.state.get("alt_chop_ft_values_count", 0),
+                min_required=st.state.get("alt_chop_min_valid", ALT_CHOP_MIN_VALID),
+                threshold=ALT_CHOP_FT_MEDIAN_MAX,
+                samples=st.state.get("alt_chop_sample_symbols_count", 0),
+            )
+        )
+        details.append(
+            i18n.t(
+                lang,
+                "DIAG_ALT_CHOP_SKIPS_LINE",
+                total=int(st.state.get("skipped_by_alt_chop_total", 0) or 0),
+                reasons=_format_reason_counts(st.state.get("skipped_by_alt_chop_reasons", {})),
+            )
+        )
+        details.append(
+            i18n.t(
+                lang,
+                "DIAG_ALT_CHOP_SOFT_LINE",
+                count=int(st.state.get("alt_chop_soft_strict_total", 0) or 0),
+                strict_n=max(2, ALT_CHOP_STRICT_CONFIRM_N),
+            )
+        )
         gate_enabled = str(os.getenv("SOFT_BTC_GATE_ENABLED", "0") or "0").strip().lower() in {"1", "true", "yes", "y"}
         details.append(f"BTC soft gate: {'enabled' if gate_enabled else 'disabled'}")
         btc_regime = st.state.get("btc_regime")
@@ -4418,9 +4515,14 @@ def _users_list_payload(
     prefix: str | None = None,
 ) -> tuple[str, InlineKeyboardMarkup | None]:
     rows = _load_users()
+    toggle_btn = InlineKeyboardButton(
+        text=_alt_chop_toggle_label(lang),
+        callback_data="admin_alt_chop_toggle",
+    )
     if not rows:
         markup = InlineKeyboardMarkup(
             inline_keyboard=[
+                [toggle_btn],
                 [
                     InlineKeyboardButton(
                         text=i18n.t(lang, "nav_back_label"),
@@ -4432,7 +4534,9 @@ def _users_list_payload(
         return (i18n.t(lang, "USER_LIST_EMPTY"), markup)
     header = i18n.t(lang, "USER_LIST_HEADER")
     text = f"{prefix}\n\n{header}" if prefix else header
-    return text, _build_users_list_markup(rows, lang)
+    markup = _build_users_list_markup(rows, lang)
+    markup.inline_keyboard.insert(0, [toggle_btn])
+    return text, markup
 
 
 def _load_user_row(user_id: int) -> sqlite3.Row | None:
@@ -4543,6 +4647,21 @@ async def users_list_callback(callback: CallbackQuery):
     lang = get_user_lang(callback.from_user.id) if callback.from_user else None
     text, markup = _users_list_payload(lang or "ru")
     await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=markup)
+
+
+@dp.callback_query(F.data == "admin_alt_chop_toggle")
+async def admin_alt_chop_toggle(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
+        return
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    lang = lang or "ru"
+    current = get_alt_chop_runtime_mode()
+    nxt = _next_alt_chop_mode(current)
+    set_state(ALT_CHOP_MODE_STATE_KEY, nxt)
+    await callback.answer(i18n.t(lang, "ALT_CHOP_TOGGLE_ALERT", mode=nxt.upper()))
+    text, markup = _users_list_payload(lang)
     if callback.message:
         await callback.message.edit_text(text, reply_markup=markup)
 
@@ -5216,7 +5335,23 @@ async def send_signal_to_all(
         or signal_dict.get("breakdown")
         or []
     )
-    reason_json = json.dumps(reason, ensure_ascii=False) if reason is not None else None
+    reason_payload = dict(reason) if isinstance(reason, dict) else ({"raw": reason} if reason is not None else {})
+    if "confirm_strict" in signal_dict:
+        reason_payload["confirm_strict"] = bool(signal_dict.get("confirm_strict", False))
+    if "confirm_count" in signal_dict:
+        reason_payload["confirm_count"] = int(signal_dict.get("confirm_count", 0) or 0)
+    if "confirm_strict_n" in signal_dict:
+        reason_payload["confirm_strict_n"] = int(signal_dict.get("confirm_strict_n", 0) or 0)
+    if signal_dict.get("gate_reason"):
+        reason_payload["gate_reason"] = str(signal_dict.get("gate_reason"))
+    if signal_dict.get("gate_reason_btc"):
+        reason_payload["gate_reason_btc"] = str(signal_dict.get("gate_reason_btc"))
+    if signal_dict.get("gate_reason_alt_chop"):
+        reason_payload["gate_reason_alt_chop"] = str(signal_dict.get("gate_reason_alt_chop"))
+    gate_reasons = signal_dict.get("gate_reasons")
+    if isinstance(gate_reasons, list) and gate_reasons:
+        reason_payload["gate_reasons"] = [str(item) for item in gate_reasons]
+    reason_json = json.dumps(reason_payload, ensure_ascii=False) if reason_payload else None
     breakdown_json = json.dumps(breakdown, ensure_ascii=False) if breakdown is not None else None
     entry_zone = signal_dict.get("entry_zone") or (0.0, 0.0)
     try:
@@ -5549,6 +5684,131 @@ def _select_signals_for_cycle(signals: List[Dict[str, Any]]) -> List[Dict[str, A
             btc_count += 1
 
     return selected
+
+
+def _alt_chop_applies(setup_type: str) -> bool:
+    target = ALT_CHOP_APPLY_TO_SETUPS
+    if target == "all":
+        return True
+    if target == "meanrev":
+        return setup_type == "meanrev"
+    return setup_type == "trend"
+
+
+def _apply_alt_chop_gate(
+    signal: Dict[str, Any],
+    module_state: Any,
+    *,
+    alt_chop_active: bool,
+    runtime_mode: str,
+) -> tuple[bool, str | None, int | None]:
+    if runtime_mode == "off":
+        return True, None, None
+    if runtime_mode == "log":
+        return True, "log_alt_chop_only", None
+    if not alt_chop_active:
+        return True, None, None
+
+    setup_type = str(signal.get("setup_type") or "meanrev").lower()
+    if not _alt_chop_applies(setup_type):
+        return True, None, None
+
+    if runtime_mode == "soft":
+        if module_state and isinstance(module_state.state, dict):
+            module_state.state["alt_chop_soft_strict_total"] = int(
+                module_state.state.get("alt_chop_soft_strict_total", 0) or 0
+            ) + 1
+        return True, "strict_alt_chop_soft", max(2, ALT_CHOP_STRICT_CONFIRM_N)
+
+    if module_state and isinstance(module_state.state, dict):
+        module_state.state["skipped_by_alt_chop_total"] = int(
+            module_state.state.get("skipped_by_alt_chop_total", 0) or 0
+        ) + 1
+        reasons = module_state.state.get("skipped_by_alt_chop_reasons")
+        if not isinstance(reasons, dict):
+            reasons = {}
+        reasons["skip_alt_chop_hard"] = int(reasons.get("skip_alt_chop_hard", 0) or 0) + 1
+        module_state.state["skipped_by_alt_chop_reasons"] = reasons
+    return False, "skip_alt_chop_hard", None
+
+
+def _apply_btc_gate_state(
+    signal: Dict[str, Any],
+    btc_context: Dict[str, Any] | None,
+    module_state: Any,
+) -> tuple[bool, str | None, int | None]:
+    allow_send, skip_reason, confirm_strict = apply_btc_soft_gate(signal, btc_context)
+    if not allow_send:
+        if module_state and isinstance(module_state.state, dict):
+            module_state.state["skipped_by_btc_gate_total"] = int(
+                module_state.state.get("skipped_by_btc_gate_total", 0) or 0
+            ) + 1
+            reasons = module_state.state.get("skipped_by_btc_gate_reasons")
+            if not isinstance(reasons, dict):
+                reasons = {}
+            reason_key = skip_reason or "skip_btc_unknown"
+            reasons[reason_key] = int(reasons.get(reason_key, 0) or 0) + 1
+            module_state.state["skipped_by_btc_gate_reasons"] = reasons
+        return False, (skip_reason or "skip_btc_unknown"), None
+    if confirm_strict:
+        return True, "strict_btc_soft", max(2, SOFT_BTC_STRICT_CONFIRM_N)
+    return True, None, None
+
+
+def _apply_gate_stack(
+    signal: Dict[str, Any],
+    *,
+    btc_context: Dict[str, Any] | None,
+    module_state: Any,
+    alt_chop_active: bool,
+    runtime_mode: str,
+) -> tuple[bool, list[str]]:
+    signal.pop("confirm_strict", None)
+    signal.pop("confirm_strict_n", None)
+    signal.pop("gate_reason", None)
+    signal.pop("gate_reason_btc", None)
+    signal.pop("gate_reason_alt_chop", None)
+    signal.pop("gate_reasons", None)
+
+    reasons: list[str] = []
+    strict_n = 0
+
+    allow_btc, btc_reason, btc_strict_n = _apply_btc_gate_state(signal, btc_context, module_state)
+    if btc_reason:
+        signal["gate_reason_btc"] = btc_reason
+        reasons.append(btc_reason)
+    if not allow_btc:
+        signal["gate_reasons"] = list(reasons)
+        return False, reasons
+    if btc_strict_n:
+        strict_n = max(strict_n, int(btc_strict_n))
+
+    allow_alt, alt_reason, alt_strict_n = _apply_alt_chop_gate(
+        signal,
+        module_state,
+        alt_chop_active=alt_chop_active,
+        runtime_mode=runtime_mode,
+    )
+    if alt_reason:
+        signal["gate_reason_alt_chop"] = alt_reason
+        reasons.append(alt_reason)
+    if not allow_alt:
+        signal["gate_reasons"] = list(reasons)
+        return False, reasons
+    if alt_strict_n:
+        strict_n = max(strict_n, int(alt_strict_n))
+
+    if strict_n >= 2:
+        signal["confirm_strict"] = True
+        signal["confirm_strict_n"] = strict_n
+    else:
+        signal.pop("confirm_strict", None)
+        signal.pop("confirm_strict_n", None)
+
+    if reasons:
+        signal["gate_reason"] = reasons[-1]
+        signal["gate_reasons"] = list(reasons)
+    return True, reasons
 
 
 async def _get_ai_universe() -> List[str]:
@@ -5960,60 +6220,20 @@ async def ai_scan_once() -> None:
             module_state.state["btc_regime_reasons"] = btc_context.get("reasons", [])
             module_state.state.setdefault("skipped_by_btc_gate_total", 0)
             module_state.state.setdefault("skipped_by_btc_gate_reasons", {})
+            module_state.state.setdefault("skipped_by_alt_chop_total", 0)
+            module_state.state.setdefault("skipped_by_alt_chop_reasons", {})
+            module_state.state.setdefault("alt_chop_soft_strict_total", 0)
+            module_state.state.update(_alt_chop_effective_state())
         reset_binance_metrics("ai_signals")
         reset_ticker_request_count("ai_signals")
         mark_tick("ai_signals", extra="сканирую рынок...")
 
         retry_sent = 0
+        runtime_mode = get_alt_chop_runtime_mode()
         with binance_request_context("ai_signals"):
             retry_signals = await process_confirm_retry_queue(
                 diag_state=module_state.state if module_state else None
             )
-        for signal in retry_signals:
-            if time.time() - start > BUDGET:
-                print("[AI] budget exceeded during confirm retry sends")
-                break
-            allow_send, skip_reason, confirm_strict = apply_btc_soft_gate(signal, btc_context)
-            if not allow_send:
-                if module_state and isinstance(module_state.state, dict):
-                    module_state.state["skipped_by_btc_gate_total"] = int(
-                        module_state.state.get("skipped_by_btc_gate_total", 0) or 0
-                    ) + 1
-                    reasons = module_state.state.get("skipped_by_btc_gate_reasons")
-                    if not isinstance(reasons, dict):
-                        reasons = {}
-                    reason_key = skip_reason or "skip_btc_unknown"
-                    reasons[reason_key] = int(reasons.get(reason_key, 0) or 0) + 1
-                    module_state.state["skipped_by_btc_gate_reasons"] = reasons
-                print(
-                    f"[ai_signals] BTC gate skip(retry) {signal.get('symbol', '')} "
-                    f"{signal.get('direction', '')} score={signal.get('score', 0)} reason={skip_reason}"
-                )
-                continue
-            if confirm_strict:
-                signal["confirm_strict"] = True
-            else:
-                signal.pop("confirm_strict", None)
-            try:
-                update_current_symbol("ai_signals", signal.get("symbol", ""))
-                print(
-                    "[ai_signals] RETRY SEND "
-                    f"{signal.get('symbol', '')} {signal.get('direction', '')} "
-                    f"score={signal.get('score', 0)} confirm_strict={bool(signal.get('confirm_strict', False))}"
-                )
-                await send_signal_to_all(signal)
-                meta = signal.get("meta") if isinstance(signal, dict) else None
-                setup_id = meta.get("setup_id") if isinstance(meta, dict) else None
-                if setup_id:
-                    await register_confirm_retry_sent(setup_id)
-                retry_sent += 1
-            except Exception:
-                logger.exception("[ai_signals] retry send failed for symbol=%s", signal.get("symbol", "-"))
-                if module_state:
-                    fails = module_state.state.get("fails") if isinstance(module_state.state.get("fails"), dict) else {}
-                    fails["fail_retry_send"] = int(fails.get("fail_retry_send", 0) or 0) + 1
-                    module_state.state["fails"] = fails
-                continue
 
         with binance_request_context("ai_signals"):
             symbols = await _get_ai_universe()
@@ -6159,8 +6379,89 @@ async def ai_scan_once() -> None:
                 module_state.near_miss = prev_near_miss
                 module_state.last_error = str(exc)
                 logger.exception("AI signals error")
+        alt_chop_active = False
+        if module_state and isinstance(module_state.state, dict):
+            module_state.state.update(_alt_chop_effective_state())
+        try:
+            shortlist = []
+            if isinstance(stats, dict):
+                shortlist = [str(sym).upper() for sym in (stats.get("prescore_shortlist") or []) if sym]
+            shortlist = shortlist[: max(0, ALT_CHOP_LOOKBACK_SYMBOLS)]
+            sample_symbols = shortlist[: max(0, ALT_CHOP_SAMPLE_MAX)]
+            entry_refs = {}
+            for sig in signals:
+                symbol = str(sig.get("symbol") or "").upper()
+                if not symbol:
+                    continue
+                zone = sig.get("entry_zone") or (0.0, 0.0)
+                try:
+                    entry_refs[symbol] = (float(zone[0]) + float(zone[1])) / 2.0
+                except Exception:
+                    continue
+            chop_diag = await compute_alt_chop_state(
+                sample_symbols,
+                tf_check=ALT_CHOP_TF_CHECK,
+                atr_tf=ALT_CHOP_ATR_TF,
+                atr_period=ALT_CHOP_ATR_PERIOD,
+                ft_median_max=ALT_CHOP_FT_MEDIAN_MAX,
+                min_valid=ALT_CHOP_MIN_VALID,
+                entry_refs=entry_refs,
+                sample_max=ALT_CHOP_SAMPLE_MAX,
+            )
+            alt_chop_active = bool(chop_diag.get("alt_chop", False))
+            if module_state and isinstance(module_state.state, dict):
+                module_state.state["alt_chop"] = alt_chop_active
+                module_state.state["alt_chop_ft_median"] = chop_diag.get("ft_median", 0.0)
+                module_state.state["alt_chop_ft_values_count"] = chop_diag.get("ft_values_count", 0)
+                module_state.state["alt_chop_sample_symbols_count"] = chop_diag.get("sample_symbols_count", 0)
+                module_state.state["alt_chop_min_valid"] = ALT_CHOP_MIN_VALID
+                module_state.state["alt_chop_samples"] = chop_diag.get("samples", [])
+        except Exception:
+            logger.exception("[ai_signals] alt_chop compute failed")
+
         deep_scans_done = stats.get("deep_scans_done", 0) if isinstance(stats, dict) else 0
-        sent_count = retry_sent
+        sent_count = 0
+
+        for signal in retry_signals:
+            if time.time() - start > BUDGET:
+                print("[AI] budget exceeded during confirm retry sends")
+                break
+            allow_send, gate_reasons = _apply_gate_stack(
+                signal,
+                btc_context=btc_context,
+                module_state=module_state,
+                alt_chop_active=alt_chop_active,
+                runtime_mode=runtime_mode,
+            )
+            if not allow_send:
+                print(
+                    f"[ai_signals] gate skip(retry) {signal.get('symbol', '')} "
+                    f"{signal.get('direction', '')} score={signal.get('score', 0)} reasons={gate_reasons}"
+                )
+                continue
+            try:
+                update_current_symbol("ai_signals", signal.get("symbol", ""))
+                print(
+                    "[ai_signals] RETRY SEND "
+                    f"{signal.get('symbol', '')} {signal.get('direction', '')} "
+                    f"score={signal.get('score', 0)} confirm_strict={bool(signal.get('confirm_strict', False))} "
+                    f"strict_n={int(signal.get('confirm_strict_n', 0) or 0)} reasons={gate_reasons}"
+                )
+                await send_signal_to_all(signal)
+                meta = signal.get("meta") if isinstance(signal, dict) else None
+                setup_id = meta.get("setup_id") if isinstance(meta, dict) else None
+                if setup_id:
+                    await register_confirm_retry_sent(setup_id)
+                retry_sent += 1
+                sent_count += 1
+            except Exception:
+                logger.exception("[ai_signals] retry send failed for symbol=%s", signal.get("symbol", "-"))
+                if module_state:
+                    fails = module_state.state.get("fails") if isinstance(module_state.state.get("fails"), dict) else {}
+                    fails["fail_retry_send"] = int(fails.get("fail_retry_send", 0) or 0) + 1
+                    module_state.state["fails"] = fails
+                continue
+
         for signal in _select_signals_for_cycle(signals):
             if time.time() - start > BUDGET:
                 print("[AI] budget exceeded, stopping early")
@@ -6168,30 +6469,26 @@ async def ai_scan_once() -> None:
             score = signal.get("score", 0)
             if score < FREE_MIN_SCORE:
                 continue
-            allow_send, skip_reason, confirm_strict = apply_btc_soft_gate(signal, btc_context)
+            allow_send, gate_reasons = _apply_gate_stack(
+                signal,
+                btc_context=btc_context,
+                module_state=module_state,
+                alt_chop_active=alt_chop_active,
+                runtime_mode=runtime_mode,
+            )
             if not allow_send:
-                if module_state and isinstance(module_state.state, dict):
-                    module_state.state["skipped_by_btc_gate_total"] = int(
-                        module_state.state.get("skipped_by_btc_gate_total", 0) or 0
-                    ) + 1
-                    reasons = module_state.state.get("skipped_by_btc_gate_reasons")
-                    if not isinstance(reasons, dict):
-                        reasons = {}
-                    reason_key = skip_reason or "skip_btc_unknown"
-                    reasons[reason_key] = int(reasons.get(reason_key, 0) or 0) + 1
-                    module_state.state["skipped_by_btc_gate_reasons"] = reasons
                 print(
-                    f"[ai_signals] BTC gate skip {signal.get('symbol', '')} "
-                    f"{signal.get('direction', '')} score={score} reason={skip_reason}"
+                    f"[ai_signals] gate skip {signal.get('symbol', '')} "
+                    f"{signal.get('direction', '')} score={score} reasons={gate_reasons}"
                 )
                 continue
-            if confirm_strict:
-                signal["confirm_strict"] = True
-            else:
-                signal.pop("confirm_strict", None)
             try:
                 update_current_symbol("ai_signals", signal.get("symbol", ""))
-                print(f"[ai_signals] DIRECT SEND {signal['symbol']} {signal['direction']} score={score} confirm_strict={bool(signal.get('confirm_strict', False))}")
+                print(
+                    f"[ai_signals] DIRECT SEND {signal['symbol']} {signal['direction']} score={score} "
+                    f"confirm_strict={bool(signal.get('confirm_strict', False))} "
+                    f"strict_n={int(signal.get('confirm_strict_n', 0) or 0)} reasons={gate_reasons}"
+                )
                 await send_signal_to_all(signal)
                 meta = signal.get("meta") if isinstance(signal, dict) else None
                 setup_id = meta.get("setup_id") if isinstance(meta, dict) else None
