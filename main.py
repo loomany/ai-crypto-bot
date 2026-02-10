@@ -1070,37 +1070,28 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
     neutral_total = _safe_int(totals.get("neutral"), 0) if isinstance(totals, dict) else 0
     in_progress_total = _safe_int(totals.get("in_progress"), 0) if isinstance(totals, dict) else 0
 
-    if lang == "ru":
-        return "\n".join(
-            [
-                "🔹 Score 90–100  (топ-сигналы)",
-                f"• Winrate: {winrate_90}%",
-                f"• Avg RR: {avg_rr}",
-                f"• Сделок: {closed_90}",
-                "",
-                "🔸 Score 80–89   (повышенный риск)",
-                f"• Winrate: {winrate_80}%",
-                f"• Сделок: {closed_80}",
-                "",
-                "📈 Итоги",
-                f"🟢 TP: {tp_total}",
-                f"🔴 SL: {sl_total}",
-                f"⏳ {i18n.t(lang, 'totals_no_entry_label')}: {neutral_total}",
-                f"🕒 В процессе: {in_progress_total}",
-            ]
-        )
-
     return "\n".join(
         [
-            "📊 Winrate by Score",
-            f"• 90–100: {winrate_90}% | RR: {avg_rr} | Trades: {closed_90}",
-            f"• 80–89: {winrate_80}% | Trades: {closed_80}",
+            i18n.t(lang, "section_recommended_title"),
+            i18n.t(lang, "line_winrate", value=winrate_90),
+            i18n.t(lang, "line_avg_rr", value=avg_rr),
+            i18n.t(lang, "line_trades", value=closed_90),
+            i18n.t(lang, "line_status", value=i18n.t(lang, "status_main_focus")),
             "",
-            "📈 Totals",
-            f"🟢 TP: {tp_total}",
-            f"🔴 SL: {sl_total}",
-            f"⏳ {i18n.t(lang, 'totals_no_entry_label')}: {neutral_total}",
-            f"🕒 In progress: {in_progress_total}",
+            i18n.t(lang, "section_higher_risk_title"),
+            i18n.t(lang, "line_winrate", value=winrate_80),
+            i18n.t(lang, "line_trades", value=closed_80),
+            i18n.t(lang, "line_status", value=i18n.t(lang, "status_use_selectively")),
+            "",
+            i18n.t(lang, "section_score_below_title"),
+            i18n.t(lang, "line_not_included"),
+            i18n.t(lang, "line_market_analysis_only"),
+            "",
+            i18n.t(lang, "totals_title"),
+            i18n.t(lang, "totals_tp", value=tp_total),
+            i18n.t(lang, "totals_sl", value=sl_total),
+            i18n.t(lang, "totals_no_entry", value=neutral_total),
+            i18n.t(lang, "totals_in_progress", value=in_progress_total),
         ]
     )
 
@@ -1117,12 +1108,16 @@ def _build_history_text(
 ) -> str:
     period_label = _period_label(time_window, lang)
     lines = [
-        i18n.t(lang, "HISTORY_LIST_TITLE", period=period_label),
-        i18n.t(lang, "HISTORY_PAGE_INFO", page=page, pages=pages, total=total),
+        i18n.t(lang, "history_title", period=period_label),
+        i18n.t(lang, "page_total", page=page, pages=pages, total=total),
         "",
         _format_history_pro_block(lang, history_summary),
         "",
-        i18n.t(lang, "explanation_block"),
+        "━━━━━━━━━━━━━━━━",
+        i18n.t(lang, "explanation_title"),
+        "━━━━━━━━━━━━━━━━",
+        i18n.t(lang, "explanation_line_1"),
+        i18n.t(lang, "explanation_line_2"),
     ]
     if not rows:
         lines.append("")
