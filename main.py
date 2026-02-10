@@ -128,7 +128,6 @@ from market_cache import get_ticker_request_count, reset_ticker_request_count
 from alert_dedup_db import init_alert_dedup, can_send
 from status_utils import is_notify_enabled
 from message_templates import (
-    format_compact_scenario_message,
     format_signal_poi_touched_message,
     format_scenario_message,
     format_signal_activation_message,
@@ -4946,24 +4945,7 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
 
 
 def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
-    entry_low, entry_high = signal["entry_zone"]
-    symbol_text = _signal_symbol_text(signal["symbol"])
-    side = "LONG" if signal.get("direction") == "long" else "SHORT"
-    score = int(signal.get("score", 0))
-    return format_compact_scenario_message(
-        lang=lang,
-        symbol_text=symbol_text,
-        side=side,
-        timeframe="1H",
-        entry_from=entry_low,
-        entry_to=entry_high,
-        sl=float(signal["sl"]),
-        tp1=float(signal["tp1"]),
-        tp2=float(signal["tp2"]),
-        score=score,
-        price_precision=4,
-        lifetime_minutes=int(signal.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60),
-    )
+    return _format_signal(signal, lang)
 
 
 def _signal_payload_from_event(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -5246,7 +5228,7 @@ async def send_signal_to_all(
             should_log = False
             kind = "signal"
         else:
-            message_text = _format_compact_signal(signal_dict, lang) if is_regular_bucket else _format_signal(signal_dict, lang)
+            message_text = _format_signal(signal_dict, lang)
             should_log = True
             kind = "signal"
             if allow_admin_bypass and is_admin(chat_id):
