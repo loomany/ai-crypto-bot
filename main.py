@@ -824,7 +824,7 @@ def _status_icon(status: str | None) -> str:
     if normalized in failed:
         return "🔴"
     if normalized in neutral:
-        return "⚪"
+        return "⚪️"
     if normalized in {"ACTIVE"}:
         return "🟡"
     return "🟡"
@@ -1109,8 +1109,8 @@ def _history_status_icon(status_key: str) -> str:
     icon_map = {
         "TP": "🟢",
         "SL": "🔴",
-        "EXPIRED_NO_ENTRY": "⚪",
-        "NO_CONFIRMATION": "⚪",
+        "EXPIRED_NO_ENTRY": "⚪️",
+        "NO_CONFIRMATION": "⚪️",
         "IN_PROGRESS": "🟡",
     }
     return icon_map.get(status_key, "🟡")
