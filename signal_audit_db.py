@@ -5,6 +5,7 @@ import uuid
 from statistics import median
 from typing import Any, Dict
 
+from cutoff_config import get_effective_cutoff_ts
 from db_path import get_db_path
 from symbol_cache import get_blocked_symbols
 
@@ -143,6 +144,20 @@ def insert_signal_audit(
     return signal_id
 
 
+
+
+def _append_cutoff_clause(
+    where_clauses: list[str],
+    params: list[object],
+    *,
+    include_legacy: bool,
+    field_name: str = "sent_at",
+) -> None:
+    cutoff_ts = get_effective_cutoff_ts(include_legacy=include_legacy)
+    if cutoff_ts > 0:
+        where_clauses.append(f"{field_name} >= ?")
+        params.append(int(cutoff_ts))
+
 def _blocked_symbols_clause() -> tuple[str, list[str]]:
     blocked = sorted(get_blocked_symbols())
     if not blocked:
@@ -237,8 +252,11 @@ def fetch_open_signals(max_age_sec: int = 86400) -> list[dict]:
         conn.close()
 
 
-def get_public_stats(days: int = 30) -> dict:
+def get_public_stats(days: int = 30, *, include_legacy: bool = False) -> dict:
     since_ts = int(time.time()) - days * 86400
+    cutoff_ts = get_effective_cutoff_ts(include_legacy=include_legacy)
+    if cutoff_ts > since_ts:
+        since_ts = cutoff_ts
     min_score = 80.0
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
@@ -384,7 +402,7 @@ def get_public_stats(days: int = 30) -> dict:
         conn.close()
 
 
-def get_last_signal_audit(module: str) -> dict | None:
+def get_last_signal_audit(module: str, *, include_legacy: bool = False) -> dict | None:
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
     try:
@@ -395,6 +413,7 @@ def get_last_signal_audit(module: str) -> dict | None:
             SELECT symbol, direction, score, sent_at
             FROM signal_audit
             WHERE module = ?
+              AND sent_at >= ?
               AND NOT (
                 symbol LIKE 'TEST%' OR
                 LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
@@ -408,7 +427,7 @@ def get_last_signal_audit(module: str) -> dict | None:
             ORDER BY sent_at DESC
             LIMIT 1
             """,
-            [module, *blocked_params],
+            [module, get_effective_cutoff_ts(include_legacy=include_legacy), *blocked_params],
         )
         row = cur.fetchone()
         return dict(row) if row else None
@@ -420,13 +439,14 @@ def count_signals_sent_since(
     since_ts: int,
     *,
     module: str | None = "ai_signals",
+    include_legacy: bool = False,
 ) -> int:
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
     try:
         blocked_clause, blocked_params = _blocked_symbols_clause()
         module_clause = ""
-        params: list[object] = [since_ts]
+        params: list[object] = [max(int(since_ts), get_effective_cutoff_ts(include_legacy=include_legacy))]
         if module:
             module_clause = "AND module = ?"
             params.append(module)
@@ -458,13 +478,20 @@ def count_signals_sent_since(
         conn.close()
 
 
-def get_ai_signal_stats(days: int | None) -> dict:
+def get_ai_signal_stats(days: int | None, *, include_legacy: bool = False) -> dict:
     now = int(time.time())
     params: list[Any] = ["TP1", "TP2", "SL", 80.0]
-    since_clause = ""
+    since_clauses: list[str] = []
     if days is not None:
-        since_clause = " AND sent_at >= ?"
+        since_clauses.append("sent_at >= ?")
         params.append(now - days * 86400)
+    cutoff_ts = get_effective_cutoff_ts(include_legacy=include_legacy)
+    if cutoff_ts > 0:
+        since_clauses.append("sent_at >= ?")
+        params.append(cutoff_ts)
+    since_clause = ""
+    if since_clauses:
+        since_clause = " AND " + " AND ".join(since_clauses)
 
     blocked_clause, blocked_params = _blocked_symbols_clause()
     params.extend(blocked_params)
