@@ -226,3 +226,49 @@ def format_signal_activation_message(
         waiting,
     ]
     return "\n".join(lines)
+
+
+def format_compact_scenario_message(
+    *,
+    lang: str,
+    symbol_text: str,
+    side: str,
+    timeframe: str,
+    entry_from: float,
+    entry_to: float,
+    sl: float,
+    tp1: float,
+    tp2: float,
+    score: int,
+    price_precision: int,
+    lifetime_minutes: int = 720,
+) -> str:
+    side_value = str(side).upper()
+    score_value = max(0, min(100, int(score)))
+    lines = [
+        i18n.t(lang, "SIGNAL_COMPACT_HIGH_RISK_HEADER"),
+        symbol_text,
+        i18n.t(
+            lang,
+            "SIGNAL_COMPACT_META_LINE",
+            side=side_value,
+            timeframe=timeframe,
+            entry_tf=timeframe,
+        ),
+        i18n.t(
+            lang,
+            "SIGNAL_COMPACT_POI_LINE",
+            poi_from=_format_price(entry_from, price_precision),
+            poi_to=_format_price(entry_to, price_precision),
+        ),
+        i18n.t(lang, "SIGNAL_COMPACT_SL_LINE", sl=_format_price(sl, price_precision)),
+        i18n.t(lang, "SIGNAL_COMPACT_TP1_LINE", tp1=_format_price(tp1, price_precision)),
+        i18n.t(lang, "SIGNAL_COMPACT_TP2_LINE", tp2=_format_price(tp2, price_precision)),
+        i18n.t(lang, "SIGNAL_COMPACT_SCORE_LINE", score=score_value),
+        i18n.t(
+            lang,
+            "SIGNAL_COMPACT_TTL_LINE",
+            minutes=max(1, int(lifetime_minutes)),
+        ),
+    ]
+    return "\n".join(lines)
