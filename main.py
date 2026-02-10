@@ -809,17 +809,6 @@ def _signal_status_group(row: dict[str, Any]) -> str:
     return "in_progress"
 
 
-def _signal_status_group_for_pro(row: dict[str, Any]) -> str:
-    status_raw = str(row.get("result") or row.get("status") or "").upper().strip()
-    if status_raw in {"TP1", "TP2", "TP"}:
-        return "tp"
-    if status_raw == "SL":
-        return "sl"
-    if status_raw in {"BE", "EXP", "EXPIRED", "NO_FILL", "NF", "NEUTRAL"}:
-        return "neutral"
-    return "in_progress"
-
-
 def _calc_rr(row: dict[str, Any]) -> float | None:
     poi_low = _safe_float(row.get("poi_low"))
     poi_high = _safe_float(row.get("poi_high"))
@@ -836,137 +825,18 @@ def _calc_rr(row: dict[str, Any]) -> float | None:
 
 
 def _format_bucket_winrate(bucket: dict[str, int]) -> str:
-    tp_total = int(bucket.get("tp", bucket.get("passed", 0)) or 0)
-    sl_total = int(bucket.get("sl", bucket.get("failed", 0)) or 0)
-    denominator = tp_total + sl_total
+    passed = int(bucket.get("passed", 0) or 0)
+    failed = int(bucket.get("failed", 0) or 0)
+    denominator = passed + failed
     if denominator <= 0:
-        return "0%"
-    return f"{(tp_total / denominator) * 100:.1f}%"
+        return "—"
+    return f"{(passed / denominator) * 100:.1f}%"
 
 
 def _format_avg_rr(rr_value: float | None) -> str:
     if rr_value is None or rr_value <= 0:
-        return "~1 : —"
+        return "—"
     return f"~1 : {rr_value:.2f}"
-
-
-def _history_since_ts(time_window: str, now_ts: int | None = None) -> int | None:
-    now = int(now_ts or time.time())
-    day_seconds = 24 * 60 * 60
-    if time_window == "1d":
-        return now - day_seconds
-    if time_window == "7d":
-        return now - (7 * day_seconds)
-    if time_window == "30d":
-        return now - (30 * day_seconds)
-    return None
-
-
-def _extract_rr(row: dict[str, Any]) -> float | None:
-    for key in ("rr", "scenario_rr"):
-        rr_value = _safe_float(row.get(key))
-        if rr_value is not None and rr_value > 0:
-            return rr_value
-    return _calc_rr(row)
-
-
-def _bucket_key(score: int) -> str:
-    if 90 <= score <= 100:
-        return "90-100"
-    if 80 <= score <= 89:
-        return "80-89"
-    return "<80"
-
-
-def _calc_history_pro_stats(time_window: str) -> dict[str, Any]:
-    since_ts = _history_since_ts(time_window)
-    total = count_signal_history(time_window=time_window, user_id=None, min_score=None)
-    all_rows = list_signal_events(
-        user_id=None,
-        since_ts=since_ts,
-        min_score=None,
-        limit=max(total, 1),
-        offset=0,
-    )
-    bucket_stats: dict[str, dict[str, Any]] = {
-        "90-100": {"tp": 0, "sl": 0, "count": 0, "rr_values": []},
-        "80-89": {"tp": 0, "sl": 0, "count": 0, "rr_values": []},
-    }
-    totals = {"tp": 0, "sl": 0, "neutral": 0, "in_progress": 0}
-
-    for row_raw in all_rows:
-        row = dict(row_raw)
-        score = _safe_int(row.get("score"), 0)
-        status_key = _signal_status_group_for_pro(row)
-        if status_key in totals:
-            totals[status_key] += 1
-
-        bucket = _bucket_key(score)
-        if bucket in {"90-100", "80-89"}:
-            bucket_stats[bucket]["count"] += 1
-            if status_key == "tp":
-                bucket_stats[bucket]["tp"] += 1
-            elif status_key == "sl":
-                bucket_stats[bucket]["sl"] += 1
-
-            rr_value = _extract_rr(row)
-            if rr_value is not None and rr_value > 0:
-                bucket_stats[bucket]["rr_values"].append(rr_value)
-
-    avg_rr_90 = None
-    rr_values_90: list[float] = bucket_stats["90-100"]["rr_values"]
-    if rr_values_90:
-        avg_rr_90 = sum(rr_values_90) / len(rr_values_90)
-
-    return {
-        "buckets": bucket_stats,
-        "totals": totals,
-        "avg_rr_90": avg_rr_90,
-    }
-
-
-def _build_history_pro_header(*, time_window: str, lang: str, stats: dict[str, Any]) -> str:
-    bucket_90 = stats["buckets"].get("90-100", {})
-    bucket_80 = stats["buckets"].get("80-89", {})
-    totals = stats.get("totals", {})
-    avg_rr_90 = stats.get("avg_rr_90")
-
-    lines = [
-        i18n.t(lang, "HISTORY_PRO_RECOMMENDED_HEADER"),
-        i18n.t(lang, "HISTORY_PRO_SCORE_RANGE_90_100"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_WINRATE_LINE", winrate=_format_bucket_winrate(bucket_90)),
-        i18n.t(lang, "HISTORY_PRO_AVG_RR_LINE", avg_rr=_format_avg_rr(avg_rr_90)),
-        i18n.t(lang, "HISTORY_PRO_TOTAL_SIGNALS_LINE", count=int(bucket_90.get("count", 0) or 0)),
-        i18n.t(lang, "HISTORY_PRO_STATUS_PRIMARY"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_RR_NOTE"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_DIVIDER"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_HIGH_RISK_HEADER"),
-        i18n.t(lang, "HISTORY_PRO_SCORE_RANGE_80_89"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_WINRATE_LINE", winrate=_format_bucket_winrate(bucket_80)),
-        i18n.t(lang, "HISTORY_PRO_TOTAL_SIGNALS_LINE", count=int(bucket_80.get("count", 0) or 0)),
-        i18n.t(lang, "HISTORY_PRO_STATUS_SELECTIVE"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_DIVIDER_SHORT"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_BELOW_THRESHOLD_HEADER"),
-        i18n.t(lang, "HISTORY_PRO_BELOW_THRESHOLD_LINE1"),
-        i18n.t(lang, "HISTORY_PRO_BELOW_THRESHOLD_LINE2"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_DIVIDER_SHORT"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_TOTALS_HEADER"),
-        "",
-        i18n.t(lang, "HISTORY_PRO_TP_TOTAL", tp_total=int(totals.get("tp", 0) or 0)),
-        i18n.t(lang, "HISTORY_PRO_SL_TOTAL", sl_total=int(totals.get("sl", 0) or 0)),
-        i18n.t(lang, "HISTORY_PRO_NEUTRAL_TOTAL", neutral_total=int(totals.get("neutral", 0) or 0)),
-        i18n.t(lang, "HISTORY_PRO_IN_PROGRESS_TOTAL", in_progress_total=int(totals.get("in_progress", 0) or 0)),
-    ]
-    return "\n".join(lines)
 
 
 def build_pro_stats_text(
@@ -1160,25 +1030,16 @@ def _format_history_item(row: dict[str, Any], lang: str) -> str:
     return f"{icon} | Score {score} | {symbol} {side} | {_format_event_time(created_at)}"
 
 
-def _build_history_text(
-    *,
-    time_window: str,
-    page: int,
-    pages: int,
-    total: int,
-    rows: list[dict],
-    lang: str,
-    pro_header: str,
-) -> str:
+def _build_history_text(*, time_window: str, page: int, pages: int, total: int, rows: list[dict], lang: str) -> str:
     period_label = _period_label(time_window, lang)
     lines = [
         i18n.t(lang, "HISTORY_LIST_TITLE", period=period_label),
         i18n.t(lang, "HISTORY_PAGE_INFO", page=page, pages=pages, total=total),
-        "",
-        pro_header,
     ]
     if not rows:
-        lines.extend(["", i18n.t(lang, "HISTORY_EMPTY_PERIOD")])
+        lines.append("")
+        lines.append(i18n.t(lang, "HISTORY_EMPTY_PERIOD"))
+        return "\n".join(lines)
     return "\n".join(lines)
 
 
@@ -1220,8 +1081,6 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         return
     lang = _resolve_user_lang(callback.from_user.id)
     page_value, pages, total, rows = _get_history_page(time_window=time_window, page=page)
-    pro_stats = _calc_history_pro_stats(time_window)
-    pro_header = _build_history_pro_header(time_window=time_window, lang=lang, stats=pro_stats)
     _set_history_context(callback.from_user.id, time_window, page_value)
     text = _build_history_text(
         time_window=time_window,
@@ -1230,7 +1089,6 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         total=total,
         rows=rows,
         lang=lang,
-        pro_header=pro_header,
     )
     markup = _history_nav_kb(
         lang=lang,
@@ -1824,10 +1682,7 @@ async def history_callback(callback: CallbackQuery):
         )
         lang = _resolve_user_lang(user_id)
         with suppress(Exception):
-            await callback.message.edit_text(
-                i18n.t(lang, "HISTORY_LOAD_ERROR"),
-                reply_markup=stats_inline_kb(lang),
-            )
+            await callback.message.answer(i18n.t(lang, "HISTORY_LOAD_ERROR"))
 
 
 @dp.callback_query(F.data.regexp(r"^history:"))
