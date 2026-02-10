@@ -228,6 +228,31 @@ def format_signal_activation_message(
     return "\n".join(lines)
 
 
+def format_signal_poi_touched_message(
+    *,
+    lang: str,
+    symbol: str,
+    side: str,
+    score: int,
+    poi_from: float,
+    poi_to: float,
+) -> str:
+    side_value = str(side).upper()
+    lines = [
+        i18n.t(lang, "SIGNAL_POI_TOUCHED_HEADER"),
+        "",
+        f"{symbol} · {side_value}",
+        f"Score: {max(0, min(100, int(score)))}",
+        "",
+        i18n.t(lang, "SIGNAL_POI_TOUCHED_ZONE_HEADER"),
+        f"{_format_price(float(poi_from), 4)} – {_format_price(float(poi_to), 4)}",
+        "",
+        i18n.t(lang, "SIGNAL_POI_TOUCHED_WAIT"),
+        i18n.t(lang, "SIGNAL_POI_TOUCHED_WAIT_2"),
+    ]
+    return "\n".join(lines)
+
+
 def format_compact_scenario_message(
     *,
     lang: str,

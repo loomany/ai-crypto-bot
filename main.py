@@ -118,6 +118,7 @@ from db import (
     update_signal_event_refresh,
     update_signal_event_status_by_id,
     activate_signal_events,
+    mark_signal_events_poi_touched,
     mark_signal_result_notified,
     set_last_pumpdump_signal,
     purge_test_signals,
@@ -128,6 +129,7 @@ from alert_dedup_db import init_alert_dedup, can_send
 from status_utils import is_notify_enabled
 from message_templates import (
     format_compact_scenario_message,
+    format_signal_poi_touched_message,
     format_scenario_message,
     format_signal_activation_message,
 )
@@ -141,6 +143,7 @@ from signal_audit_db import (
 from signal_audit_worker import (
     signal_audit_worker_loop,
     set_signal_activation_notifier,
+    set_signal_poi_touched_notifier,
     set_signal_result_notifier,
 )
 import i18n
@@ -1455,9 +1458,11 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
             f"{symbol} {side}",
         ]
     elif status == "NF":
-        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_NF")
+        header = i18n.t(lang, "SIGNAL_EXPIRED_NO_ENTRY_HEADER")
         detail_lines = [
-            f"{symbol} {side}",
+            i18n.t(lang, "SIGNAL_EXPIRED_NO_ENTRY_LINE_1", symbol=symbol, side=side),
+            i18n.t(lang, "SIGNAL_EXPIRED_NO_ENTRY_LINE_2"),
+            i18n.t(lang, "SIGNAL_EXPIRED_NO_ENTRY_LINE_3"),
         ]
     elif status == "EXP":
         header = i18n.t(lang, "SIGNAL_RESULT_HEADER_EXP")
@@ -1593,6 +1598,67 @@ async def notify_signal_activation(signal: dict) -> bool:
         except Exception as exc:
             print(f"[ai_signals] Failed to send activation notification to {user_id}: {exc}")
 
+    return sent
+
+
+async def notify_signal_poi_touched(signal: dict) -> bool:
+    if bot is None:
+        return False
+
+    module = str(signal.get("module", ""))
+    symbol = str(signal.get("symbol", ""))
+    ts_value = int(signal.get("sent_at", 0))
+    if not module or not symbol or ts_value <= 0:
+        return False
+
+    touched_at = int(signal.get("poi_touched_at") or time.time())
+    updated_rows = mark_signal_events_poi_touched(
+        module=module,
+        symbol=symbol,
+        ts=ts_value,
+        poi_touched_at=touched_at,
+    )
+    if updated_rows <= 0:
+        return False
+
+    events = list_signal_events_by_identity(module=module, symbol=symbol, ts=ts_value)
+    if not events:
+        return False
+
+    sent = False
+    for row in events:
+        event = dict(row)
+        if str(event.get("state", "")).upper() != "POI_TOUCHED":
+            continue
+        user_id = int(event.get("user_id", 0))
+        if user_id <= 0:
+            continue
+        if is_user_locked(user_id) or not is_sub_active(user_id):
+            continue
+        if not is_notify_enabled(user_id, "ai_signals"):
+            continue
+        lang = _resolve_user_lang(user_id)
+        message_text = format_signal_poi_touched_message(
+            lang=lang,
+            symbol=symbol,
+            side=str(signal.get("direction", "")).upper(),
+            score=int(float(signal.get("score", 0.0) or 0.0)),
+            poi_from=float(signal.get("entry_from", 0.0) or 0.0),
+            poi_to=float(signal.get("entry_to", 0.0) or 0.0),
+        )
+        score = int(float(signal.get("score", 0.0) or 0.0))
+        bucket = _alerts_bucket_from_score(score)
+        pref_key = _alerts_pref_key_for_bucket(bucket)
+        bucket_enabled = bool(get_user_pref(user_id, pref_key, 1))
+        try:
+            await bot.send_message(
+                user_id,
+                message_text,
+                reply_markup=_status_toggle_inline_kb(lang=lang, score=score, enabled=bucket_enabled),
+            )
+            sent = True
+        except Exception as exc:
+            print(f"[ai_signals] Failed to send POI touched notification to {user_id}: {exc}")
     return sent
 
 
@@ -5827,6 +5893,7 @@ async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     set_signal_result_notifier(notify_signal_result_short)
     set_signal_activation_notifier(notify_signal_activation)
+    set_signal_poi_touched_notifier(notify_signal_poi_touched)
     print("Бот запущен!")
     init_app_db()
 

@@ -39,6 +39,8 @@ def init_signal_audit_tables() -> None:
                 pnl_r REAL,
                 notes TEXT,
                 ttl_minutes INTEGER NOT NULL DEFAULT 720,
+                state TEXT NOT NULL DEFAULT 'WAITING_ENTRY',
+                poi_touched_at INTEGER,
                 activated_at INTEGER,
                 entry_price REAL
             )
@@ -51,10 +53,21 @@ def init_signal_audit_tables() -> None:
         cols = {row[1] for row in cur.fetchall()}
         if "ttl_minutes" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN ttl_minutes INTEGER NOT NULL DEFAULT 720")
+        if "state" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN state TEXT NOT NULL DEFAULT 'WAITING_ENTRY'")
+        if "poi_touched_at" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN poi_touched_at INTEGER")
         if "activated_at" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN activated_at INTEGER")
         if "entry_price" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN entry_price REAL")
+        conn.execute(
+            """
+            UPDATE signal_audit
+            SET state = 'WAITING_ENTRY'
+            WHERE COALESCE(state, '') = '' AND status = 'open'
+            """
+        )
         conn.commit()
     finally:
         conn.close()
@@ -123,6 +136,7 @@ def insert_signal_audit(
         signal_sent_at,
         "open",
         int(signal_dict.get("ttl_minutes", 720) or 720),
+        "WAITING_ENTRY",
     )
 
     conn = sqlite3.connect(get_db_path())
@@ -133,7 +147,8 @@ def insert_signal_audit(
                 signal_id, module, tier, symbol, direction, timeframe,
                 entry_from, entry_to, sl, tp1, tp2, score, rr,
                 reason_json, breakdown_json, sent_at, status, ttl_minutes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                , state
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             payload,
         )
@@ -172,9 +187,20 @@ def mark_signal_closed(
     pnl_r: float | None,
     filled_at: int | None,
     notes: str | None,
+    close_state: str | None = None,
 ) -> None:
     conn = sqlite3.connect(get_db_path())
     try:
+        state_expr = "state = ?," if close_state is not None else ""
+        params: list[object] = [
+            int(time.time()),
+            outcome,
+            pnl_r,
+            filled_at,
+        ]
+        if close_state is not None:
+            params.append(close_state)
+        params.extend([notes, signal_id])
         conn.execute(
             """
             UPDATE signal_audit
@@ -183,19 +209,57 @@ def mark_signal_closed(
                 outcome = ?,
                 pnl_r = ?,
                 filled_at = ?,
+                {state_expr}
                 notes = ?
             WHERE signal_id = ?
-            """,
-            (
-                int(time.time()),
-                outcome,
-                pnl_r,
-                filled_at,
-                notes,
-                signal_id,
-            ),
+            """.format(state_expr=state_expr),
+            params,
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_signal_state(
+    signal_id: str,
+    *,
+    from_states: tuple[str, ...],
+    to_state: str,
+    poi_touched_at: int | None = None,
+    activated_at: int | None = None,
+    entry_price: float | None = None,
+) -> int:
+    if not from_states:
+        return 0
+    placeholders = ", ".join("?" for _ in from_states)
+    params: list[object] = []
+    set_clauses = ["state = ?"]
+    params.append(str(to_state))
+    if poi_touched_at is not None:
+        set_clauses.append("poi_touched_at = COALESCE(poi_touched_at, ?)")
+        params.append(int(poi_touched_at))
+    if activated_at is not None:
+        set_clauses.append("activated_at = COALESCE(activated_at, ?)")
+        params.append(int(activated_at))
+    if entry_price is not None:
+        set_clauses.append("entry_price = COALESCE(entry_price, ?)")
+        params.append(float(entry_price))
+    params.extend([signal_id, *from_states])
+
+    conn = sqlite3.connect(get_db_path())
+    try:
+        cur = conn.execute(
+            f"""
+            UPDATE signal_audit
+            SET {', '.join(set_clauses)}
+            WHERE signal_id = ?
+              AND status = 'open'
+              AND COALESCE(state, 'WAITING_ENTRY') IN ({placeholders})
+            """,
+            params,
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
     finally:
         conn.close()
 
@@ -221,7 +285,6 @@ def mark_signal_activated(signal_id: str, *, activated_at: int, entry_price: flo
 
 
 def fetch_open_signals(max_age_sec: int = 86400) -> list[dict]:
-    now = int(time.time())
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
     try:
@@ -231,7 +294,7 @@ def fetch_open_signals(max_age_sec: int = 86400) -> list[dict]:
             f"""
             SELECT *
             FROM signal_audit
-            WHERE status = 'open' AND (sent_at + ttl_minutes * 60) >= ?
+            WHERE status = 'open' AND sent_at >= ?
               AND NOT (
                 symbol LIKE 'TEST%' OR
                 LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
@@ -244,7 +307,7 @@ def fetch_open_signals(max_age_sec: int = 86400) -> list[dict]:
               {blocked_clause}
             ORDER BY sent_at ASC
             """,
-            [now - max_age_sec, *blocked_params],
+            [int(time.time()) - max_age_sec, *blocked_params],
         )
         rows = cur.fetchall()
         return [dict(row) for row in rows]
