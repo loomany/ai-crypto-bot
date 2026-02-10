@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import aiohttp
 
 import i18n
+from utils_symbols import ui_symbol
 
 from ai_types import Candle
 from binance_rest import binance_request_context, get_klines
@@ -470,9 +471,7 @@ async def scan_pumps(
 
 
 def _format_symbol_pair(symbol: str) -> str:
-    if symbol.endswith("USDT"):
-        return f"{symbol[:-4]} / USDT"
-    return f"{symbol} / USDT"
+    return ui_symbol(symbol)
 
 
 def _format_pump_base_message(signal: Dict[str, Any], lang: str = "ru") -> str:
