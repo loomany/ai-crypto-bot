@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import time
 from typing import Any, Dict, Optional, Tuple
@@ -15,10 +16,13 @@ from health import (
 from db import list_signal_events_by_identity, update_signal_events_status
 from signal_audit_db import fetch_open_signals, mark_signal_closed, mark_signal_state
 from settings import SIGNAL_TTL_SECONDS
+from utils.safe_math import EPS, safe_div
 
 _signal_result_notifier = None
 _signal_activation_notifier = None
 _signal_poi_touched_notifier = None
+
+logger = logging.getLogger(__name__)
 
 
 def set_signal_result_notifier(handler) -> None:
@@ -164,11 +168,11 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
 
     entry_ref = (entry_from + entry_to) / 2
     r_value = abs(entry_ref - sl)
-    if r_value <= 0:
-        return None
-
-    tp1_r = abs(tp1 - entry_ref) / r_value
-    tp2_r = abs(tp2 - entry_ref) / r_value
+    zero_risk = r_value <= EPS
+    if zero_risk:
+        logger.warning("[zero_div_guard] symbol=%s expr=%s denom=%s", signal.get("symbol", "-"), "risk_r_value", r_value)
+    tp1_r = 0.0 if zero_risk else safe_div(abs(tp1 - entry_ref), r_value, 0.0)
+    tp2_r = 0.0 if zero_risk else safe_div(abs(tp2 - entry_ref), r_value, 0.0)
 
     activated_at = signal.get("activated_at")
     if activated_at is None:
@@ -235,17 +239,21 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
 
     last_close = candles[-1]["close"] if candles else None
     pnl_r = None
+    notes = None
     if last_close is not None:
-        if direction == "long":
-            pnl_r = (last_close - entry_ref) / r_value * 0.5
+        if zero_risk:
+            pnl_r = 0.0
+            notes = "fail_rr_zero_risk_audit"
+        elif direction == "long":
+            pnl_r = safe_div((last_close - entry_ref), r_value, 0.0) * 0.5
         else:
-            pnl_r = (entry_ref - last_close) / r_value * 0.5
+            pnl_r = safe_div((entry_ref - last_close), r_value, 0.0) * 0.5
 
     return {
         "outcome": "EXPIRED",
         "pnl_r": pnl_r,
         "filled_at": filled_at,
-        "notes": None,
+        "notes": notes,
     }
 
 

@@ -4,6 +4,7 @@ from typing import Optional
 
 import i18n
 from utils_symbols import ui_symbol
+from utils.safe_math import EPS, safe_div
 
 
 def _trend_to_text(value: Optional[str], lang: str) -> str:
@@ -78,15 +79,16 @@ def format_scenario_message(
         else i18n.t(lang, "SCENARIO_CONDITION_ABOVE")
     )
     invalid_level = _format_price(sl, price_precision)
-    sl_pct = (sl / entry_mid - 1) * 100
+    entry_valid = entry_mid > EPS
+    sl_pct = (safe_div(sl, entry_mid, 1.0) - 1) * 100 if entry_valid else 0.0
 
     tp_candidates = [tp1, tp2]
     if is_long:
         tp_candidates = sorted(tp_candidates)
-        targets_invalid = max(tp_candidates) <= entry_mid
+        targets_invalid = (not entry_valid) or max(tp_candidates) <= entry_mid
     else:
         tp_candidates = sorted(tp_candidates, reverse=True)
-        targets_invalid = min(tp_candidates) >= entry_mid
+        targets_invalid = (not entry_valid) or min(tp_candidates) >= entry_mid
 
     if targets_invalid:
         tp_lines = [
@@ -95,8 +97,8 @@ def format_scenario_message(
         ]
     else:
         tp1_val, tp2_val = tp_candidates
-        tp1_pct = (tp1_val / entry_mid - 1) * 100
-        tp2_pct = (tp2_val / entry_mid - 1) * 100
+        tp1_pct = (safe_div(tp1_val, entry_mid, 1.0) - 1) * 100 if entry_valid else 0.0
+        tp2_pct = (safe_div(tp2_val, entry_mid, 1.0) - 1) * 100 if entry_valid else 0.0
         tp_lines = [
             f"🎯 TP1: {_format_price(tp1_val, price_precision)} ({_format_pct(tp1_pct)})",
             f"🎯 TP2: {_format_price(tp2_val, price_precision)} ({_format_pct(tp2_pct)})",

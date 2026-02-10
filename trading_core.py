@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 from statistics import mean
@@ -5,6 +6,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from ai_types import Candle
 from binance_rest import fetch_json
+from utils.safe_math import EPS, guarded_div, safe_div, safe_pct
 
 # ==============================
 # Binance Futures (Orderflow)
@@ -20,6 +22,8 @@ MIN_WHALE_TRADE_USD = 100_000      # сделка от 100k$ считается 
 STRONG_IMBALANCE_PCT = 15.0        # от 15% перекоса считаем сильный дисбаланс
 STRONG_OI_CHANGE_PCT = 1.0         # от 1% изменения OI считаем значимым
 MEGA_WHALE_TRADE_USD = 300_000     # для флага whale_activity
+
+logger = logging.getLogger(__name__)
 
 
 async def _fetch_futures_json(url: str, params: Dict) -> Optional[Dict]:
@@ -160,6 +164,7 @@ def is_volume_climax(candles: List[Candle], lookback: int = 20) -> bool:
 
 
 def _compute_rsi_series(closes: List[float], period: int = 14) -> List[float]:
+    period = max(1, int(period))
     if len(closes) < period + 1:
         return [50.0] * len(closes)
 
@@ -171,17 +176,21 @@ def _compute_rsi_series(closes: List[float], period: int = 14) -> List[float]:
         gains.append(max(diff, 0))
         losses.append(max(-diff, 0))
 
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period if sum(losses) != 0 else 0.000001
+    avg_gain = safe_div(sum(gains), period, 0.0)
+    avg_loss = safe_div(sum(losses), period, 0.0)
 
     for i in range(period + 1, len(closes)):
         diff = closes[i] - closes[i - 1]
         gain = max(diff, 0)
         loss = max(-diff, 0)
-        avg_gain = (avg_gain * (period - 1) + gain) / period
-        avg_loss = (avg_loss * (period - 1) + loss) / period if avg_loss != 0 else 0.000001
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
+        avg_gain = safe_div(avg_gain * (period - 1) + gain, period, avg_gain)
+        avg_loss = safe_div(avg_loss * (period - 1) + loss, period, avg_loss)
+        if avg_loss <= EPS:
+            rs = float("inf")
+            rsi = 100.0
+        else:
+            rs = safe_div(avg_gain, avg_loss, 0.0)
+            rsi = 100 - safe_div(100, 1 + rs, 0.0)
         rsis.append(round(rsi, 2))
 
     prefix = [50.0] * (len(closes) - len(rsis))
@@ -191,6 +200,7 @@ def _compute_rsi_series(closes: List[float], period: int = 14) -> List[float]:
 def _compute_atr_series(
     highs: List[float], lows: List[float], closes: List[float], period: int = 14
 ) -> List[float]:
+    period = max(1, int(period))
     n = min(len(highs), len(lows), len(closes))
     if n == 0:
         return []
@@ -210,16 +220,16 @@ def _compute_atr_series(
         s = 0.0
         for i in range(n):
             s += trs[i]
-            out.append(s / (i + 1))
+            out.append(safe_div(s, (i + 1), 0.0))
         return out
 
-    first_atr = sum(trs[1 : period + 1]) / float(period)
+    first_atr = safe_div(sum(trs[1 : period + 1]), float(period), 0.0)
 
     atrs: List[float] = [0.0] * n
     atrs[period] = first_atr
     prev = first_atr
     for i in range(period + 1, n):
-        prev = (prev * (period - 1) + trs[i]) / float(period)
+        prev = safe_div((prev * (period - 1) + trs[i]), float(period), prev)
         atrs[i] = prev
 
     for i in range(period):
@@ -261,15 +271,16 @@ def _true_range(prev_close: float, candle: Candle) -> float:
 
 
 def compute_atr(candles: List[Candle], period: int = 14) -> Optional[float]:
+    period = max(1, int(period))
     if len(candles) < period + 1:
         return None
     trs = []
     for i in range(1, period + 1):
         trs.append(_true_range(candles[i - 1].close, candles[i]))
-    atr = sum(trs) / period
+    atr = safe_div(sum(trs), period, 0.0)
     for i in range(period + 1, len(candles)):
         tr = _true_range(candles[i - 1].close, candles[i])
-        atr = (atr * (period - 1) + tr) / period
+        atr = safe_div((atr * (period - 1) + tr), period, atr)
     return atr
 
 
@@ -277,7 +288,7 @@ def _nearest_level(price: float, levels: Iterable[float]) -> Tuple[Optional[floa
     best_level = None
     best_distance = None
     for level in levels:
-        dist = abs(price - level) / price * 100
+        dist = safe_pct(abs(price - level), price, 0.0)
         if best_distance is None or dist < best_distance:
             best_level = level
             best_distance = dist
@@ -287,7 +298,7 @@ def _nearest_level(price: float, levels: Iterable[float]) -> Tuple[Optional[floa
 def compute_ema(closes: List[float], period: int) -> Optional[float]:
     if len(closes) < period:
         return None
-    k = 2 / (period + 1)
+    k = safe_div(2, (period + 1), 0.0)
     ema = closes[0]
     for price in closes[1:]:
         ema = price * k + ema * (1 - k)
@@ -315,8 +326,8 @@ def compute_bollinger_bands(
             lowers.append(closes[i])
         else:
             window = closes[i - period + 1 : i + 1]
-            m = sum(window) / period
-            var = sum((x - m) ** 2 for x in window) / period
+            m = safe_div(sum(window), period, closes[i])
+            var = safe_div(sum((x - m) ** 2 for x in window), period, 0.0)
             std = var ** 0.5
             middles.append(m)
             uppers.append(m + mult * std)
@@ -417,9 +428,16 @@ async def analyze_orderflow(symbol: str) -> Dict[str, bool]:
                 continue
 
     total_flow = taker_buy_quote + taker_sell_quote
-    orderflow_imbalance_pct = 0.0
-    if total_flow > 0:
-        orderflow_imbalance_pct = (taker_buy_quote - taker_sell_quote) / total_flow * 100.0
+    _zero_warned: set[str] = set()
+    orderflow_imbalance_pct = guarded_div(
+        (taker_buy_quote - taker_sell_quote) * 100.0,
+        total_flow,
+        default=0.0,
+        logger=logger,
+        symbol=symbol,
+        expr="orderflow_imbalance_pct",
+        warned=_zero_warned,
+    )
 
     # 3) Изменение Open Interest в %
     oi_change_pct = 0.0
@@ -427,8 +445,15 @@ async def analyze_orderflow(symbol: str) -> Dict[str, bool]:
         try:
             first_oi = float(oi_hist[0]["sumOpenInterest"])
             last_oi = float(oi_hist[-1]["sumOpenInterest"])
-            if first_oi > 0:
-                oi_change_pct = (last_oi - first_oi) / first_oi * 100.0
+            oi_change_pct = guarded_div(
+                (last_oi - first_oi) * 100.0,
+                first_oi,
+                default=0.0,
+                logger=logger,
+                symbol=symbol,
+                expr="oi_change_pct",
+                warned=_zero_warned,
+            )
         except Exception:
             oi_change_pct = 0.0
 

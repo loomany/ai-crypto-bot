@@ -6,6 +6,7 @@ from typing import Iterable, List, Optional, Tuple
 from cutoff_config import get_effective_cutoff_ts
 from db_path import get_db_path
 from symbol_cache import get_blocked_symbols
+from utils.safe_math import safe_div, safe_pct
 
 TRIAL_AI_LIMIT = 7
 TRIAL_PUMP_LIMIT = 7
@@ -826,7 +827,7 @@ def get_history_winrate_summary(
                     entry_mid = (poi_low + poi_high) / 2.0
                     risk = abs(entry_mid - sl)
                     reward = abs(tp1 - entry_mid)
-                    rr = (reward / risk) if risk > 0 and reward > 0 else None
+                    rr = safe_div(reward, risk, None) if reward > 0 else None
                 except (TypeError, ValueError):
                     rr = None
                 if rr is not None:
@@ -855,11 +856,11 @@ def get_history_winrate_summary(
         losses = int(bucket["losses"] or 0)
         total = wins + losses
         bucket["closed"] = total
-        bucket["winrate"] = round((wins / total) * 100) if total else None
+        bucket["winrate"] = round(safe_pct(wins, total, 0.0)) if total else None
 
     bucket_90 = summary.get("90_100")
     if isinstance(bucket_90, dict):
-        bucket_90["avg_rr"] = (rr_sum_90_100 / rr_count_90_100) if rr_count_90_100 else None
+        bucket_90["avg_rr"] = safe_div(rr_sum_90_100, rr_count_90_100, None) if rr_count_90_100 else None
 
     return summary
 
@@ -1344,8 +1345,8 @@ def get_signal_avg_rr(
             risk = abs(entry_mid - sl)
             reward = abs(tp1 - entry_mid)
             if risk > 0 and reward > 0:
-                rr_values.append(reward / risk)
-        avg_rr = sum(rr_values) / len(rr_values) if rr_values else 0.0
+                rr_values.append(safe_div(reward, risk, 0.0))
+        avg_rr = safe_div(sum(rr_values), len(rr_values), 0.0) if rr_values else 0.0
         return {"avg_rr": avg_rr, "samples": int(len(rr_values))}
     finally:
         conn.close()
