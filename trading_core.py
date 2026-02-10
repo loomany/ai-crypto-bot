@@ -1,3 +1,4 @@
+import os
 import time
 from statistics import mean
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -613,6 +614,57 @@ def compute_score_breakdown(context: Dict) -> tuple[int, list[dict]]:
         _append_breakdown("market_regime", "Market regime neutral", False, 0, 0)
 
     final_score = int(round(score))
+
+    elite_gate_enabled = os.getenv("ELITE_GATE_ENABLED", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
+    try:
+        elite_score_gate = int(float(os.getenv("ELITE_SCORE_GATE", "90")))
+    except (TypeError, ValueError):
+        elite_score_gate = 90
+
+    if elite_gate_enabled and final_score >= elite_score_gate:
+        trend_aligned = (
+            (global_trend == "up" and side == "LONG")
+            or (global_trend == "down" and side == "SHORT")
+        ) and (
+            (local_trend == "up" and side == "LONG")
+            or (local_trend == "down" and side == "SHORT")
+        )
+
+        regime_ok = True
+        if regime == "risk_on":
+            regime_ok = side == "LONG"
+        elif regime == "risk_off":
+            regime_ok = side == "SHORT"
+
+        elite_gate_ok = all(
+            (
+                trend_aligned,
+                bool(context.get("near_key_level")),
+                bool(context.get("atr_ok")),
+                bool(context.get("liquidity_sweep")) or bool(context.get("bb_extreme")),
+                bool(context.get("volume_climax")),
+                bool(context.get("ma_trend_ok")),
+                regime_ok,
+            )
+        )
+
+        if not elite_gate_ok:
+            capped_score = elite_score_gate - 1
+            delta = float(capped_score - final_score)
+            final_score = capped_score
+            _append_breakdown(
+                "elite_gate",
+                "Elite gate: requirements not met (capped)",
+                True,
+                abs(delta),
+                delta,
+            )
+
     return max(-100, min(100, final_score)), breakdown
 
 

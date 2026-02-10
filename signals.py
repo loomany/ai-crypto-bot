@@ -115,6 +115,17 @@ AI_CONFIRM_RETRY_ENABLED = os.getenv("AI_CONFIRM_RETRY_ENABLED", "1").lower() in
 AI_CONFIRM_RETRY_MAX_ATTEMPTS = int(os.getenv("AI_CONFIRM_RETRY_MAX_ATTEMPTS", "3"))
 AI_CONFIRM_RETRY_TF = os.getenv("AI_CONFIRM_RETRY_TF", "5m")
 AI_CONFIRM_RETRY_TTL_SEC = int(os.getenv("AI_CONFIRM_RETRY_TTL_SEC", "1800"))
+ELITE_REQUIRE_CONFIRM = os.getenv("ELITE_REQUIRE_CONFIRM", "0").lower() in (
+    "1",
+    "true",
+    "yes",
+    "y",
+)
+ELITE_CONFIRM_TF = os.getenv("ELITE_CONFIRM_TF", "5m").strip().lower()
+try:
+    ELITE_SCORE_GATE = float(os.getenv("ELITE_SCORE_GATE", "90"))
+except (TypeError, ValueError):
+    ELITE_SCORE_GATE = 90.0
 
 AI_FALLBACK_DIRECT = 0
 
@@ -1755,6 +1766,74 @@ async def _prepare_signal(
             f"{symbol}: side={side} rr={rr:.2f} risk={risk:.6f} reward={reward:.6f}"
         )
         return None
+
+    if ELITE_REQUIRE_CONFIRM and abs(raw_score) >= ELITE_SCORE_GATE:
+        confirm_candles = candles.get(ELITE_CONFIRM_TF) or []
+        elite_confirmed = len(confirm_candles) >= 3 and _confirm_direction(confirm_candles, side)
+        if not elite_confirmed:
+            _inc_fail("pending_confirm_elite")
+            _inc_setup_failed("pending_confirm_elite")
+            _inc_final_fail("pending_confirm_elite")
+            _add_score_adjustment("elite_confirm_pending", 0.0, value=ELITE_CONFIRM_TF)
+            if AI_CONFIRM_RETRY_ENABLED and not await _is_setup_sent(setup_id):
+                now_ts = int(time.time())
+                setup_snapshot = {
+                    "entry": (round(entry_from, 4), round(entry_to, 4)),
+                    "sl": round(sl, 4),
+                    "tp1": round(tp1, 4),
+                    "tp2": round(tp2, 4),
+                    "poi": round(level_touched or 0.0, 4),
+                    "score": min(100, abs(raw_score)),
+                    "setup_type": setup_type,
+                }
+                signal_base = {
+                    "symbol": symbol,
+                    "direction": "long" if side == "LONG" else "short",
+                    "entry_zone": (round(entry_from, 4), round(entry_to, 4)),
+                    "sl": round(sl, 4),
+                    "tp1": round(tp1, 4),
+                    "tp2": round(tp2, 4),
+                    "score": min(100, abs(raw_score)),
+                    "score_raw": int(round(raw_score)),
+                    "setup_type": setup_type,
+                    "reason": {
+                        "trend_1d": global_trend,
+                        "trend_4h": h4_structure["trend"],
+                        "rsi_1h": rsi_1h_value,
+                        "rsi_1h_zone": rsi_zone,
+                        "volume_ratio": volume_ratio,
+                        "volume_avg": volume_avg,
+                        "rr": rr,
+                    },
+                    "breakdown": breakdown,
+                    "score_breakdown": breakdown,
+                    "levels": {
+                        "support": round(support_level or 0.0, 4),
+                        "resistance": round(resistance_level or 0.0, 4),
+                        "atr_30": round(atr_15m or 0.0, 4),
+                    },
+                    "meta": {"setup_id": setup_id, "setup_type": setup_type},
+                }
+                pending_entry = {
+                    "setup_id": setup_id,
+                    "symbol": symbol,
+                    "side": side,
+                    "timeframe": AI_CONFIRM_RETRY_TF,
+                    "created_at": now_ts,
+                    "last_checked_at": now_ts,
+                    "attempts": 1,
+                    "expires_at": now_ts + AI_CONFIRM_RETRY_TTL_SEC,
+                    "setup_snapshot": setup_snapshot,
+                    "signal_base": signal_base,
+                    "context_base": context,
+                    "min_score": float(cfg.final_score_threshold or min_score),
+                    "use_orderflow": fetch_orderflow,
+                    "confirm_tf": ELITE_CONFIRM_TF,
+                    "confirm_side": side,
+                }
+                await _queue_pending_confirm(pending_entry)
+            _store_final_sample(False, "pending_confirm_elite")
+            return None
 
     # Требуем хотя бы 30% всплеска объёма
     if volume_ratio < min_volume_ratio:
