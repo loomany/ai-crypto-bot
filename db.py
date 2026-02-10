@@ -190,7 +190,7 @@ def ensure_trial_defaults(user_id: int) -> None:
     conn = get_conn()
     try:
         cur = conn.execute(
-            "SELECT key FROM user_prefs WHERE user_id = ? AND key IN (?, ?, ?, ?, ?)",
+            "SELECT key FROM user_prefs WHERE user_id = ? AND key IN (?, ?, ?, ?, ?, ?)",
             (
                 user_id,
                 "trial_ai_left",
@@ -198,6 +198,7 @@ def ensure_trial_defaults(user_id: int) -> None:
                 "user_locked",
                 "notif_regular_enabled",
                 "notif_elite_enabled",
+                "sound_signal_entry_enabled",
             ),
         )
         existing = {row["key"] for row in cur.fetchall()}
@@ -213,6 +214,8 @@ def ensure_trial_defaults(user_id: int) -> None:
             inserts.append((user_id, "notif_regular_enabled", 1, now))
         if "notif_elite_enabled" not in existing:
             inserts.append((user_id, "notif_elite_enabled", 1, now))
+        if "sound_signal_entry_enabled" not in existing:
+            inserts.append((user_id, "sound_signal_entry_enabled", 1, now))
         if inserts:
             conn.executemany(
                 """

@@ -1519,6 +1519,10 @@ async def notify_signal_result_short(signal: dict) -> bool:
         await bot.send_message(
             user_id,
             message_text,
+            disable_notification=_disable_notification_for_event(
+                user_id=user_id,
+                event_type=status,
+            ),
             reply_markup=_status_toggle_inline_kb(lang=lang, score=score, enabled=bucket_enabled),
         )
     except Exception as exc:
@@ -1592,6 +1596,10 @@ async def notify_signal_activation(signal: dict) -> bool:
             await bot.send_message(
                 user_id,
                 message_text,
+                disable_notification=_disable_notification_for_event(
+                    user_id=user_id,
+                    event_type="ACTIVE_CONFIRMED",
+                ),
                 reply_markup=_status_toggle_inline_kb(lang=lang, score=score, enabled=bucket_enabled),
             )
             sent = True
@@ -1654,6 +1662,10 @@ async def notify_signal_poi_touched(signal: dict) -> bool:
             await bot.send_message(
                 user_id,
                 message_text,
+                disable_notification=_disable_notification_for_event(
+                    user_id=user_id,
+                    event_type="POI_TOUCHED",
+                ),
                 reply_markup=_status_toggle_inline_kb(lang=lang, score=score, enabled=bucket_enabled),
             )
             sent = True
@@ -2396,7 +2408,7 @@ async def sig_expand_callback(callback: CallbackQuery):
         return
     payload = _signal_payload_from_event(dict(event))
     full_text = _format_signal(payload, lang)
-    regular_enabled = bool(get_user_pref(callback.from_user.id, "notif_regular_enabled", 1))
+    regular_enabled = _is_signal_entry_sound_enabled(callback.from_user.id)
     await callback.message.edit_text(
         full_text,
         reply_markup=_expanded_signal_inline_kb(
@@ -2427,7 +2439,7 @@ async def sig_collapse_callback(callback: CallbackQuery):
         return
     payload = _signal_payload_from_event(dict(event))
     compact_text = _format_compact_signal(payload, lang)
-    regular_enabled = bool(get_user_pref(callback.from_user.id, "notif_regular_enabled", 1))
+    regular_enabled = _is_signal_entry_sound_enabled(callback.from_user.id)
     await callback.message.edit_text(
         compact_text,
         reply_markup=_compact_signal_inline_kb(
@@ -2467,15 +2479,15 @@ async def toggle_alerts_callback(callback: CallbackQuery):
     await callback.answer(i18n.t(lang, toast_key))
 
 
-@dp.callback_query(F.data == "sig_regular_toggle")
-async def sig_regular_toggle_callback(callback: CallbackQuery):
+@dp.callback_query(F.data == "sig_sound_toggle")
+async def sig_sound_toggle_callback(callback: CallbackQuery):
     if callback.from_user is None or callback.message is None:
         return
     user_id = callback.from_user.id
     lang = get_user_lang(user_id) or "ru"
-    current_enabled = bool(get_user_pref(user_id, "notif_regular_enabled", 1))
+    current_enabled = _is_signal_entry_sound_enabled(user_id)
     next_enabled = not current_enabled
-    set_user_pref(user_id, "notif_regular_enabled", 1 if next_enabled else 0)
+    set_user_pref(user_id, "sound_signal_entry_enabled", 1 if next_enabled else 0)
 
     include_legacy = allow_legacy_for_user(is_admin_user=is_admin(user_id))
     event = get_signal_event_by_message(
@@ -2510,7 +2522,7 @@ async def sig_regular_toggle_callback(callback: CallbackQuery):
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
-    toast_key = "SIGNAL_REGULAR_TOGGLE_TOAST_ON" if next_enabled else "SIGNAL_REGULAR_TOGGLE_TOAST_OFF"
+    toast_key = "SIGNAL_SOUND_TOGGLE_TOAST_ON" if next_enabled else "SIGNAL_SOUND_TOGGLE_TOAST_OFF"
     await callback.answer(i18n.t(lang, toast_key))
 
 
@@ -4684,7 +4696,7 @@ def _signal_symbol_text(symbol: str) -> str:
 
 
 def _compact_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: bool) -> InlineKeyboardMarkup:
-    regular_key = "SIGNAL_BUTTON_REGULAR_ON" if regular_enabled else "SIGNAL_BUTTON_REGULAR_OFF"
+    regular_key = "SIGNAL_BUTTON_SOUND_ON" if regular_enabled else "SIGNAL_BUTTON_SOUND_OFF"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -4694,7 +4706,7 @@ def _compact_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: boo
                 ),
                 InlineKeyboardButton(
                     text=i18n.t(lang, regular_key),
-                    callback_data="sig_regular_toggle",
+                    callback_data="sig_sound_toggle",
                 ),
             ]
         ]
@@ -4702,7 +4714,7 @@ def _compact_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: boo
 
 
 def _expanded_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: bool) -> InlineKeyboardMarkup:
-    regular_key = "SIGNAL_BUTTON_REGULAR_ON" if regular_enabled else "SIGNAL_BUTTON_REGULAR_OFF"
+    regular_key = "SIGNAL_BUTTON_SOUND_ON" if regular_enabled else "SIGNAL_BUTTON_SOUND_OFF"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -4712,11 +4724,25 @@ def _expanded_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: bo
                 ),
                 InlineKeyboardButton(
                     text=i18n.t(lang, regular_key),
-                    callback_data="sig_regular_toggle",
+                    callback_data="sig_sound_toggle",
                 ),
             ]
         ]
     )
+
+
+LOUD_NOTIFICATION_EVENTS = {"NEW_SIGNAL", "ACTIVE_CONFIRMED"}
+
+
+def _is_signal_entry_sound_enabled(user_id: int) -> bool:
+    return bool(get_user_pref(user_id, "sound_signal_entry_enabled", 1))
+
+
+def _disable_notification_for_event(*, user_id: int, event_type: str) -> bool:
+    normalized_event = str(event_type or "").upper()
+    if normalized_event in LOUD_NOTIFICATION_EVENTS:
+        return not _is_signal_entry_sound_enabled(user_id)
+    return True
 
 def _format_signal(signal: Dict[str, Any], lang: str) -> str:
     entry_low, entry_high = signal["entry_zone"]
@@ -4983,6 +5009,7 @@ async def send_signal_to_all(
         target_chat_id: int,
         text: str,
         *,
+        event_type: str,
         reply_markup: InlineKeyboardMarkup | None = None,
         disable_web_page_preview: bool | None = None,
         parse_mode: str | None = None,
@@ -4992,6 +5019,10 @@ async def send_signal_to_all(
             send_kwargs["reply_markup"] = reply_markup
         if disable_web_page_preview is not None:
             send_kwargs["disable_web_page_preview"] = disable_web_page_preview
+        send_kwargs["disable_notification"] = _disable_notification_for_event(
+            user_id=target_chat_id,
+            event_type=event_type,
+        )
         send_kwargs["parse_mode"] = parse_mode
         try:
             return await bot.send_message(target_chat_id, text, **send_kwargs)
@@ -5092,7 +5123,7 @@ async def send_signal_to_all(
             signal_reply_markup = _compact_signal_inline_kb(
                 lang=lang,
                 signal_id=0,
-                regular_enabled=bool(get_user_pref(chat_id, "notif_regular_enabled", 1)),
+                regular_enabled=_is_signal_entry_sound_enabled(chat_id),
             )
 
         try:
@@ -5100,6 +5131,7 @@ async def send_signal_to_all(
                 res = await _send_with_safe_fallback(
                     chat_id,
                     message_text,
+                    event_type="STATUS",
                     parse_mode=paywall_parse_mode,
                     reply_markup=_subscription_kb_for("ai", lang),
                 )
@@ -5107,6 +5139,7 @@ async def send_signal_to_all(
                 res = await _send_with_safe_fallback(
                     chat_id,
                     message_text,
+                    event_type="NEW_SIGNAL",
                     parse_mode=signal_parse_mode,
                     reply_markup=signal_reply_markup,
                     disable_web_page_preview=True,
@@ -5127,6 +5160,7 @@ async def send_signal_to_all(
                     res = await _send_with_safe_fallback(
                         chat_id,
                         message_text,
+                        event_type="STATUS",
                         parse_mode=paywall_parse_mode,
                         reply_markup=_subscription_kb_for("ai", lang),
                     )
@@ -5134,6 +5168,7 @@ async def send_signal_to_all(
                     res = await _send_with_safe_fallback(
                         chat_id,
                         message_text,
+                        event_type="NEW_SIGNAL",
                         parse_mode=signal_parse_mode,
                         reply_markup=signal_reply_markup,
                         disable_web_page_preview=True,
@@ -5249,7 +5284,7 @@ async def send_signal_to_all(
                         reply_markup=_compact_signal_inline_kb(
                             lang=lang,
                             signal_id=event_id,
-                            regular_enabled=bool(get_user_pref(chat_id, "notif_regular_enabled", 1)),
+                            regular_enabled=_is_signal_entry_sound_enabled(chat_id),
                         ),
                     )
         except Exception as exc:
