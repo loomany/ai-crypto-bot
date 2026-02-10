@@ -1035,14 +1035,11 @@ def _build_history_text(*, time_window: str, page: int, pages: int, total: int, 
     lines = [
         i18n.t(lang, "HISTORY_LIST_TITLE", period=period_label),
         i18n.t(lang, "HISTORY_PAGE_INFO", page=page, pages=pages, total=total),
-        "",
     ]
     if not rows:
+        lines.append("")
         lines.append(i18n.t(lang, "HISTORY_EMPTY_PERIOD"))
         return "\n".join(lines)
-
-    for row in rows:
-        lines.append(_format_history_item(row, lang))
     return "\n".join(lines)
 
 
