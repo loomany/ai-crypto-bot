@@ -14,13 +14,20 @@ from health import (
     update_current_symbol,
 )
 from db import list_signal_events_by_identity, update_signal_events_status
-from signal_audit_db import fetch_open_signals, mark_signal_closed, mark_signal_state
+from signal_audit_db import (
+    claim_signal_notification,
+    fetch_open_signals,
+    mark_signal_closed,
+    mark_signal_state,
+    mark_signal_tp1_hit,
+)
 from settings import SIGNAL_TTL_SECONDS
 from utils.safe_math import EPS, safe_div
 
 _signal_result_notifier = None
 _signal_activation_notifier = None
 _signal_poi_touched_notifier = None
+_signal_progress_notifier = None
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +45,11 @@ def set_signal_activation_notifier(handler) -> None:
 def set_signal_poi_touched_notifier(handler) -> None:
     global _signal_poi_touched_notifier
     _signal_poi_touched_notifier = handler
+
+
+def set_signal_progress_notifier(handler) -> None:
+    global _signal_progress_notifier
+    _signal_progress_notifier = handler
 
 
 def _parse_kline(kline: list[Any]) -> Optional[Dict[str, float]]:
@@ -190,9 +202,10 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
     tp2_r = 0.0 if zero_risk else safe_div(abs(tp2 - entry_ref), r_value, 0.0)
 
     activated_at = signal.get("activated_at")
+    is_activated = bool(signal.get("is_activated")) or activated_at is not None
     if activated_at is None:
         age_sec = int(time.time()) - sent_at
-        if age_sec >= ttl_sec:
+        if age_sec >= ttl_sec and not is_activated:
             return {
                 "outcome": "NO_FILL",
                 "pnl_r": None,
@@ -202,7 +215,7 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
         return None
 
     filled_at: int | None = int(activated_at)
-    tp1_hit = False
+    tp1_hit = bool(signal.get("tp1_hit"))
 
     for candle in candles:
         candle_ts = int(candle["open_time"] / 1000)
@@ -231,6 +244,15 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
 
         if tp1_hit_candle and not tp1_hit:
             tp1_hit = True
+            return {
+                "outcome": "TP1",
+                "pnl_r": None,
+                "filled_at": filled_at,
+                "notes": "tp1_hit",
+                "progress_event": "TP1",
+                "event_at": candle_ts,
+                "continue_open": True,
+            }
 
         if not tp1_hit and sl_hit:
             return {
@@ -249,7 +271,7 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
             }
 
     age_sec = int(time.time()) - sent_at
-    if age_sec < ttl_sec:
+    if age_sec < ttl_sec or is_activated:
         return None
 
     last_close = candles[-1]["close"] if candles else None
@@ -378,6 +400,24 @@ async def evaluate_open_signals(
             if result is None:
                 continue
 
+            progress_event = str(result.get("progress_event") or "").upper()
+            if progress_event == "TP1":
+                event_at = int(result.get("event_at") or time.time())
+                marked_tp1 = mark_signal_tp1_hit(str(signal["signal_id"]), tp1_hit_at=event_at)
+                if marked_tp1 > 0 and claim_signal_notification(str(signal["signal_id"]), event_type="TP1"):
+                    module = str(signal.get("module", ""))
+                    symbol = str(signal.get("symbol", ""))
+                    ts_value = int(signal.get("sent_at", 0))
+                    update_signal_events_status(
+                        module=module,
+                        symbol=symbol,
+                        ts=ts_value,
+                        status="TP1",
+                    )
+                    if _signal_progress_notifier is not None:
+                        await _signal_progress_notifier(dict(signal), "TP1")
+                continue
+
             logger.info(
                 "[close_notify] close detected (audit) signal_id=%s symbol=%s side=%s reason=%s",
                 signal.get("signal_id"),
@@ -409,6 +449,10 @@ async def evaluate_open_signals(
             }
             status_value = status_map.get(result["outcome"])
             if status_value is not None:
+                if status_value in {"TP2", "SL", "BE"}:
+                    claimed = claim_signal_notification(str(signal["signal_id"]), event_type=status_value)
+                    if not claimed:
+                        continue
                 module = str(signal.get("module", ""))
                 symbol = str(signal.get("symbol", ""))
                 ts_value = int(signal.get("sent_at", 0))

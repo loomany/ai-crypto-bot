@@ -43,7 +43,15 @@ def init_signal_audit_tables() -> None:
                 state TEXT NOT NULL DEFAULT 'WAITING_ENTRY',
                 poi_touched_at INTEGER,
                 activated_at INTEGER,
+                is_activated INTEGER NOT NULL DEFAULT 0,
                 entry_price REAL,
+                tp1_hit INTEGER NOT NULL DEFAULT 0,
+                tp1_hit_at INTEGER,
+                be_armed INTEGER NOT NULL DEFAULT 0,
+                tp1_notified INTEGER NOT NULL DEFAULT 0,
+                tp2_notified INTEGER NOT NULL DEFAULT 0,
+                sl_notified INTEGER NOT NULL DEFAULT 0,
+                be_notified INTEGER NOT NULL DEFAULT 0,
                 confirm_strict INTEGER NOT NULL DEFAULT 0,
                 confirm_count INTEGER NOT NULL DEFAULT 0
             )
@@ -64,6 +72,22 @@ def init_signal_audit_tables() -> None:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN activated_at INTEGER")
         if "entry_price" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN entry_price REAL")
+        if "is_activated" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN is_activated INTEGER NOT NULL DEFAULT 0")
+        if "tp1_hit" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN tp1_hit INTEGER NOT NULL DEFAULT 0")
+        if "tp1_hit_at" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN tp1_hit_at INTEGER")
+        if "be_armed" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN be_armed INTEGER NOT NULL DEFAULT 0")
+        if "tp1_notified" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN tp1_notified INTEGER NOT NULL DEFAULT 0")
+        if "tp2_notified" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN tp2_notified INTEGER NOT NULL DEFAULT 0")
+        if "sl_notified" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN sl_notified INTEGER NOT NULL DEFAULT 0")
+        if "be_notified" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN be_notified INTEGER NOT NULL DEFAULT 0")
         if "confirm_strict" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN confirm_strict INTEGER NOT NULL DEFAULT 0")
         if "confirm_count" not in cols:
@@ -251,6 +275,7 @@ def mark_signal_state(
     if activated_at is not None:
         set_clauses.append("activated_at = COALESCE(activated_at, ?)")
         params.append(int(activated_at))
+        set_clauses.append("is_activated = 1")
     if entry_price is not None:
         set_clauses.append("entry_price = COALESCE(entry_price, ?)")
         params.append(float(entry_price))
@@ -284,6 +309,7 @@ def mark_signal_activated(signal_id: str, *, activated_at: int, entry_price: flo
             """
             UPDATE signal_audit
             SET activated_at = ?,
+                is_activated = 1,
                 entry_price = ?
             WHERE signal_id = ?
               AND activated_at IS NULL
@@ -293,6 +319,54 @@ def mark_signal_activated(signal_id: str, *, activated_at: int, entry_price: flo
         )
         conn.commit()
         return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
+def mark_signal_tp1_hit(signal_id: str, *, tp1_hit_at: int) -> int:
+    conn = sqlite3.connect(get_db_path())
+    try:
+        cur = conn.execute(
+            """
+            UPDATE signal_audit
+            SET tp1_hit = 1,
+                tp1_hit_at = COALESCE(tp1_hit_at, ?),
+                be_armed = 1
+            WHERE signal_id = ?
+              AND status = 'open'
+              AND COALESCE(tp1_hit, 0) = 0
+            """,
+            (int(tp1_hit_at), signal_id),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
+def claim_signal_notification(signal_id: str, *, event_type: str) -> bool:
+    col_map = {
+        "TP1": "tp1_notified",
+        "TP2": "tp2_notified",
+        "SL": "sl_notified",
+        "BE": "be_notified",
+    }
+    col = col_map.get(str(event_type).upper())
+    if col is None:
+        return False
+    conn = sqlite3.connect(get_db_path())
+    try:
+        cur = conn.execute(
+            f"""
+            UPDATE signal_audit
+            SET {col} = 1
+            WHERE signal_id = ?
+              AND COALESCE({col}, 0) = 0
+            """,
+            (signal_id,),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0) > 0
     finally:
         conn.close()
 
@@ -556,7 +630,7 @@ def count_signals_sent_since(
 
 def get_ai_signal_stats(days: int | None, *, include_legacy: bool = False) -> dict:
     now = int(time.time())
-    params: list[Any] = ["TP1", "TP2", "SL", 80.0]
+    params: list[Any] = ["TP1", "TP2", "SL", "BE", 80.0]
     since_clauses: list[str] = []
     if days is not None:
         since_clauses.append("sent_at >= ?")
@@ -580,7 +654,7 @@ def get_ai_signal_stats(days: int | None, *, include_legacy: bool = False) -> di
             SELECT outcome, score
             FROM signal_audit
             WHERE status = 'closed'
-              AND outcome IN (?, ?, ?)
+              AND outcome IN (?, ?, ?, ?)
               AND score >= ?
               AND NOT (
                 symbol LIKE 'TEST%' OR
@@ -600,7 +674,7 @@ def get_ai_signal_stats(days: int | None, *, include_legacy: bool = False) -> di
 
         total = len(rows)
         tp2 = sum(1 for row in rows if row["outcome"] == "TP2")
-        tp1 = sum(1 for row in rows if row["outcome"] in ("TP1", "TP2"))
+        tp1 = sum(1 for row in rows if row["outcome"] in ("TP1", "TP2", "BE"))
         sl = sum(1 for row in rows if row["outcome"] == "SL")
         exp = 0
         winrate = safe_pct(tp1, total, 0.0) if total else 0.0
@@ -622,7 +696,7 @@ def get_ai_signal_stats(days: int | None, *, include_legacy: bool = False) -> di
             else:
                 bucket = buckets["80-100"]
             bucket["total"] += 1
-            if row["outcome"] in ("TP1", "TP2"):
+            if row["outcome"] in ("TP1", "TP2", "BE"):
                 bucket["tp1plus"] += 1
 
         for bucket in buckets.values():
