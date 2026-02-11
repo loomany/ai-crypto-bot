@@ -39,6 +39,31 @@ def _signal_quality_block(score: int, lang: str) -> str:
     return i18n.t(lang, "SIGNAL_QUALITY_ANALYSIS_ONLY")
 
 
+
+
+def _market_regime_lines(regime: Optional[str], direction: Optional[str], trend: Optional[bool], lang: str) -> list[str]:
+    regime_key = {
+        "RISK_ON": "SIGNAL_MARKET_REGIME_TREND",
+        "RISK_OFF": "SIGNAL_MARKET_REGIME_RISK_OFF",
+        "CHOP": "SIGNAL_MARKET_REGIME_CHOP",
+        "SQUEEZE": "SIGNAL_MARKET_REGIME_SQUEEZE",
+    }.get(str(regime or "").upper(), "SIGNAL_MARKET_REGIME_CHOP")
+    direction_key = {
+        "UP": "SIGNAL_MARKET_DIR_UP",
+        "DOWN": "SIGNAL_MARKET_DIR_DOWN",
+        "NEUTRAL": "SIGNAL_MARKET_DIR_NEUTRAL",
+    }.get(str(direction or "").upper(), "SIGNAL_MARKET_DIR_NEUTRAL")
+    trend_text = i18n.t(lang, "SIGNAL_TREND_YES") if bool(trend) else i18n.t(lang, "SIGNAL_TREND_NO")
+    return [
+        i18n.t(
+            lang,
+            "SIGNAL_MARKET_REGIME_LINE",
+            regime=i18n.t(lang, regime_key),
+            direction=i18n.t(lang, direction_key),
+        ),
+        i18n.t(lang, "SIGNAL_MARKET_TREND_LINE", trend=trend_text),
+    ]
+
 def format_scenario_message(
     *,
     lang: str,
@@ -59,6 +84,9 @@ def format_scenario_message(
     price_precision: int,
     score_breakdown: Optional[list[dict]] = None,
     lifetime_minutes: int = 720,
+    market_regime: Optional[str] = None,
+    market_direction: Optional[str] = None,
+    market_trend: Optional[bool] = None,
 ) -> str:
     is_long = side == "LONG"
     emoji = "📈" if is_long else "📉"
@@ -140,6 +168,7 @@ def format_scenario_message(
         "",
         symbol_text,
         i18n.t(lang, "SCENARIO_POSSIBLE_LINE", emoji=emoji, scenario=scenario_text),
+        *_market_regime_lines(market_regime, market_direction, market_trend, lang),
         i18n.t(lang, "SCENARIO_TIMEFRAME_LINE", timeframe=timeframe),
         i18n.t(lang, "SCENARIO_LIFETIME_MINUTES_LINE", minutes=max(1, int(lifetime_minutes))),
         "",
@@ -211,6 +240,9 @@ def format_signal_activation_message(
     sl: float,
     tp1: float,
     tp2: float,
+    market_regime: Optional[str] = None,
+    market_direction: Optional[str] = None,
+    market_trend: Optional[bool] = None,
 ) -> str:
     header = i18n.t(lang, "SIGNAL_ACTIVATED_HEADER")
     waiting = i18n.t(lang, "SIGNAL_ACTIVATED_WAITING")
@@ -220,6 +252,7 @@ def format_signal_activation_message(
         "",
         f"{ui_symbol(symbol)} - {side_value}",
         f"Score: {max(0, min(100, int(score)))}",
+        *_market_regime_lines(market_regime, market_direction, market_trend, lang),
         "",
         f"🔹 {i18n.t(lang, 'SIGNAL_ACTIVATED_ENTRY_LABEL')}: {_format_price(float(entry_price), 4)}",
         f"🛑 {i18n.t(lang, 'SIGNAL_ACTIVATED_SL_LABEL')}: {_format_price(float(sl), 4)}",
@@ -239,6 +272,9 @@ def format_signal_poi_touched_message(
     score: int,
     poi_from: float,
     poi_to: float,
+    market_regime: Optional[str] = None,
+    market_direction: Optional[str] = None,
+    market_trend: Optional[bool] = None,
 ) -> str:
     side_value = str(side).upper()
     lines = [
@@ -246,6 +282,7 @@ def format_signal_poi_touched_message(
         "",
         f"{ui_symbol(symbol)} · {side_value}",
         f"Score: {max(0, min(100, int(score)))}",
+        *_market_regime_lines(market_regime, market_direction, market_trend, lang),
         "",
         i18n.t(lang, "SIGNAL_POI_TOUCHED_ZONE_HEADER"),
         f"{_format_price(float(poi_from), 4)} – {_format_price(float(poi_to), 4)}",
@@ -270,6 +307,9 @@ def format_compact_scenario_message(
     score: int,
     price_precision: int,
     lifetime_minutes: int = 720,
+    market_regime: Optional[str] = None,
+    market_direction: Optional[str] = None,
+    market_trend: Optional[bool] = None,
 ) -> str:
     side_value = str(side).upper()
     score_value = max(0, min(100, int(score)))
@@ -283,6 +323,7 @@ def format_compact_scenario_message(
             timeframe=timeframe,
             entry_tf=timeframe,
         ),
+        *_market_regime_lines(market_regime, market_direction, market_trend, lang),
         i18n.t(
             lang,
             "SIGNAL_COMPACT_POI_LINE",

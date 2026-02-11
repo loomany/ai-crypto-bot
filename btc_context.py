@@ -11,9 +11,21 @@ from utils_klines import normalize_klines
 BTC_REGIME_RISK_ON = "RISK_ON"
 BTC_REGIME_RISK_OFF = "RISK_OFF"
 BTC_REGIME_CHOP = "CHOP"
+BTC_REGIME_SQUEEZE = "SQUEEZE"
 
 _SOFT_BTC_TTL_SEC = int(os.getenv("SOFT_BTC_TTL_SEC", "45") or "45")
 _SOFT_BTC_FORCE_REGIME = (os.getenv("SOFT_BTC_FORCE_REGIME", "") or "").strip().upper()
+_SOFT_BTC_ALLOW_FORCE = (os.getenv("SOFT_BTC_ALLOW_FORCE", "") or "").strip().lower() in {"1", "true", "yes", "y"}
+_APP_ENV = (os.getenv("APP_ENV", os.getenv("ENV", "")) or "").strip().lower()
+_IS_DEBUG_ENV = _APP_ENV in {"dev", "debug", "local", "test"}
+BTC_SQUEEZE_IMPULSE_3CANDLES_PCT = float(
+    os.getenv("BTC_SQUEEZE_IMPULSE_3CANDLES_PCT", "0.9") or "0.9"
+)
+BTC_SQUEEZE_VOLZ_MIN = float(os.getenv("BTC_SQUEEZE_VOLZ_MIN", "1.2") or "1.2")
+BTC_RISKOFF_ATR15M_PCT = float(os.getenv("BTC_RISKOFF_ATR15M_PCT", "0.9") or "0.9")
+BTC_RISKOFF_ATR15M_PCT_ON = float(os.getenv("BTC_RISKOFF_ATR15M_PCT_ON", str(BTC_RISKOFF_ATR15M_PCT)) or str(BTC_RISKOFF_ATR15M_PCT))
+BTC_RISKOFF_ATR15M_PCT_OFF = float(os.getenv("BTC_RISKOFF_ATR15M_PCT_OFF", "0.75") or "0.75")
+BTC_SQUEEZE_CLOSE_NEAR_EXTREME_PCT = float(os.getenv("BTC_SQUEEZE_CLOSE_NEAR_EXTREME_PCT", "0.15") or "0.15")
 _BTC_CONTEXT_CACHE: Dict[str, Any] = {"expires_at": 0.0, "value": None}
 _BTC_CONTEXT_LOCK = asyncio.Lock()
 
@@ -104,7 +116,7 @@ def _count_alternating_returns(candles_15m: List[Candle], sample: int = 32) -> i
     return alternations
 
 
-async def _fetch_btc_context_raw() -> Dict[str, Any]:
+async def _fetch_btc_context_raw(prev_regime: str = BTC_REGIME_CHOP) -> Dict[str, Any]:
     symbol = "BTCUSDT"
     k1h_raw, k15m_raw = await asyncio.gather(
         get_klines(symbol, "1h", 220),
@@ -132,16 +144,58 @@ async def _fetch_btc_context_raw() -> Dict[str, Any]:
     atr_pct_15m = _atr_percent(candles_15m, period=14, sample=24)
     crossovers = _count_ema50_crossovers(candles_15m, sample=48)
     alternations = _count_alternating_returns(candles_15m, sample=32)
+    closes_15m = [c.close for c in candles_15m]
+    impulse = 0.0
+    if len(closes_15m) >= 4:
+        impulse_base = closes_15m[-4]
+        if abs(impulse_base) > 1e-12:
+            impulse = (closes_15m[-1] - impulse_base) / impulse_base * 100.0
+
+    vol_z = 0.0
+    volumes = [c.volume for c in candles_15m]
+    baseline = volumes[-41:-1] if len(volumes) >= 41 else []
+    if baseline:
+        mean_volume = sum(baseline) / len(baseline)
+        variance = sum((v - mean_volume) ** 2 for v in baseline) / len(baseline)
+        std_volume = variance ** 0.5
+        if std_volume > 1e-12:
+            vol_z = (volumes[-1] - mean_volume) / std_volume
+
+    last_15m = candles_15m[-1]
+    close_near_high = False
+    close_near_low = False
+    if last_15m.high > 0:
+        close_near_high = ((last_15m.high - last_15m.close) / last_15m.high * 100.0) <= BTC_SQUEEZE_CLOSE_NEAR_EXTREME_PCT
+    if last_15m.low > 0:
+        close_near_low = ((last_15m.close - last_15m.low) / last_15m.low * 100.0) <= BTC_SQUEEZE_CLOSE_NEAR_EXTREME_PCT
 
     is_chop = atr_pct_15m <= 0.6 and (crossovers >= 4 or alternations >= 18)
     reasons: List[str] = [
         f"slope_1h={slope:+.3f}%",
         f"atr15m={atr_pct_15m:.3f}%",
+        f"impulse_3x15m={impulse:+.3f}%",
+        f"vol_z={vol_z:.2f}",
+        f"close_near_high={str(close_near_high).lower()}",
+        f"close_near_low={str(close_near_low).lower()}",
         f"ema50_crosses={crossovers}",
         f"alt_returns={alternations}",
     ]
+    btc_direction = "NEUTRAL"
 
-    if is_chop:
+    riskoff_on = atr_pct_15m >= BTC_RISKOFF_ATR15M_PCT_ON
+    riskoff_hysteresis_hold = prev_regime == BTC_REGIME_RISK_OFF and atr_pct_15m >= BTC_RISKOFF_ATR15M_PCT_OFF
+    if riskoff_on or riskoff_hysteresis_hold:
+        regime = BTC_REGIME_RISK_OFF
+        reasons.append("atr_riskoff_on" if riskoff_on else "atr_riskoff_hysteresis_hold")
+    elif (
+        abs(impulse) >= BTC_SQUEEZE_IMPULSE_3CANDLES_PCT
+        and vol_z >= BTC_SQUEEZE_VOLZ_MIN
+        and ((impulse > 0 and close_near_high) or (impulse < 0 and close_near_low))
+    ):
+        regime = BTC_REGIME_SQUEEZE
+        btc_direction = "UP" if impulse > 0 else "DOWN"
+        reasons.append("squeeze_detected")
+    elif is_chop:
         regime = BTC_REGIME_CHOP
         reasons.append("chop_detected")
     elif ema50 is not None and ema200 is not None and ema50 > ema200 and slope >= 0.08:
@@ -154,14 +208,22 @@ async def _fetch_btc_context_raw() -> Dict[str, Any]:
         regime = BTC_REGIME_CHOP
         reasons.append("mixed_trend_defaults_to_chop")
 
+    btc_trend = regime in {BTC_REGIME_RISK_ON, BTC_REGIME_RISK_OFF, BTC_REGIME_SQUEEZE}
+
     return {
         "btc_regime": regime,
+        "btc_direction": btc_direction,
+        "btc_trend": btc_trend,
         "reasons": reasons,
         "trend_1h": "up" if (ema50 or 0) > (ema200 or 0) else "down",
         "ema50_1h": ema50,
         "ema200_1h": ema200,
         "slope_1h_pct": slope,
         "atr_15m_pct": atr_pct_15m,
+        "impulse_15m_pct_3": impulse,
+        "vol_z_15m": vol_z,
+        "close_near_high_15m": close_near_high,
+        "close_near_low_15m": close_near_low,
         "whipsaw": {
             "ema50_crossovers": crossovers,
             "alternating_returns": alternations,
@@ -181,12 +243,20 @@ async def get_btc_regime() -> Dict[str, Any]:
         if cached and now < float(_BTC_CONTEXT_CACHE.get("expires_at", 0.0)):
             return dict(cached)
 
-        fresh = await _fetch_btc_context_raw()
+        prev_regime = str((cached or {}).get("btc_regime") or BTC_REGIME_CHOP).upper()
+        fresh = await _fetch_btc_context_raw(prev_regime=prev_regime)
         forced = _SOFT_BTC_FORCE_REGIME
-        if forced in {BTC_REGIME_RISK_ON, BTC_REGIME_RISK_OFF, BTC_REGIME_CHOP}:
+        can_force = _SOFT_BTC_ALLOW_FORCE or _IS_DEBUG_ENV
+        if forced and not can_force:
+            reasons = list(fresh.get("reasons") or [])
+            reasons.append("forced_regime_ignored_non_debug")
+            fresh["reasons"] = reasons
+        elif forced in {BTC_REGIME_RISK_ON, BTC_REGIME_RISK_OFF, BTC_REGIME_CHOP, BTC_REGIME_SQUEEZE}:
             reasons = list(fresh.get("reasons") or [])
             reasons.append(f"forced_regime={forced}")
             fresh["btc_regime"] = forced
+            fresh["btc_direction"] = "NEUTRAL"
+            fresh["btc_trend"] = forced in {BTC_REGIME_RISK_ON, BTC_REGIME_RISK_OFF, BTC_REGIME_SQUEEZE}
             fresh["reasons"] = reasons
 
         _BTC_CONTEXT_CACHE["value"] = fresh

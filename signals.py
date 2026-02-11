@@ -16,7 +16,7 @@ from db import get_state, set_state
 from symbol_cache import get_spot_usdt_symbols, get_top_usdt_symbols_by_volume
 from ai_patterns import analyze_ai_patterns
 from market_regime import get_market_regime
-from btc_context import BTC_REGIME_CHOP, BTC_REGIME_RISK_OFF, BTC_REGIME_RISK_ON
+from btc_context import BTC_REGIME_CHOP, BTC_REGIME_RISK_OFF, BTC_REGIME_RISK_ON, BTC_REGIME_SQUEEZE
 from indicators_cache import get_cached_atr, get_cached_ema, get_cached_rsi
 from utils_klines import normalize_klines
 from trading_core import (
@@ -134,6 +134,8 @@ SOFT_BTC_CHOP_SCORE_MIN = float(os.getenv("SOFT_BTC_CHOP_SCORE_MIN", "90") or "9
 SKIP_BTC_CHOP_LT90 = "skip_btc_chop_score_lt90"
 SKIP_BTC_RISK_ON_SHORT_LT90 = "skip_btc_risk_on_short_score_lt90"
 SKIP_BTC_RISK_OFF_LONG_LT90 = "skip_btc_risk_off_long_score_lt90"
+SKIP_BTC_SQUEEZE_UP_BLOCK_SHORT = "skip_btc_squeeze_up_block_short"
+SKIP_BTC_SQUEEZE_DOWN_BLOCK_LONG = "skip_btc_squeeze_down_block_long"
 try:
     ELITE_SCORE_GATE = float(os.getenv("ELITE_SCORE_GATE", "90"))
 except (TypeError, ValueError):
@@ -226,11 +228,19 @@ def apply_btc_soft_gate(
     regime = str(context.get("btc_regime") or BTC_REGIME_CHOP).upper()
     direction = str(signal.get("direction") or "").lower()
     score = float(signal.get("score", 0.0) or 0.0)
+    btc_dir = str(context.get("btc_direction") or "NEUTRAL").upper()
 
     if regime == BTC_REGIME_CHOP:
         if score < SOFT_BTC_CHOP_SCORE_MIN:
             return False, SKIP_BTC_CHOP_LT90, False
         return True, None, True
+
+    if regime == BTC_REGIME_SQUEEZE:
+        if btc_dir == "UP" and direction == "short":
+            return False, SKIP_BTC_SQUEEZE_UP_BLOCK_SHORT, False
+        if btc_dir == "DOWN" and direction == "long":
+            return False, SKIP_BTC_SQUEEZE_DOWN_BLOCK_LONG, False
+        return True, None, False
 
     if regime == BTC_REGIME_RISK_ON and direction == "short" and score < SOFT_BTC_CHOP_SCORE_MIN:
         return False, SKIP_BTC_RISK_ON_SHORT_LT90, False
