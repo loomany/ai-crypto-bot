@@ -1745,6 +1745,9 @@ async def notify_signal_activation(signal: dict) -> bool:
             sl=float(signal.get("sl", 0.0) or 0.0),
             tp1=float(signal.get("tp1", 0.0) or 0.0),
             tp2=float(signal.get("tp2", 0.0) or 0.0),
+            market_regime=signal.get("btc_regime"),
+            market_direction=signal.get("btc_direction"),
+            market_trend=signal.get("btc_trend"),
         )
         try:
             await bot.send_message(
@@ -1806,6 +1809,9 @@ async def notify_signal_poi_touched(signal: dict) -> bool:
             score=int(float(signal.get("score", 0.0) or 0.0)),
             poi_from=float(signal.get("entry_from", 0.0) or 0.0),
             poi_to=float(signal.get("entry_to", 0.0) or 0.0),
+            market_regime=signal.get("btc_regime"),
+            market_direction=signal.get("btc_direction"),
+            market_trend=signal.get("btc_trend"),
         )
         try:
             await bot.send_message(
@@ -5103,6 +5109,9 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
         price_precision=4,
         score_breakdown=breakdown,
         lifetime_minutes=int(signal.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60),
+        market_regime=signal.get("btc_regime"),
+        market_direction=signal.get("btc_direction"),
+        market_trend=signal.get("btc_trend"),
     )
     prefix = signal.get("title_prefix")
     if isinstance(prefix, dict):
@@ -5110,6 +5119,31 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
     if prefix:
         return f"{text}\n\n{prefix}"
     return text
+
+
+def _market_regime_lines_for_signal(signal: Dict[str, Any], lang: str) -> list[str]:
+    regime_text = i18n.t(
+        lang,
+        {
+            "RISK_ON": "SIGNAL_MARKET_REGIME_TREND",
+            "RISK_OFF": "SIGNAL_MARKET_REGIME_RISK_OFF",
+            "CHOP": "SIGNAL_MARKET_REGIME_CHOP",
+            "SQUEEZE": "SIGNAL_MARKET_REGIME_SQUEEZE",
+        }.get(str(signal.get("btc_regime") or "").upper(), "SIGNAL_MARKET_REGIME_CHOP"),
+    )
+    direction_text = i18n.t(
+        lang,
+        {
+            "UP": "SIGNAL_MARKET_DIR_UP",
+            "DOWN": "SIGNAL_MARKET_DIR_DOWN",
+            "NEUTRAL": "SIGNAL_MARKET_DIR_NEUTRAL",
+        }.get(str(signal.get("btc_direction") or "").upper(), "SIGNAL_MARKET_DIR_NEUTRAL"),
+    )
+    trend_text = i18n.t(lang, "SIGNAL_TREND_YES") if bool(signal.get("btc_trend")) else i18n.t(lang, "SIGNAL_TREND_NO")
+    return [
+        i18n.t(lang, "SIGNAL_MARKET_REGIME_LINE", regime=regime_text, direction=direction_text),
+        i18n.t(lang, "SIGNAL_MARKET_TREND_LINE", trend=trend_text),
+    ]
 
 
 def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
@@ -5149,6 +5183,7 @@ def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
             f"TP1: {_format_price(float(signal.get('tp1') or 0.0))}",
             f"TP2: {_format_price(float(signal.get('tp2') or 0.0))}",
             i18n.t(lang, "SIGNAL_SHORT_80_89_SCORE_LINE", score=score),
+            *_market_regime_lines_for_signal(signal, lang),
             i18n.t(
                 lang,
                 "SIGNAL_SHORT_80_89_TTL_LINE",
@@ -5172,6 +5207,7 @@ def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
             i18n.t(lang, "SIGNAL_SHORT_TP1_LINE", tp1=_format_price(float(signal.get("tp1") or 0.0))),
             i18n.t(lang, "SIGNAL_SHORT_TP2_LINE", tp2=_format_price(float(signal.get("tp2") or 0.0))),
             i18n.t(lang, "SIGNAL_SHORT_SL_LINE", sl=_format_price(float(signal.get("sl") or 0.0))),
+            *_market_regime_lines_for_signal(signal, lang),
         ]
 
     prefix = signal.get("title_prefix")
@@ -6110,6 +6146,8 @@ async def ai_scan_once() -> None:
         if module_state and isinstance(module_state.state, dict):
             module_state.state["soft_btc_gate_enabled"] = str(os.getenv("SOFT_BTC_GATE_ENABLED", "0") or "0").strip().lower() in {"1", "true", "yes", "y"}
             module_state.state["btc_regime"] = btc_context.get("btc_regime", "CHOP")
+            module_state.state["btc_direction"] = btc_context.get("btc_direction", "NEUTRAL")
+            module_state.state["btc_trend"] = bool(btc_context.get("btc_trend", False))
             module_state.state["btc_regime_reasons"] = btc_context.get("reasons", [])
             module_state.state.setdefault("skipped_by_btc_gate_total", 0)
             module_state.state.setdefault("skipped_by_btc_gate_reasons", {})
@@ -6149,6 +6187,9 @@ async def ai_scan_once() -> None:
                 signal["confirm_strict"] = True
             else:
                 signal.pop("confirm_strict", None)
+            signal["btc_regime"] = btc_context.get("btc_regime")
+            signal["btc_direction"] = btc_context.get("btc_direction")
+            signal["btc_trend"] = btc_context.get("btc_trend")
             try:
                 update_current_symbol("ai_signals", signal.get("symbol", ""))
                 print(
@@ -6344,6 +6385,9 @@ async def ai_scan_once() -> None:
                 signal["confirm_strict"] = True
             else:
                 signal.pop("confirm_strict", None)
+            signal["btc_regime"] = btc_context.get("btc_regime")
+            signal["btc_direction"] = btc_context.get("btc_direction")
+            signal["btc_trend"] = btc_context.get("btc_trend")
             try:
                 update_current_symbol("ai_signals", signal.get("symbol", ""))
                 print(f"[ai_signals] DIRECT SEND {signal['symbol']} {signal['direction']} score={score} confirm_strict={bool(signal.get('confirm_strict', False))}")
