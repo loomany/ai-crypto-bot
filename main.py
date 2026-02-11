@@ -2695,19 +2695,18 @@ async def ai_notify_off(callback: CallbackQuery):
         await callback.message.answer(i18n.t(lang, "AI_OFF_OK"))
 
 
-@dp.callback_query(F.data.regexp(r"^expand_signal:\d+$"))
+@dp.callback_query(F.data.regexp(r"^expand_signal:.+$"))
 async def sig_expand_callback(callback: CallbackQuery):
     if callback.from_user is None or callback.message is None:
         return
-    match = re.match(r"^expand_signal:(\d+)$", callback.data or "")
-    if not match:
-        await callback.answer()
-        return
-    signal_id = int(match.group(1))
+    signal_id: int | None = None
+    raw_signal_id = (callback.data or "").split(":", 1)[1] if ":" in (callback.data or "") else ""
+    if raw_signal_id.isdigit():
+        signal_id = int(raw_signal_id)
     lang = get_user_lang(callback.from_user.id) or "ru"
     include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
-    event = get_signal_by_id(signal_id, include_legacy=include_legacy)
-    if event is None and callback.message is not None:
+    event = get_signal_by_id(signal_id, include_legacy=include_legacy) if signal_id is not None else None
+    if event is None:
         event = get_signal_event_by_message(
             user_id=callback.from_user.id,
             tg_message_id=int(callback.message.message_id),
@@ -2719,7 +2718,7 @@ async def sig_expand_callback(callback: CallbackQuery):
     if int(event["user_id"]) != callback.from_user.id:
         await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
         return
-    resolved_signal_id = int(event.get("id") or signal_id)
+    resolved_signal_id = int(event.get("id") or signal_id or 0)
     payload = _signal_payload_from_event(dict(event))
     try:
         full_text = _format_signal(payload, lang)
@@ -2738,19 +2737,18 @@ async def sig_expand_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-@dp.callback_query(F.data.regexp(r"^collapse_signal:\d+$"))
+@dp.callback_query(F.data.regexp(r"^collapse_signal:.+$"))
 async def sig_collapse_callback(callback: CallbackQuery):
     if callback.from_user is None or callback.message is None:
         return
-    match = re.match(r"^collapse_signal:(\d+)$", callback.data or "")
-    if not match:
-        await callback.answer()
-        return
-    signal_id = int(match.group(1))
+    signal_id: int | None = None
+    raw_signal_id = (callback.data or "").split(":", 1)[1] if ":" in (callback.data or "") else ""
+    if raw_signal_id.isdigit():
+        signal_id = int(raw_signal_id)
     lang = get_user_lang(callback.from_user.id) or "ru"
     include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
-    event = get_signal_by_id(signal_id, include_legacy=include_legacy)
-    if event is None and callback.message is not None:
+    event = get_signal_by_id(signal_id, include_legacy=include_legacy) if signal_id is not None else None
+    if event is None:
         event = get_signal_event_by_message(
             user_id=callback.from_user.id,
             tg_message_id=int(callback.message.message_id),
@@ -2762,7 +2760,7 @@ async def sig_collapse_callback(callback: CallbackQuery):
     if int(event["user_id"]) != callback.from_user.id:
         await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
         return
-    resolved_signal_id = int(event.get("id") or signal_id)
+    resolved_signal_id = int(event.get("id") or signal_id or 0)
     payload = _signal_payload_from_event(dict(event))
     try:
         compact_text = _format_compact_signal(payload, lang)
