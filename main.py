@@ -2715,29 +2715,17 @@ async def sig_expand_callback(callback: CallbackQuery):
         full_text = _format_signal(payload, lang)
     except Exception:
         full_text = _format_compact_signal(payload, lang)
-    try:
-        await callback.message.edit_text(
-            full_text,
-            reply_markup=_expanded_signal_inline_kb(
-                lang=lang,
-                signal_id=signal_id,
-                symbol=str(event.get("symbol", "")),
-            ),
-            parse_mode=None,
-            disable_web_page_preview=True,
-        )
-    except TelegramBadRequest as exc:
-        logger.warning("sig_expand_callback edit failed for signal_id=%s: %s", signal_id, exc)
-        await _edit_message_with_chunks(
-            callback.message,
-            full_text,
-            reply_markup=_expanded_signal_inline_kb(
-                lang=lang,
-                signal_id=signal_id,
-                symbol=str(event.get("symbol", "")),
-            ),
-        )
-    await callback.answer(i18n.t(lang, "PUMP_TOGGLE_EXPANDED"))
+    await callback.message.edit_text(
+        full_text,
+        reply_markup=_expanded_signal_inline_kb(
+            lang=lang,
+            signal_id=signal_id,
+            symbol=str(event.get("symbol", "")),
+        ),
+        parse_mode=None,
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
 
 
 @dp.callback_query(F.data.regexp(r"^collapse_signal:\d+$"))
@@ -2760,29 +2748,17 @@ async def sig_collapse_callback(callback: CallbackQuery):
         compact_text = _format_compact_signal(payload, lang)
     except Exception:
         compact_text = _format_compact_signal({"score": payload.get("score", 0)}, lang)
-    try:
-        await callback.message.edit_text(
-            compact_text,
-            reply_markup=_compact_signal_inline_kb(
-                lang=lang,
-                signal_id=signal_id,
-                symbol=str(event.get("symbol", "")),
-            ),
-            parse_mode=None,
-            disable_web_page_preview=True,
-        )
-    except TelegramBadRequest as exc:
-        logger.warning("sig_collapse_callback edit failed for signal_id=%s: %s", signal_id, exc)
-        await _edit_message_with_chunks(
-            callback.message,
-            compact_text,
-            reply_markup=_compact_signal_inline_kb(
-                lang=lang,
-                signal_id=signal_id,
-                symbol=str(event.get("symbol", "")),
-            ),
-        )
-    await callback.answer(i18n.t(lang, "PUMP_TOGGLE_COLLAPSED"))
+    await callback.message.edit_text(
+        compact_text,
+        reply_markup=_compact_signal_inline_kb(
+            lang=lang,
+            signal_id=signal_id,
+            symbol=str(event.get("symbol", "")),
+        ),
+        parse_mode=None,
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
 
 
 @dp.callback_query(F.data.regexp(r"^toggle_alerts:(regular|elite)$"))
