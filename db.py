@@ -124,8 +124,6 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signal_events ADD COLUMN state TEXT NOT NULL DEFAULT 'WAITING_ENTRY'")
         if "poi_touched_at" not in cols:
             conn.execute("ALTER TABLE signal_events ADD COLUMN poi_touched_at INTEGER")
-        if "is_expanded" not in cols:
-            conn.execute("ALTER TABLE signal_events ADD COLUMN is_expanded INTEGER NOT NULL DEFAULT 0")
         conn.execute(
             """
             UPDATE signal_events
@@ -1492,40 +1490,6 @@ def update_signal_event_status_by_id(
                 int(time.time()),
                 int(event_id),
             ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def update_signal_event_message_meta(
-    *,
-    event_id: int,
-    tg_message_id: int | None = None,
-    is_expanded: bool | None = None,
-) -> None:
-    assignments: list[str] = ["updated_at = ?"]
-    params: list[object] = [int(time.time())]
-    if tg_message_id is not None:
-        assignments.append("tg_message_id = ?")
-        params.append(int(tg_message_id))
-    if is_expanded is not None:
-        assignments.append("is_expanded = ?")
-        params.append(1 if is_expanded else 0)
-
-    if len(assignments) == 1:
-        return
-
-    params.append(int(event_id))
-    conn = get_conn()
-    try:
-        conn.execute(
-            f"""
-            UPDATE signal_events
-            SET {', '.join(assignments)}
-            WHERE id = ?
-            """,
-            params,
         )
         conn.commit()
     finally:
