@@ -5301,18 +5301,6 @@ def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
 
 
 def _signal_payload_from_event(event: Dict[str, Any]) -> Dict[str, Any]:
-    def _as_float(value: Any, default: float = 0.0) -> float:
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return default
-
-    def _as_int(value: Any, default: int = 0) -> int:
-        try:
-            return int(round(float(value)))
-        except (TypeError, ValueError):
-            return default
-
     reason_raw = event.get("reason_json")
     reason = {}
     if isinstance(reason_raw, str) and reason_raw.strip():
@@ -5332,17 +5320,14 @@ def _signal_payload_from_event(event: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "symbol": str(event.get("symbol") or ""),
         "direction": "long" if str(event.get("side") or "").upper() == "LONG" else "short",
-        "entry_zone": (_as_float(event.get("poi_low")), _as_float(event.get("poi_high"))),
-        "sl": _as_float(event.get("sl")),
-        "tp1": _as_float(event.get("tp1")),
-        "tp2": _as_float(event.get("tp2")),
-        "score": _as_int(event.get("score")),
+        "entry_zone": (float(event.get("poi_low") or 0.0), float(event.get("poi_high") or 0.0)),
+        "sl": float(event.get("sl") or 0.0),
+        "tp1": float(event.get("tp1") or 0.0),
+        "tp2": float(event.get("tp2") or 0.0),
+        "score": int(round(float(event.get("score") or 0))),
         "reason": reason,
         "score_breakdown": breakdown,
-        "ttl_minutes": _as_int(event.get("ttl_minutes"), SIGNAL_TTL_SECONDS // 60),
-        "btc_regime": event.get("btc_regime"),
-        "btc_direction": event.get("btc_direction"),
-        "btc_trend": bool(event.get("btc_trend")),
+        "ttl_minutes": int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60),
     }
 
 
