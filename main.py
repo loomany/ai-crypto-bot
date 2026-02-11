@@ -5970,7 +5970,7 @@ async def pump_scan_once(bot: Bot) -> None:
                 return_stats=True,
             )
         if not symbols:
-            mark_error("pumpdump", "no symbols to scan")
+            mark_warn("pumpdump", "no symbols to scan")
             return
         debug_symbol = os.getenv("DEBUG_SYMBOL", "USUALUSDT").upper()
         in_universe = debug_symbol in symbols
@@ -6018,7 +6018,7 @@ async def pump_scan_once(bot: Bot) -> None:
         rotation_added = max(0, len(candidates) - len(symbols))
         total = len(candidates)
         if not candidates:
-            mark_error("pumpdump", "no symbols to scan after exclusion")
+            mark_warn("pumpdump", "no symbols to scan after exclusion")
             return
         try:
             cursor = int(get_state("pumpdump_cursor", "0") or "0")

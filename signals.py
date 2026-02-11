@@ -235,10 +235,10 @@ def apply_btc_soft_gate(
         return False, "skip_btc_invalid_signal", False
 
     context = btc_context if isinstance(btc_context, dict) else {}
-    regime = str(context.get("btc_regime") or BTC_REGIME_CHOP).upper()
-    direction = str(signal.get("direction") or "").lower()
+    regime = str(context.get("btc_regime") or BTC_REGIME_CHOP).strip().upper()
+    direction = str(signal.get("direction") or "").strip().lower()
     score = float(signal.get("score", 0.0) or 0.0)
-    btc_dir = str(context.get("btc_direction") or "NEUTRAL").upper()
+    btc_dir = str(context.get("btc_direction") or "NEUTRAL").strip().upper()
 
     if regime == BTC_REGIME_CHOP:
         if score < SOFT_BTC_CHOP_SCORE_MIN:
