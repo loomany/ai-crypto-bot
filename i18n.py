@@ -360,6 +360,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "history_status_in_progress": "🟡 В процессе",
         "history_score_label_short": "Score {value}",
         "history_expired_helper": "ℹ️ Истёкшие сигналы означают, что сделка не состоялась, и это не убыток.",
+        "history_indicator_poi_touched": "🟠 Вошла в зону (POI)",
+        "history_indicator_activated": "🟡 Активировался (вход подтверждён)",
         "explanation_block": (
             "━━━━━━━━━━━━━━━━\n"
             "ℹ️ Пояснение\n"
@@ -1105,6 +1107,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "history_status_in_progress": "🟡 In progress",
         "history_score_label_short": "Score {value}",
         "history_expired_helper": "ℹ️ Expired signals mean no trade occurred and are not losses.",
+        "history_indicator_poi_touched": "🟠 POI touched",
+        "history_indicator_activated": "🟡 Activated (entry confirmed)",
         "explanation_block": (
             "━━━━━━━━━━━━━━━━\n"
             "ℹ️ Explanation\n"
