@@ -5,6 +5,7 @@ from typing import Iterable, List, Optional, Tuple
 
 from cutoff_config import get_effective_cutoff_ts
 from db_path import get_db_path
+from history_status import get_signal_status_key, is_terminal_status_key
 from symbol_cache import get_blocked_symbols
 from utils.safe_math import safe_div, safe_pct
 
@@ -662,9 +663,12 @@ def get_signal_history(
                 side,
                 CAST(ROUND(score) AS INTEGER) AS score,
                 COALESCE(result, status) AS outcome,
+                result,
                 status,
                 state,
                 poi_touched_at,
+                activated_at,
+                ttl_minutes,
                 ts AS created_at,
                 poi_low AS entry_low,
                 poi_high AS entry_high,
@@ -758,6 +762,13 @@ def get_history_winrate_summary(
             SELECT
                 CAST(ROUND(score) AS INTEGER) AS score,
                 UPPER(TRIM(COALESCE(result, status, ''))) AS outcome,
+                result,
+                status,
+                state,
+                poi_touched_at,
+                activated_at,
+                ttl_minutes,
+                ts,
                 poi_low,
                 poi_high,
                 sl,
@@ -770,22 +781,6 @@ def get_history_winrate_summary(
         rows = cur.fetchall()
     finally:
         conn.close()
-
-    win_statuses = {"TP", "TP1", "TP2", "BE", "PASSED"}
-    loss_statuses = {"SL", "FAILED"}
-    expired_no_entry_statuses = {"EXPIRED_NO_ENTRY", "EXPIRED", "EXP", "NO_FILL", "NF", "NEUTRAL"}
-    no_confirmation_statuses = {"NO_CONFIRMATION", "AMBIGUOUS"}
-
-    def _history_outcome_type(outcome: str) -> str:
-        if outcome in win_statuses:
-            return "TP"
-        if outcome in loss_statuses:
-            return "SL"
-        if outcome in expired_no_entry_statuses:
-            return "EXPIRED_NO_ENTRY"
-        if outcome in no_confirmation_statuses:
-            return "NO_CONFIRMATION"
-        return "IN_PROGRESS"
 
     summary: dict[str, object] = {
         "90_100": {"wins": 0, "losses": 0, "closed": 0, "winrate": None, "avg_rr": None},
@@ -804,8 +799,7 @@ def get_history_winrate_summary(
 
     for row in rows:
         score = int(row["score"] or 0)
-        outcome = str(row["outcome"] or "")
-        outcome_type = _history_outcome_type(outcome)
+        outcome_type = get_signal_status_key(dict(row))
         totals = summary["totals"]
         if isinstance(totals, dict):
             if outcome_type == "TP":
@@ -816,7 +810,7 @@ def get_history_winrate_summary(
                 totals["expired_no_entry"] = int(totals.get("expired_no_entry", 0) or 0) + 1
             elif outcome_type == "NO_CONFIRMATION":
                 totals["no_confirmation"] = int(totals.get("no_confirmation", 0) or 0) + 1
-            else:
+            elif not is_terminal_status_key(outcome_type):
                 totals["in_progress"] = int(totals.get("in_progress", 0) or 0) + 1
 
         if 90 <= score <= 100:
