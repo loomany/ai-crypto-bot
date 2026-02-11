@@ -5019,26 +5019,51 @@ def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
     side_key = "SIGNAL_SHORT_SIDE_LONG" if is_long else "SIGNAL_SHORT_SIDE_SHORT"
     entry_low, entry_high = signal.get("entry_zone", (0.0, 0.0))
 
-    lines = [
-        i18n.t(
-            lang,
-            "SIGNAL_SHORT_SYMBOL_SIDE_LINE",
-            symbol=symbol_text,
-            side=i18n.t(lang, side_key),
-        ),
-        i18n.t(
-            lang,
-            "SIGNAL_SHORT_POI_LINE",
-            poi_from=_format_price(float(entry_low or 0.0)),
-            poi_to=_format_price(float(entry_high or 0.0)),
-        ),
-        i18n.t(lang, "SIGNAL_SHORT_TP1_LINE", tp1=_format_price(float(signal.get("tp1") or 0.0))),
-        i18n.t(lang, "SIGNAL_SHORT_TP2_LINE", tp2=_format_price(float(signal.get("tp2") or 0.0))),
-        i18n.t(lang, "SIGNAL_SHORT_SL_LINE", sl=_format_price(float(signal.get("sl") or 0.0))),
-    ]
+    scenario_tf = str(signal.get("tf") or signal.get("timeframe") or "1H").strip() or "1H"
+    entry_tf = str(signal.get("entry_tf") or signal.get("confirm_tf") or scenario_tf).strip() or scenario_tf
+    scenario_tf = scenario_tf.upper()
 
     if 80 <= score <= 89:
-        lines.extend(["", i18n.t(lang, "SIGNAL_SHORT_HIGH_RISK_WARNING")])
+        lines = [
+            i18n.t(lang, "SIGNAL_COMPACT_HIGH_RISK_HEADER"),
+            i18n.t(lang, "SIGNAL_SHORT_80_89_SYMBOL_LINE", symbol=symbol_text),
+            i18n.t(
+                lang,
+                "SIGNAL_SHORT_80_89_META_LINE",
+                side="LONG" if is_long else "SHORT",
+                timeframe=scenario_tf,
+                entry_tf=entry_tf,
+            ),
+            "",
+            f"POI: {_format_price(float(entry_low or 0.0))}–{_format_price(float(entry_high or 0.0))}",
+            f"SL: {_format_price(float(signal.get('sl') or 0.0))}",
+            f"TP1: {_format_price(float(signal.get('tp1') or 0.0))}",
+            f"TP2: {_format_price(float(signal.get('tp2') or 0.0))}",
+            i18n.t(lang, "SIGNAL_SHORT_80_89_SCORE_LINE", score=score),
+            i18n.t(
+                lang,
+                "SIGNAL_SHORT_80_89_TTL_LINE",
+                minutes=max(1, int(signal.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)),
+            ),
+        ]
+    else:
+        lines = [
+            i18n.t(
+                lang,
+                "SIGNAL_SHORT_SYMBOL_SIDE_LINE",
+                symbol=symbol_text,
+                side=i18n.t(lang, side_key),
+            ),
+            i18n.t(
+                lang,
+                "SIGNAL_SHORT_POI_LINE",
+                poi_from=_format_price(float(entry_low or 0.0)),
+                poi_to=_format_price(float(entry_high or 0.0)),
+            ),
+            i18n.t(lang, "SIGNAL_SHORT_TP1_LINE", tp1=_format_price(float(signal.get("tp1") or 0.0))),
+            i18n.t(lang, "SIGNAL_SHORT_TP2_LINE", tp2=_format_price(float(signal.get("tp2") or 0.0))),
+            i18n.t(lang, "SIGNAL_SHORT_SL_LINE", sl=_format_price(float(signal.get("sl") or 0.0))),
+        ]
 
     prefix = signal.get("title_prefix")
     if isinstance(prefix, dict):

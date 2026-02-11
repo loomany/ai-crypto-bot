@@ -519,6 +519,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SIGNAL_SHORT_TP1_LINE": "TP1: {tp1}",
         "SIGNAL_SHORT_TP2_LINE": "TP2: {tp2}",
         "SIGNAL_SHORT_SL_LINE": "SL: {sl}",
+        "SIGNAL_SHORT_80_89_SYMBOL_LINE": "{symbol} / USDT",
+        "SIGNAL_SHORT_80_89_META_LINE": "{side} · TF: {timeframe} · Entry: {entry_tf}",
+        "SIGNAL_SHORT_80_89_SCORE_LINE": "Score: {score}",
+        "SIGNAL_SHORT_80_89_TTL_LINE": "TTL: ~{minutes} мин",
         "SIGNAL_SHORT_HIGH_RISK_WARNING": (
             "⚠️ ПОВЫШЕННЫЙ РИСК\n"
             "Только для опытных трейдеров\n"
@@ -1243,6 +1247,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SIGNAL_SHORT_TP1_LINE": "TP1: {tp1}",
         "SIGNAL_SHORT_TP2_LINE": "TP2: {tp2}",
         "SIGNAL_SHORT_SL_LINE": "SL: {sl}",
+        "SIGNAL_SHORT_80_89_SYMBOL_LINE": "{symbol} / USDT",
+        "SIGNAL_SHORT_80_89_META_LINE": "{side} · TF: {timeframe} · Entry: {entry_tf}",
+        "SIGNAL_SHORT_80_89_SCORE_LINE": "Score: {score}",
+        "SIGNAL_SHORT_80_89_TTL_LINE": "TTL: ~{minutes} min",
         "SIGNAL_SHORT_HIGH_RISK_WARNING": (
             "⚠️ HIGHER RISK\n"
             "Experienced traders only\n"
