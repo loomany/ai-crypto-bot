@@ -130,8 +130,10 @@ SOFT_BTC_GATE_ENABLED = os.getenv("SOFT_BTC_GATE_ENABLED", "0").lower() in (
     "yes",
     "y",
 )
-SOFT_BTC_CHOP_SCORE_MIN = float(os.getenv("SOFT_BTC_CHOP_SCORE_MIN", "90") or "90")
-SKIP_BTC_CHOP_LT90 = "skip_btc_chop_score_lt90"
+SOFT_BTC_CHOP_SCORE_MIN = float(
+    os.getenv("BTC_CHOP_SCORE_MIN", os.getenv("SOFT_BTC_CHOP_SCORE_MIN", "90")) or "90"
+)
+SKIP_BTC_CHOP_SCORE_LT90 = "skip_btc_chop_score_lt90"
 SKIP_BTC_RISK_ON_SHORT_LT90 = "skip_btc_risk_on_short_score_lt90"
 SKIP_BTC_RISK_OFF_LONG_LT90 = "skip_btc_risk_off_long_score_lt90"
 SKIP_BTC_SQUEEZE_UP_BLOCK_SHORT = "skip_btc_squeeze_up_block_short"
@@ -242,7 +244,7 @@ def apply_btc_soft_gate(
 
     if regime == BTC_REGIME_CHOP:
         if score < SOFT_BTC_CHOP_SCORE_MIN:
-            return False, SKIP_BTC_CHOP_LT90, False
+            return False, SKIP_BTC_CHOP_SCORE_LT90, False
         return True, None, True
 
     if regime == BTC_REGIME_SQUEEZE:
