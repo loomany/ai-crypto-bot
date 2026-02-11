@@ -5013,6 +5013,15 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
 
 
 def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
+    recommended_header = (
+        "🔥 РЕКОМЕНДУЕМЫЙ СИГНАЛ\n"
+        "Основной рабочий диапазон (Score 90–100)\n"
+        "Используется для торговли"
+        if lang == "ru"
+        else "🔥 RECOMMENDED SIGNAL\n"
+        "Primary working range (Score 90–100)\n"
+        "Designed for active trading"
+    )
     score = max(0, min(100, int(signal.get("score", 0) or 0)))
     symbol_text = _signal_symbol_text(str(signal.get("symbol") or ""))
     is_long = str(signal.get("direction") or "").lower() == "long"
@@ -5070,7 +5079,10 @@ def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
         prefix = prefix.get(lang) or prefix.get("ru")
     if prefix:
         lines.extend(["", str(prefix)])
-    return "\n".join(lines)
+    signal_text = "\n".join(lines)
+    if score >= 90:
+        return f"{recommended_header}\n\n{signal_text}"
+    return signal_text
 
 
 def _signal_payload_from_event(event: Dict[str, Any]) -> Dict[str, Any]:
