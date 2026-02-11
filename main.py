@@ -2722,7 +2722,7 @@ async def sig_expand_callback(callback: CallbackQuery):
             signal_id=signal_id,
             symbol=str(event.get("symbol", "")),
         ),
-        parse_mode="HTML",
+        parse_mode=None,
         disable_web_page_preview=True,
     )
     await callback.answer()
@@ -2755,7 +2755,7 @@ async def sig_collapse_callback(callback: CallbackQuery):
             signal_id=signal_id,
             symbol=str(event.get("symbol", "")),
         ),
-        parse_mode="HTML",
+        parse_mode=None,
         disable_web_page_preview=True,
     )
     await callback.answer()
