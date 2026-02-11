@@ -2564,9 +2564,8 @@ async def sig_toggle(callback: CallbackQuery):
             lang=lang,
             back_callback=back_callback,
             event_id=event_id,
-            event_status=str(event.get("status", "")),
-            is_admin_user=is_admin(callback.from_user.id),
             expanded=next_state,
+            symbol=str(event.get("symbol", "")),
         ),
     )
 
@@ -2651,9 +2650,8 @@ async def sig_refresh(callback: CallbackQuery):
                     lang=lang,
                     back_callback=back_callback,
                     event_id=event_id,
-                    event_status=str(event.get("status", "")),
-                    is_admin_user=True,
                     expanded=expanded,
+                    symbol=str(event.get("symbol", "")),
                 ),
             )
         await callback.message.answer(report_text)
