@@ -2699,108 +2699,84 @@ async def ai_notify_off(callback: CallbackQuery):
 async def sig_expand_callback(callback: CallbackQuery):
     if callback.from_user is None or callback.message is None:
         return
-    callback_answered = False
+    signal_id: int | None = None
+    raw_signal_id = (callback.data or "").split(":", 1)[1] if ":" in (callback.data or "") else ""
+    if raw_signal_id.isdigit():
+        signal_id = int(raw_signal_id)
     lang = get_user_lang(callback.from_user.id) or "ru"
+    include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
+    event = get_signal_by_id(signal_id, include_legacy=include_legacy) if signal_id is not None else None
+    if event is None:
+        event = get_signal_event_by_message(
+            user_id=callback.from_user.id,
+            tg_message_id=int(callback.message.message_id),
+            include_legacy=include_legacy,
+        )
+    if event is None:
+        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+        return
+    if int(event["user_id"]) != callback.from_user.id:
+        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+        return
+    resolved_signal_id = int(event.get("id") or signal_id or 0)
+    payload = _signal_payload_from_event(dict(event))
     try:
-        signal_id: int | None = None
-        raw_signal_id = (callback.data or "").split(":", 1)[1] if ":" in (callback.data or "") else ""
-        if raw_signal_id.isdigit():
-            signal_id = int(raw_signal_id)
-        include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
-        event = get_signal_by_id(signal_id, include_legacy=include_legacy) if signal_id is not None else None
-        if event is None:
-            event = get_signal_event_by_message(
-                user_id=callback.from_user.id,
-                tg_message_id=int(callback.message.message_id),
-                include_legacy=include_legacy,
-            )
-        if event is None or int(event["user_id"]) != callback.from_user.id:
-            await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
-            callback_answered = True
-            return
-        resolved_signal_id = int(event.get("id") or signal_id or 0)
-        payload = _signal_payload_from_event(dict(event))
-        try:
-            full_text = _format_signal(payload, lang)
-        except Exception:
-            full_text = _format_compact_signal(payload, lang)
-        try:
-            await callback.message.edit_text(
-                full_text,
-                reply_markup=_expanded_signal_inline_kb(
-                    lang=lang,
-                    signal_id=resolved_signal_id,
-                    symbol=str(event.get("symbol", "")),
-                ),
-                parse_mode=None,
-                disable_web_page_preview=True,
-            )
-        except TelegramBadRequest as exc:
-            if "message is not modified" not in str(exc).lower():
-                raise
-    except Exception as exc:
-        mark_error("sig_expand", str(exc))
-        with suppress(Exception):
-            await callback.answer(i18n.t(lang, "GENERIC_ERROR"), show_alert=True)
-            callback_answered = True
-    finally:
-        if not callback_answered:
-            with suppress(Exception):
-                await callback.answer()
+        full_text = _format_signal(payload, lang)
+    except Exception:
+        full_text = _format_compact_signal(payload, lang)
+    await callback.message.edit_text(
+        full_text,
+        reply_markup=_expanded_signal_inline_kb(
+            lang=lang,
+            signal_id=resolved_signal_id,
+            symbol=str(event.get("symbol", "")),
+        ),
+        parse_mode=None,
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
 
 
 @dp.callback_query(F.data.regexp(r"^collapse_signal:.+$"))
 async def sig_collapse_callback(callback: CallbackQuery):
     if callback.from_user is None or callback.message is None:
         return
-    callback_answered = False
+    signal_id: int | None = None
+    raw_signal_id = (callback.data or "").split(":", 1)[1] if ":" in (callback.data or "") else ""
+    if raw_signal_id.isdigit():
+        signal_id = int(raw_signal_id)
     lang = get_user_lang(callback.from_user.id) or "ru"
+    include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
+    event = get_signal_by_id(signal_id, include_legacy=include_legacy) if signal_id is not None else None
+    if event is None:
+        event = get_signal_event_by_message(
+            user_id=callback.from_user.id,
+            tg_message_id=int(callback.message.message_id),
+            include_legacy=include_legacy,
+        )
+    if event is None:
+        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+        return
+    if int(event["user_id"]) != callback.from_user.id:
+        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+        return
+    resolved_signal_id = int(event.get("id") or signal_id or 0)
+    payload = _signal_payload_from_event(dict(event))
     try:
-        signal_id: int | None = None
-        raw_signal_id = (callback.data or "").split(":", 1)[1] if ":" in (callback.data or "") else ""
-        if raw_signal_id.isdigit():
-            signal_id = int(raw_signal_id)
-        include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
-        event = get_signal_by_id(signal_id, include_legacy=include_legacy) if signal_id is not None else None
-        if event is None:
-            event = get_signal_event_by_message(
-                user_id=callback.from_user.id,
-                tg_message_id=int(callback.message.message_id),
-                include_legacy=include_legacy,
-            )
-        if event is None or int(event["user_id"]) != callback.from_user.id:
-            await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
-            callback_answered = True
-            return
-        resolved_signal_id = int(event.get("id") or signal_id or 0)
-        payload = _signal_payload_from_event(dict(event))
-        try:
-            compact_text = _format_compact_signal(payload, lang)
-        except Exception:
-            compact_text = _format_compact_signal({"score": payload.get("score", 0)}, lang)
-        try:
-            await callback.message.edit_text(
-                compact_text,
-                reply_markup=_compact_signal_inline_kb(
-                    lang=lang,
-                    signal_id=resolved_signal_id,
-                    symbol=str(event.get("symbol", "")),
-                ),
-                parse_mode=None,
-                disable_web_page_preview=True,
-            )
-        except TelegramBadRequest as exc:
-            if "message is not modified" not in str(exc).lower():
-                raise
-    except Exception as exc:
-        mark_error("sig_collapse", str(exc))
-        with suppress(Exception):
-            await callback.answer(i18n.t(lang, "GENERIC_ERROR"), show_alert=True)
-            callback_answered = True
-    finally:
-        if not callback_answered:
-            with suppress(Exception):
-                await callback.answer()
+        compact_text = _format_compact_signal(payload, lang)
+    except Exception:
+        compact_text = _format_compact_signal({"score": payload.get("score", 0)}, lang)
+    await callback.message.edit_text(
+        compact_text,
+        reply_markup=_compact_signal_inline_kb(
+            lang=lang,
+            signal_id=resolved_signal_id,
+            symbol=str(event.get("symbol", "")),
+        ),
+        parse_mode=None,
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
 
 
 @dp.callback_query(F.data.regexp(r"^toggle_alerts:(regular|elite)$"))
