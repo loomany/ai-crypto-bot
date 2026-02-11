@@ -2715,23 +2715,16 @@ async def sig_expand_callback(callback: CallbackQuery):
         full_text = _format_signal(payload, lang)
     except Exception:
         full_text = _format_compact_signal(payload, lang)
-    try:
-        await callback.message.edit_text(
-            full_text,
-            reply_markup=_expanded_signal_inline_kb(
-                lang=lang,
-                signal_id=signal_id,
-                symbol=str(event.get("symbol", "")),
-            ),
-            parse_mode=None,
-            disable_web_page_preview=True,
-        )
-    except TelegramBadRequest as exc:
-        text = str(exc).lower()
-        if "message is not modified" not in text:
-            logger.warning("sig_expand_callback edit failed signal_id=%s user_id=%s err=%s", signal_id, callback.from_user.id, exc)
-            await callback.answer(i18n.t(lang, "SIGNAL_ACTION_FAILED"), show_alert=True)
-            return
+    await callback.message.edit_text(
+        full_text,
+        reply_markup=_expanded_signal_inline_kb(
+            lang=lang,
+            signal_id=signal_id,
+            symbol=str(event.get("symbol", "")),
+        ),
+        parse_mode=None,
+        disable_web_page_preview=True,
+    )
     await callback.answer()
 
 
@@ -2755,23 +2748,16 @@ async def sig_collapse_callback(callback: CallbackQuery):
         compact_text = _format_compact_signal(payload, lang)
     except Exception:
         compact_text = _format_compact_signal({"score": payload.get("score", 0)}, lang)
-    try:
-        await callback.message.edit_text(
-            compact_text,
-            reply_markup=_compact_signal_inline_kb(
-                lang=lang,
-                signal_id=signal_id,
-                symbol=str(event.get("symbol", "")),
-            ),
-            parse_mode=None,
-            disable_web_page_preview=True,
-        )
-    except TelegramBadRequest as exc:
-        text = str(exc).lower()
-        if "message is not modified" not in text:
-            logger.warning("sig_collapse_callback edit failed signal_id=%s user_id=%s err=%s", signal_id, callback.from_user.id, exc)
-            await callback.answer(i18n.t(lang, "SIGNAL_ACTION_FAILED"), show_alert=True)
-            return
+    await callback.message.edit_text(
+        compact_text,
+        reply_markup=_compact_signal_inline_kb(
+            lang=lang,
+            signal_id=signal_id,
+            symbol=str(event.get("symbol", "")),
+        ),
+        parse_mode=None,
+        disable_web_page_preview=True,
+    )
     await callback.answer()
 
 

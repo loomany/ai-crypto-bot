@@ -245,7 +245,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PD_OFF_OK": "🚫 Pump/Dump уведомления отключены.",
         "NO_ACCESS": "⛔ Нет доступа",
         "SIGNAL_NOT_FOUND": "Сигнал не найден.",
-        "SIGNAL_ACTION_FAILED": "Не удалось обновить сообщение. Попробуйте ещё раз.",
         "CONTACT_ADMIN_BLOCK": (
             "💬 Связь с админом: {admin_contact}\n"
             "При обращении укажите ваш ID: {user_id}"
@@ -1003,7 +1002,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PD_OFF_OK": "🚫 Pump/Dump notifications disabled.",
         "NO_ACCESS": "⛔ Access denied",
         "SIGNAL_NOT_FOUND": "Signal not found.",
-        "SIGNAL_ACTION_FAILED": "Could not update the message. Please try again.",
         "CONTACT_ADMIN_BLOCK": (
             "💬 Contact admin: {admin_contact}\n"
             "When messaging, include your ID: {user_id}"
