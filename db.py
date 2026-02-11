@@ -1583,6 +1583,42 @@ def list_pending_result_notifications(limit: int = 200) -> List[sqlite3.Row]:
         conn.close()
 
 
+def count_pending_result_notifications() -> int:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM signal_events
+            WHERE result_notified = 0
+              AND UPPER(COALESCE(result, status)) IN ('TP1', 'TP2', 'SL', 'EXP', 'NO_FILL', 'NF', 'BE', 'AMBIGUOUS')
+              AND (is_test IS NULL OR is_test = 0)
+            """
+        )
+        row = cur.fetchone()
+        return int(row["cnt"]) if row is not None else 0
+    finally:
+        conn.close()
+
+
+def get_last_close_event() -> Optional[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM signal_events
+            WHERE UPPER(COALESCE(result, status)) IN ('TP1', 'TP2', 'SL')
+              AND (is_test IS NULL OR is_test = 0)
+            ORDER BY COALESCE(closed_at, updated_at, ts) DESC, id DESC
+            LIMIT 1
+            """
+        )
+        return cur.fetchone()
+    finally:
+        conn.close()
+
+
 def purge_test_signals() -> int:
     conn = get_conn()
     try:
