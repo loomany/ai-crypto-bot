@@ -2651,7 +2651,6 @@ async def sig_expand_callback(callback: CallbackQuery):
         await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
         return
     payload = _signal_payload_from_event(dict(event))
-    regular_enabled = _is_signal_entry_sound_enabled(callback.from_user.id)
     try:
         full_text = _format_signal(payload, lang)
     except Exception:
@@ -2661,7 +2660,7 @@ async def sig_expand_callback(callback: CallbackQuery):
         reply_markup=_expanded_signal_inline_kb(
             lang=lang,
             signal_id=signal_id,
-            regular_enabled=regular_enabled,
+            symbol=str(event.get("symbol", "")),
         ),
         parse_mode="HTML",
         disable_web_page_preview=True,
@@ -2685,7 +2684,6 @@ async def sig_collapse_callback(callback: CallbackQuery):
         await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
         return
     payload = _signal_payload_from_event(dict(event))
-    regular_enabled = _is_signal_entry_sound_enabled(callback.from_user.id)
     try:
         compact_text = _format_compact_signal(payload, lang)
     except Exception:
@@ -2695,7 +2693,7 @@ async def sig_collapse_callback(callback: CallbackQuery):
         reply_markup=_compact_signal_inline_kb(
             lang=lang,
             signal_id=signal_id,
-            regular_enabled=regular_enabled,
+            symbol=str(event.get("symbol", "")),
         ),
         parse_mode="HTML",
         disable_web_page_preview=True,
@@ -2726,56 +2724,6 @@ async def toggle_alerts_callback(callback: CallbackQuery):
         )
 
     toast_key = "SIGNAL_STATUS_TOGGLE_TOAST_ON" if next_enabled else "SIGNAL_STATUS_TOGGLE_TOAST_OFF"
-    await callback.answer(i18n.t(lang, toast_key))
-
-
-@dp.callback_query(F.data == "sig_sound_toggle")
-async def sig_sound_toggle_callback(callback: CallbackQuery):
-    if callback.from_user is None or callback.message is None:
-        return
-    user_id = callback.from_user.id
-    lang = get_user_lang(user_id) or "ru"
-    current_enabled = _is_signal_entry_sound_enabled(user_id)
-    next_enabled = not current_enabled
-    set_user_pref(user_id, "sound_signal_entry_enabled", 1 if next_enabled else 0)
-
-    include_legacy = allow_legacy_for_user(is_admin_user=is_admin(user_id))
-    event = get_signal_event_by_message(
-        user_id=user_id,
-        tg_message_id=int(callback.message.message_id),
-        include_legacy=include_legacy,
-    )
-    if event is None:
-        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
-        return
-
-    expand_active = False
-    markup = callback.message.reply_markup
-    if markup and markup.inline_keyboard:
-        first_row = markup.inline_keyboard[0] if markup.inline_keyboard else []
-        if first_row:
-            first_button_data = first_row[0].callback_data or ""
-            expand_active = str(first_button_data).startswith("collapse_signal:")
-
-    signal_id = int(event["id"])
-    payload = _signal_payload_from_event(dict(event))
-    try:
-        new_text = _format_signal(payload, lang) if expand_active else _format_compact_signal(payload, lang)
-    except Exception:
-        new_text = _format_compact_signal(payload, lang)
-    new_kb = (
-        _expanded_signal_inline_kb(lang=lang, signal_id=signal_id, regular_enabled=next_enabled)
-        if expand_active
-        else _compact_signal_inline_kb(lang=lang, signal_id=signal_id, regular_enabled=next_enabled)
-    )
-
-    await callback.message.edit_text(
-        new_text,
-        reply_markup=new_kb,
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
-    toast_key = "SIGNAL_SOUND_TOGGLE_TOAST_ON" if next_enabled else "SIGNAL_SOUND_TOGGLE_TOAST_OFF"
     await callback.answer(i18n.t(lang, toast_key))
 
 
@@ -5041,8 +4989,16 @@ def _signal_symbol_text(symbol: str) -> str:
     return ui_symbol(symbol)
 
 
-def _compact_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: bool) -> InlineKeyboardMarkup:
-    regular_key = "SIGNAL_BUTTON_SOUND_ON" if regular_enabled else "SIGNAL_BUTTON_SOUND_OFF"
+def _binance_spot_url(symbol: str) -> str:
+    normalized = str(symbol or "").upper().replace("/", "").strip()
+    if normalized.endswith("USDT"):
+        base = normalized[:-4]
+    else:
+        base = normalized
+    return f"https://www.binance.com/en/trade/{base}_USDT?type=spot"
+
+
+def _compact_signal_inline_kb(*, lang: str, signal_id: int, symbol: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -5051,16 +5007,15 @@ def _compact_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: boo
                     callback_data=f"expand_signal:{signal_id}",
                 ),
                 InlineKeyboardButton(
-                    text=i18n.t(lang, regular_key),
-                    callback_data="sig_sound_toggle",
+                    text=i18n.t(lang, "btn_binance_spot"),
+                    url=_binance_spot_url(symbol),
                 ),
             ]
         ]
     )
 
 
-def _expanded_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: bool) -> InlineKeyboardMarkup:
-    regular_key = "SIGNAL_BUTTON_SOUND_ON" if regular_enabled else "SIGNAL_BUTTON_SOUND_OFF"
+def _expanded_signal_inline_kb(*, lang: str, signal_id: int, symbol: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -5069,8 +5024,8 @@ def _expanded_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: bo
                     callback_data=f"collapse_signal:{signal_id}",
                 ),
                 InlineKeyboardButton(
-                    text=i18n.t(lang, regular_key),
-                    callback_data="sig_sound_toggle",
+                    text=i18n.t(lang, "btn_binance_spot"),
+                    url=_binance_spot_url(symbol),
                 ),
             ]
         ]
@@ -5728,7 +5683,7 @@ async def send_signal_to_all(
                 reply_markup=_compact_signal_inline_kb(
                     lang=lang,
                     signal_id=event_id,
-                    regular_enabled=_is_signal_entry_sound_enabled(chat_id),
+                    symbol=symbol,
                 ),
             )
         await asyncio.sleep(random.uniform(0.05, 0.15))
