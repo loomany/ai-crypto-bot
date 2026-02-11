@@ -124,6 +124,8 @@ from db import (
     claim_signal_result_notification,
     release_signal_result_notification_claim,
     list_pending_result_notifications,
+    count_pending_result_notifications,
+    get_last_close_event,
     set_last_pumpdump_signal,
     purge_test_signals,
 )
@@ -194,6 +196,16 @@ def _record_close_notify_sent() -> None:
 
 def _record_close_notify_failed() -> None:
     _CLOSE_NOTIFY_METRICS["close_notifications_failed_total"] = int(_CLOSE_NOTIFY_METRICS.get("close_notifications_failed_total", 0) or 0) + 1
+
+
+def _format_diag_ts(ts_value: Any) -> str:
+    try:
+        ts_int = int(float(ts_value or 0))
+    except (TypeError, ValueError):
+        return "-"
+    if ts_int <= 0:
+        return "-"
+    return datetime.fromtimestamp(ts_int, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def _log_throttled(key: str, message: str, *args: Any, exc: Exception | None = None) -> None:
@@ -3671,12 +3683,75 @@ def _format_filters_section(st, lang: str) -> str:
         details.append(f"close_events_detected_total: {int(_CLOSE_NOTIFY_METRICS.get('close_events_detected_total', 0) or 0)}")
         details.append(f"close_notifications_sent_total: {int(_CLOSE_NOTIFY_METRICS.get('close_notifications_sent_total', 0) or 0)}")
         details.append(f"close_notifications_failed_total: {int(_CLOSE_NOTIFY_METRICS.get('close_notifications_failed_total', 0) or 0)}")
-        last_close_event = _CLOSE_NOTIFY_METRICS.get("last_close_event")
-        if isinstance(last_close_event, dict) and last_close_event:
+
+        last_close_event_row = get_last_close_event()
+        if last_close_event_row is not None:
+            last_event = dict(last_close_event_row)
+            details.append(i18n.t(lang, "DIAG_LAST_CLOSE_EVENT_HEADER"))
             details.append(
-                "last_close_event: "
-                f"{last_close_event.get('symbol', '-')}/{last_close_event.get('side', '-')} "
-                f"{last_close_event.get('reason', '-')} at {last_close_event.get('time', '-') }"
+                i18n.t(
+                    lang,
+                    "DIAG_LAST_CLOSE_EVENT_LINE",
+                    ts=_format_diag_ts(last_event.get("closed_at") or last_event.get("updated_at") or last_event.get("ts")),
+                    module=last_event.get("module", "-"),
+                    symbol=ui_symbol(str(last_event.get("symbol", "-") or "-")),
+                    side=str(last_event.get("side", "-") or "-").upper(),
+                    result=str(last_event.get("result") or last_event.get("status") or "-"),
+                    score=int(float(last_event.get("score", 0) or 0)),
+                    entry=_format_price((float(last_event.get("poi_low", 0) or 0) + float(last_event.get("poi_high", 0) or 0)) / 2),
+                    sl=_format_price(float(last_event.get("sl", 0) or 0)),
+                    tp1=_format_price(float(last_event.get("tp1", 0) or 0)),
+                    tp2=_format_price(float(last_event.get("tp2", 0) or 0)),
+                    user_id=last_event.get("user_id", "-"),
+                    event_id=last_event.get("id", "-"),
+                    signal_id=last_event.get("id", "-"),
+                ),
+            )
+        else:
+            details.append(i18n.t(lang, "DIAG_LAST_CLOSE_EVENT_NONE"))
+
+        pending_count = count_pending_result_notifications()
+        details.append(i18n.t(lang, "DIAG_PENDING_CLOSE_HEADER", count=pending_count))
+        pending_rows = list_pending_result_notifications(limit=5)
+        if pending_rows:
+            for row in pending_rows:
+                event = dict(row)
+                details.append(
+                    i18n.t(
+                        lang,
+                        "DIAG_PENDING_CLOSE_LINE",
+                        id=event.get("id", "-"),
+                        ts=_format_diag_ts(event.get("updated_at") or event.get("ts")),
+                        symbol=ui_symbol(str(event.get("symbol", "-") or "-")),
+                        result=str(event.get("result") or event.get("status") or "-"),
+                        user_id=event.get("user_id", "-"),
+                        attempts=event.get("refresh_count", 0),
+                        claimed_by=("worker" if int(event.get("result_notified", 0) or 0) == 2 else "-"),
+                        claim_ts=_format_diag_ts(event.get("updated_at") or 0),
+                    )
+                )
+        else:
+            details.append(i18n.t(lang, "DIAG_PENDING_CLOSE_NONE"))
+
+        audit_state = MODULES.get("signal_audit").state if MODULES.get("signal_audit") else {}
+        if isinstance(audit_state, dict) and audit_state:
+            checked_signals = int(audit_state.get("close_detector_checked_signals", 0) or 0)
+            skipped_total = int(audit_state.get("close_detector_skipped_signals_total", 0) or 0)
+            skipped_reasons = audit_state.get("close_detector_skipped_reasons", {})
+            triggered_total = int(audit_state.get("close_detector_triggered_total", 0) or 0)
+            snapshot = audit_state.get("last_close_check_snapshot", {}) if isinstance(audit_state.get("last_close_check_snapshot", {}), dict) else {}
+            details.append(i18n.t(lang, "DIAG_CLOSE_DETECTOR_HEADER"))
+            details.append(i18n.t(lang, "DIAG_CLOSE_DETECTOR_CHECKED", count=checked_signals))
+            details.append(i18n.t(lang, "DIAG_CLOSE_DETECTOR_SKIPPED", count=skipped_total))
+            details.append(i18n.t(lang, "DIAG_CLOSE_DETECTOR_SKIP_REASONS", reasons=_format_reason_counts(skipped_reasons, top_n=8)))
+            details.append(i18n.t(lang, "DIAG_CLOSE_DETECTOR_TRIGGERED", count=triggered_total))
+            details.append(
+                i18n.t(
+                    lang,
+                    "DIAG_CLOSE_DETECTOR_SNAPSHOT",
+                    last_checked_ts=_format_diag_ts(snapshot.get("last_checked_ts")),
+                    last_price_ts=_format_diag_ts(snapshot.get("last_price_ts")),
+                )
             )
     details.extend(_format_confirm_retry_info(st.state if st else None, lang))
     if st and st.fails_top:
@@ -3801,6 +3876,7 @@ def _format_pump_section(st, now: float, lang: str) -> str:
     rotation_added = extra.get("rotation_added")
     final_candidates = extra.get("final_candidates")
     scanned = extra.get("scanned")
+    reason = extra.get("reason")
     if rotation_flag is not None:
         cursor_line = f" cursor={rotation_cursor}" if rotation_cursor else ""
         n_line = f"{rotation_n}" if rotation_n is not None else "0"
@@ -3815,7 +3891,7 @@ def _format_pump_section(st, now: float, lang: str) -> str:
         )
     if rotation_slice is not None:
         details.append(i18n.t(lang, "DIAG_ROTATION_SLICE", size=rotation_slice))
-    if universe_size or rotation_added or final_candidates or scanned:
+    if any(v is not None for v in (universe_size, rotation_added, final_candidates, scanned)):
         details.append(
             i18n.t(
                 lang,
@@ -3826,6 +3902,8 @@ def _format_pump_section(st, now: float, lang: str) -> str:
                 scanned=scanned or 0,
             )
         )
+    if reason:
+        details.append(f"• reason={reason}")
     if st.fails_top:
         if isinstance(st.fails_top, dict):
             details.append(_format_fails_top(st.fails_top, lang))
@@ -5886,6 +5964,11 @@ async def pump_scan_once(bot: Bot) -> None:
     try:
         state = pump_scan_once.state
 
+        pump_enabled = str(os.getenv("PUMPDUMP_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "y"}
+        if not pump_enabled:
+            mark_ok("pumpdump", extra="enabled=false universe_size=0 final_candidates=0 scanned=0 reason=disabled")
+            return
+
         subscribers = get_pumpdump_subscribers()
 
         if log_level >= 1:
@@ -5913,7 +5996,13 @@ async def pump_scan_once(bot: Bot) -> None:
                 return_stats=True,
             )
         if not symbols:
-            mark_error("pumpdump", "no symbols to scan")
+            universe_size = int(symbol_stats.get("final", 0) or len(symbols) or 0)
+            extra_info = (
+                f"enabled=true universe_size={universe_size} final_candidates=0 "
+                f"scanned=0 reason=no_symbols"
+            )
+            mark_warn("pumpdump", "no symbols (disabled/empty universe)")
+            mark_ok("pumpdump", extra=extra_info)
             return
         debug_symbol = os.getenv("DEBUG_SYMBOL", "USUALUSDT").upper()
         in_universe = debug_symbol in symbols
@@ -5961,7 +6050,13 @@ async def pump_scan_once(bot: Bot) -> None:
         rotation_added = max(0, len(candidates) - len(symbols))
         total = len(candidates)
         if not candidates:
-            mark_error("pumpdump", "no symbols to scan after exclusion")
+            universe_size = int(symbol_stats.get("final", len(symbols)) or 0)
+            extra_info = (
+                f"enabled=true universe_size={universe_size} final_candidates=0 "
+                f"scanned=0 reason=no_symbols_after_exclusion"
+            )
+            mark_warn("pumpdump", "no symbols (disabled/empty universe)")
+            mark_ok("pumpdump", extra=extra_info)
             return
         try:
             cursor = int(get_state("pumpdump_cursor", "0") or "0")

@@ -277,16 +277,32 @@ async def evaluate_open_signals(
     *,
     start_ts: float | None = None,
     budget_sec: int = 45,
-) -> None:
+) -> Dict[str, Any]:
+    cycle_stats: Dict[str, Any] = {
+        "checked_signals": 0,
+        "skipped_total": 0,
+        "skip_reasons": {},
+        "triggered_total": 0,
+        "last_checked_ts": int(time.time()),
+        "last_price_ts": 0,
+    }
+
+    def _skip(reason: str) -> None:
+        cycle_stats["skipped_total"] = int(cycle_stats.get("skipped_total", 0) or 0) + 1
+        reasons = cycle_stats.setdefault("skip_reasons", {})
+        reasons[reason] = int(reasons.get(reason, 0) or 0) + 1
+
     if open_signals is None:
         open_signals = fetch_open_signals()
     if not open_signals:
-        return
+        _skip("skip_no_active_signals")
+        return cycle_stats
 
     for signal in open_signals:
         if start_ts is not None and time.time() - start_ts > budget_sec:
             break
         try:
+            cycle_stats["checked_signals"] = int(cycle_stats.get("checked_signals", 0) or 0) + 1
             symbol = signal["symbol"]
             sent_at = int(signal["sent_at"])
             confirm_tf = _resolve_confirm_tf()
@@ -298,6 +314,7 @@ async def evaluate_open_signals(
                     start_ms=sent_at * 1000,
                 )
             if not data:
+                _skip("skip_missing_prices_candles")
                 continue
 
             candles = []
@@ -307,6 +324,7 @@ async def evaluate_open_signals(
                     candles.append(parsed)
 
             if not candles:
+                _skip("skip_missing_prices_candles")
                 continue
 
             state = str(signal.get("state") or "WAITING_ENTRY").upper()
@@ -314,6 +332,7 @@ async def evaluate_open_signals(
             ttl_sec = max(60, ttl_minutes * 60)
             now_ts = int(time.time())
             if now_ts > sent_at + ttl_sec and state != "ACTIVE_CONFIRMED":
+                _skip("skip_signal_expired_ttl")
                 mark_signal_closed(
                     signal_id=signal["signal_id"],
                     outcome="NO_FILL",
@@ -376,8 +395,15 @@ async def evaluate_open_signals(
 
             result = _evaluate_signal(signal, candles)
             if result is None:
+                _skip("skip_no_new_candle_since_last_check")
                 continue
 
+            cycle_stats["triggered_total"] = int(cycle_stats.get("triggered_total", 0) or 0) + 1
+            if candles:
+                cycle_stats["last_price_ts"] = max(
+                    int(cycle_stats.get("last_price_ts", 0) or 0),
+                    int(candles[-1].get("open_time", 0) // 1000),
+                )
             logger.info(
                 "[close_notify] close detected (audit) signal_id=%s symbol=%s side=%s reason=%s",
                 signal.get("signal_id"),
@@ -435,9 +461,13 @@ async def evaluate_open_signals(
                             result.get("outcome"),
                         )
                         await asyncio.gather(*notify_tasks)
+                    else:
+                        _skip("skip_user_notifications_disabled")
         except Exception as exc:
             print(f"[signal_audit] Failed to evaluate signal {signal.get('signal_id')}: {exc}")
             continue
+
+    return cycle_stats
 
 
 async def signal_audit_worker_loop() -> None:
@@ -447,6 +477,17 @@ async def signal_audit_worker_loop() -> None:
         mark_tick("signal_audit", extra="audit cycle")
         open_signals = fetch_open_signals()
         if not open_signals:
+            module_state = MODULES.get("signal_audit")
+            if module_state and isinstance(module_state.state, dict):
+                module_state.state["close_detector_checked_signals"] = 0
+                module_state.state["close_detector_skipped_signals_total"] = 1
+                module_state.state["close_detector_skipped_reasons"] = {"skip_no_active_signals": 1}
+                module_state.state["close_detector_triggered_total"] = 0
+                module_state.state["last_close_check_snapshot"] = {
+                    "last_checked_ts": int(time.time()),
+                    "last_price_ts": 0,
+                }
+            logger.info("[close_detector] checked=0 skipped=1 reasons={'skip_no_active_signals': 1} triggered=0")
             mark_ok("signal_audit", extra="audit cycle")
             return
 
@@ -464,13 +505,31 @@ async def signal_audit_worker_loop() -> None:
         if chunk:
             update_current_symbol("signal_audit", chunk[0].get("symbol", ""))
 
-        await evaluate_open_signals(
+        cycle_stats = await evaluate_open_signals(
             chunk,
             start_ts=start,
             budget_sec=BUDGET,
         )
         current_symbol = (
             MODULES.get("signal_audit").current_symbol if "signal_audit" in MODULES else None
+        )
+        module_state = MODULES.get("signal_audit")
+        if module_state and isinstance(module_state.state, dict):
+            module_state.state["close_detector_checked_signals"] = int(cycle_stats.get("checked_signals", 0) or 0)
+            module_state.state["close_detector_skipped_signals_total"] = int(cycle_stats.get("skipped_total", 0) or 0)
+            module_state.state["close_detector_skipped_reasons"] = dict(cycle_stats.get("skip_reasons", {}) or {})
+            module_state.state["close_detector_triggered_total"] = int(cycle_stats.get("triggered_total", 0) or 0)
+            module_state.state["last_close_check_snapshot"] = {
+                "last_checked_ts": int(cycle_stats.get("last_checked_ts", int(time.time())) or int(time.time())),
+                "last_price_ts": int(cycle_stats.get("last_price_ts", 0) or 0),
+            }
+
+        logger.info(
+            "[close_detector] checked=%s skipped=%s reasons=%s triggered=%s",
+            int(cycle_stats.get("checked_signals", 0) or 0),
+            int(cycle_stats.get("skipped_total", 0) or 0),
+            dict(cycle_stats.get("skip_reasons", {}) or {}),
+            int(cycle_stats.get("triggered_total", 0) or 0),
         )
         mark_ok(
             "signal_audit",
