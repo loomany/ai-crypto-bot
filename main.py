@@ -1648,6 +1648,9 @@ async def notify_signal_result_short(signal: dict) -> bool:
                 user_id=user_id,
                 event_type=status_raw,
             ),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[build_binance_button(lang, str(signal.get("symbol", "")))]],
+            ),
         )
     except Exception as exc:
         _record_close_notify_failed()
@@ -1758,6 +1761,9 @@ async def notify_signal_activation(signal: dict) -> bool:
                     user_id=user_id,
                     event_type="ACTIVE_CONFIRMED",
                 ),
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[[build_binance_button(lang, symbol)]],
+                ),
             )
             sent = True
         except Exception as exc:
@@ -1821,6 +1827,9 @@ async def notify_signal_poi_touched(signal: dict) -> bool:
                 disable_notification=_disable_notification_for_event(
                     user_id=user_id,
                     event_type="POI_TOUCHED",
+                ),
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[[build_binance_button(lang, symbol)]],
                 ),
             )
             sent = True
@@ -2371,9 +2380,8 @@ def _archive_detail_kb(
     lang: str,
     back_callback: str,
     event_id: int,
-    event_status: str,
-    is_admin_user: bool,
     expanded: bool,
+    symbol: str,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     rows.append(
@@ -2384,15 +2392,7 @@ def _archive_detail_kb(
             )
         ]
     )
-    if is_admin_user:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="🔄 Обновить",
-                    callback_data=f"sig_refresh:{event_id}",
-                )
-            ]
-        )
+    rows.append([build_binance_button(lang, symbol)])
     rows.append(
         [
             InlineKeyboardButton(
@@ -2431,9 +2431,8 @@ async def sig_open(callback: CallbackQuery):
             lang=lang,
             back_callback=back_callback,
             event_id=event_id,
-            event_status=str(event.get("status", "")),
-            is_admin_user=is_admin(callback.from_user.id),
             expanded=expanded,
+            symbol=str(event.get("symbol", "")),
         )
         try:
             await callback.message.edit_text(detail_text, reply_markup=detail_markup)
@@ -4999,6 +4998,13 @@ def _binance_spot_url(symbol: str) -> str:
     return f"https://www.binance.com/en/trade/{base}_USDT?type=spot"
 
 
+def build_binance_button(lang: str, symbol: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(
+        text=i18n.t(lang, "btn_binance"),
+        url=_binance_spot_url(symbol),
+    )
+
+
 def _compact_signal_inline_kb(*, lang: str, signal_id: int, symbol: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -5007,11 +5013,8 @@ def _compact_signal_inline_kb(*, lang: str, signal_id: int, symbol: str) -> Inli
                     text=i18n.t(lang, "SIGNAL_BUTTON_EXPAND"),
                     callback_data=f"expand_signal:{signal_id}",
                 ),
-                InlineKeyboardButton(
-                    text=i18n.t(lang, "btn_binance_spot"),
-                    url=_binance_spot_url(symbol),
-                ),
-            ]
+            ],
+            [build_binance_button(lang, symbol)],
         ]
     )
 
@@ -5024,11 +5027,8 @@ def _expanded_signal_inline_kb(*, lang: str, signal_id: int, symbol: str) -> Inl
                     text=i18n.t(lang, "SIGNAL_BUTTON_COLLAPSE"),
                     callback_data=f"collapse_signal:{signal_id}",
                 ),
-                InlineKeyboardButton(
-                    text=i18n.t(lang, "btn_binance_spot"),
-                    url=_binance_spot_url(symbol),
-                ),
-            ]
+            ],
+            [build_binance_button(lang, symbol)],
         ]
     )
 
