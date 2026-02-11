@@ -1145,6 +1145,20 @@ def _history_status_icon(status_key: str) -> str:
     return icon_map.get(status_key, "🟡")
 
 
+def _history_row_icon(row: dict[str, Any]) -> str:
+    status_raw = str(row.get("status") or "").upper().strip()
+    state_raw = str(row.get("state") or "").upper().strip()
+    poi_touched_at = _safe_int(row.get("poi_touched_at"), 0)
+
+    if status_raw == "ACTIVE" or state_raw in {"ACTIVE_CONFIRMED", "ACTIVATED", "ENTRY_CONFIRMED"}:
+        return "🟡"
+    if state_raw == "POI_TOUCHED" or poi_touched_at > 0:
+        return "🟠"
+
+    status_key = _normalize_history_status(str(row.get("outcome") or ""))
+    return _history_status_icon(status_key)
+
+
 def _signal_side_label(side: Any) -> str:
     normalized_side = str(side or "").upper().strip()
     if normalized_side in {"LONG", "BUY"}:
@@ -1199,8 +1213,7 @@ def _get_history_page(
 
 def _format_history_item(row: dict[str, Any], lang: str) -> str:
     del lang
-    status_key = _normalize_history_status(str(row.get("outcome") or ""))
-    icon = _history_status_icon(status_key)
+    icon = _history_row_icon(row)
     return _format_signal_list_row(
         side=row.get("side"),
         icon=icon,
@@ -1293,6 +1306,8 @@ def _build_history_text(
         "━━━━━━━━━━━━━━━━",
         i18n.t(lang, "explanation_line_1"),
         i18n.t(lang, "explanation_line_2"),
+        i18n.t(lang, "history_indicator_poi_touched"),
+        i18n.t(lang, "history_indicator_activated"),
     ])
     if not rows:
         lines.append("")
