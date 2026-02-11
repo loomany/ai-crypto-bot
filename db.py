@@ -1520,6 +1520,69 @@ def mark_signal_result_notified(event_id: int, *, notified: bool = True) -> None
         conn.close()
 
 
+def claim_signal_result_notification(event_id: int) -> bool:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE signal_events
+            SET result_notified = 2,
+                updated_at = ?
+            WHERE id = ?
+              AND result_notified = 0
+            """,
+            (
+                int(time.time()),
+                int(event_id),
+            ),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0) > 0
+    finally:
+        conn.close()
+
+
+def release_signal_result_notification_claim(event_id: int) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE signal_events
+            SET result_notified = 0,
+                updated_at = ?
+            WHERE id = ?
+              AND result_notified = 2
+            """,
+            (
+                int(time.time()),
+                int(event_id),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_pending_result_notifications(limit: int = 200) -> List[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM signal_events
+            WHERE result_notified = 0
+              AND UPPER(COALESCE(result, status)) IN ('TP1', 'TP2', 'SL', 'EXP', 'NO_FILL', 'NF', 'BE', 'AMBIGUOUS')
+              AND (is_test IS NULL OR is_test = 0)
+            ORDER BY COALESCE(updated_at, ts) ASC, id ASC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
 def purge_test_signals() -> int:
     conn = get_conn()
     try:
