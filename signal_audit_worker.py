@@ -378,6 +378,13 @@ async def evaluate_open_signals(
             if result is None:
                 continue
 
+            logger.info(
+                "[close_notify] close detected (audit) signal_id=%s symbol=%s side=%s reason=%s",
+                signal.get("signal_id"),
+                signal.get("symbol"),
+                str(signal.get("direction", "")).upper(),
+                result.get("outcome"),
+            )
             mark_signal_closed(
                 signal_id=signal["signal_id"],
                 outcome=result["outcome"],
@@ -385,6 +392,11 @@ async def evaluate_open_signals(
                 filled_at=result["filled_at"],
                 notes=result["notes"],
                 close_state=("EXPIRED" if result["outcome"] == "NO_FILL" else None),
+            )
+            logger.info(
+                "[close_notify] db updated signal_id=%s outcome=%s",
+                signal.get("signal_id"),
+                result.get("outcome"),
             )
             status_map = {
                 "TP1": "TP1",
@@ -416,6 +428,12 @@ async def evaluate_open_signals(
                         _signal_result_notifier(dict(event)) for event in events
                     ]
                     if notify_tasks:
+                        logger.info(
+                            "[close_notify] notify dispatch signal_id=%s events=%s outcome=%s",
+                            signal.get("signal_id"),
+                            len(notify_tasks),
+                            result.get("outcome"),
+                        )
                         await asyncio.gather(*notify_tasks)
         except Exception as exc:
             print(f"[signal_audit] Failed to evaluate signal {signal.get('signal_id')}: {exc}")
