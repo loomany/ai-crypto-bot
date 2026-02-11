@@ -128,6 +128,7 @@ from db import (
     purge_test_signals,
 )
 from db_path import ensure_db_writable, get_db_path
+from history_status import get_signal_badge, get_signal_status_key
 from market_cache import get_ticker_request_count, reset_ticker_request_count
 from btc_context import get_btc_regime
 from alert_dedup_db import init_alert_dedup, can_send
@@ -1111,16 +1112,10 @@ def _get_history_context(user_id: int) -> tuple[str, int, dict[str, Any] | None]
 
 
 def _normalize_history_status(raw_status: str | None) -> str:
-    normalized = str(raw_status or "").upper().strip()
-    if normalized in {"TP", "TP1", "TP2", "BE", "PASSED"}:
-        return "TP"
-    if normalized in {"SL", "FAILED"}:
-        return "SL"
-    if normalized in {"EXPIRED_NO_ENTRY", "NEUTRAL", "NO_FILL", "NF", "EXP", "EXPIRED"}:
-        return "EXPIRED_NO_ENTRY"
-    if normalized in {"NO_CONFIRMATION", "AMBIGUOUS"}:
-        return "NO_CONFIRMATION"
-    return "IN_PROGRESS"
+    status_key = get_signal_status_key({"outcome": raw_status})
+    if status_key in {"ACTIVATED", "POI_TOUCHED"}:
+        return "IN_PROGRESS"
+    return status_key
 
 
 def _history_status_label(status_key: str, lang: str) -> str:
@@ -1139,24 +1134,14 @@ def _history_status_icon(status_key: str) -> str:
         "TP": "🟢",
         "SL": "🔴",
         "EXPIRED_NO_ENTRY": "⚪",
-        "NO_CONFIRMATION": "⚪",
-        "IN_PROGRESS": "🟡",
+        "NO_CONFIRMATION": "🔵",
+        "IN_PROGRESS": "🟣",
     }
-    return icon_map.get(status_key, "🟡")
+    return icon_map.get(status_key, "🟣")
 
 
 def _history_row_icon(row: dict[str, Any]) -> str:
-    status_raw = str(row.get("status") or "").upper().strip()
-    state_raw = str(row.get("state") or "").upper().strip()
-    poi_touched_at = _safe_int(row.get("poi_touched_at"), 0)
-
-    if status_raw == "ACTIVE" or state_raw in {"ACTIVE_CONFIRMED", "ACTIVATED", "ENTRY_CONFIRMED"}:
-        return "🟡"
-    if state_raw == "POI_TOUCHED" or poi_touched_at > 0:
-        return "🟠"
-
-    status_key = _normalize_history_status(str(row.get("outcome") or ""))
-    return _history_status_icon(status_key)
+    return get_signal_badge(row)
 
 
 def _signal_side_label(side: Any) -> str:
@@ -1178,7 +1163,7 @@ def _format_signal_list_row(
 ) -> str:
     side_label = _signal_side_label(side)
     side_prefix = side_label.ljust(5)
-    icon_value = str(icon or "🟡").strip() or "🟡"
+    icon_value = str(icon or "🟣").strip() or "🟣"
     score_value = _safe_int(score, 0)
     symbol_value = _short_symbol(str(symbol or "—"))
     created_at_value = _safe_int(created_at, 0)
@@ -1306,6 +1291,7 @@ def _build_history_text(
         "━━━━━━━━━━━━━━━━",
         i18n.t(lang, "explanation_line_1"),
         i18n.t(lang, "explanation_line_2"),
+        i18n.t(lang, "history_indicator_waiting"),
         i18n.t(lang, "history_indicator_poi_touched"),
         i18n.t(lang, "history_indicator_activated"),
     ])
