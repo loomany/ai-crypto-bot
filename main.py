@@ -149,6 +149,7 @@ from signal_audit_worker import (
     signal_audit_worker_loop,
     set_signal_activation_notifier,
     set_signal_poi_touched_notifier,
+    set_signal_progress_notifier,
     set_signal_result_notifier,
 )
 import i18n
@@ -1411,6 +1412,10 @@ def enforce_signal_ttl() -> int:
         age_sec = now - created_at
         if age_sec < ttl_sec:
             continue
+        state = str(event.get("state") or "").upper()
+        is_activated = bool(event.get("activated_at")) or state == "ACTIVE_CONFIRMED"
+        if is_activated:
+            continue
         tp2_hit = bool(event.get("tp2_hit"))
         tp1_hit = bool(event.get("tp1_hit"))
         entry_touched = bool(event.get("entry_touched"))
@@ -1558,7 +1563,7 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
         if tp2:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP2_LINE", price=_format_price(tp2)))
     elif status == "BE":
-        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_BE")
+        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_BE_AFTER_TP1")
         detail_lines = [
             f"{symbol} {side}",
         ]
@@ -1835,6 +1840,63 @@ async def notify_signal_poi_touched(signal: dict) -> bool:
             sent = True
         except Exception as exc:
             print(f"[ai_signals] Failed to send POI touched notification to {user_id}: {exc}")
+    return sent
+
+
+async def notify_signal_progress(signal: dict, event_type: str) -> bool:
+    if bot is None:
+        return False
+
+    normalized = _normalize_signal_status(str(event_type or "").upper())
+    if normalized != "TP1":
+        return False
+
+    module = str(signal.get("module", ""))
+    symbol = str(signal.get("symbol", ""))
+    ts_value = int(signal.get("sent_at", 0))
+    if not module or not symbol or ts_value <= 0:
+        return False
+
+    events = list_signal_events_by_identity(module=module, symbol=symbol, ts=ts_value)
+    if not events:
+        return False
+
+    sent = False
+    for row in events:
+        event = dict(row)
+        user_id = int(event.get("user_id", 0))
+        if user_id <= 0:
+            continue
+        if is_user_locked(user_id) or not is_sub_active(user_id):
+            continue
+        if not is_notify_enabled(user_id, "ai_signals"):
+            continue
+
+        lang = _resolve_user_lang(user_id)
+        side = str(signal.get("direction", "")).upper()
+        try:
+            await bot.send_message(
+                user_id,
+                "\n".join(
+                    [
+                        i18n.t(lang, "SIGNAL_PROGRESS_TP1_HEADER"),
+                        "",
+                        f"{ui_symbol(symbol)} {side}",
+                    ]
+                ),
+                disable_notification=False,
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[[build_binance_button(lang, symbol)]],
+                ),
+            )
+            sent = True
+        except Exception as exc:
+            logger.warning(
+                "[ai_signals] progress notify failed user_id=%s event=%s error=%s",
+                user_id,
+                normalized,
+                exc,
+            )
     return sent
 
 
@@ -6501,6 +6563,7 @@ async def main():
     set_signal_result_notifier(notify_signal_result_short)
     set_signal_activation_notifier(notify_signal_activation)
     set_signal_poi_touched_notifier(notify_signal_poi_touched)
+    set_signal_progress_notifier(notify_signal_progress)
     print("Бот запущен!")
     init_app_db()
 
