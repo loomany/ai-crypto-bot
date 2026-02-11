@@ -2707,19 +2707,9 @@ async def sig_expand_callback(callback: CallbackQuery):
     lang = get_user_lang(callback.from_user.id) or "ru"
     include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
     event = get_signal_by_id(signal_id, include_legacy=include_legacy)
-    if event is None and callback.message is not None:
-        event = get_signal_event_by_message(
-            user_id=callback.from_user.id,
-            tg_message_id=int(callback.message.message_id),
-            include_legacy=include_legacy,
-        )
-    if event is None:
+    if event is None or int(event["user_id"]) != callback.from_user.id:
         await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
         return
-    if int(event["user_id"]) != callback.from_user.id:
-        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
-        return
-    resolved_signal_id = int(event.get("id") or signal_id)
     payload = _signal_payload_from_event(dict(event))
     try:
         full_text = _format_signal(payload, lang)
@@ -2729,7 +2719,7 @@ async def sig_expand_callback(callback: CallbackQuery):
         full_text,
         reply_markup=_expanded_signal_inline_kb(
             lang=lang,
-            signal_id=resolved_signal_id,
+            signal_id=signal_id,
             symbol=str(event.get("symbol", "")),
         ),
         parse_mode=None,
@@ -2750,19 +2740,9 @@ async def sig_collapse_callback(callback: CallbackQuery):
     lang = get_user_lang(callback.from_user.id) or "ru"
     include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
     event = get_signal_by_id(signal_id, include_legacy=include_legacy)
-    if event is None and callback.message is not None:
-        event = get_signal_event_by_message(
-            user_id=callback.from_user.id,
-            tg_message_id=int(callback.message.message_id),
-            include_legacy=include_legacy,
-        )
-    if event is None:
+    if event is None or int(event["user_id"]) != callback.from_user.id:
         await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
         return
-    if int(event["user_id"]) != callback.from_user.id:
-        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
-        return
-    resolved_signal_id = int(event.get("id") or signal_id)
     payload = _signal_payload_from_event(dict(event))
     try:
         compact_text = _format_compact_signal(payload, lang)
@@ -2772,7 +2752,7 @@ async def sig_collapse_callback(callback: CallbackQuery):
         compact_text,
         reply_markup=_compact_signal_inline_kb(
             lang=lang,
-            signal_id=resolved_signal_id,
+            signal_id=signal_id,
             symbol=str(event.get("symbol", "")),
         ),
         parse_mode=None,
