@@ -3674,6 +3674,27 @@ def _format_filters_section(st, lang: str) -> str:
                 "skipped_by_btc_gate_reasons(top): "
                 + ", ".join(f"{key}={value}" for key, value in top_items)
             )
+        signals_by_regime = st.state.get("signals_by_regime")
+        if isinstance(signals_by_regime, dict) and signals_by_regime:
+            details.append(
+                "signals_by_regime: "
+                + ", ".join(
+                    f"{name}={int(signals_by_regime.get(name, 0) or 0)}"
+                    for name in ("TREND", "CHOP", "SQUEEZE", "RISK_OFF")
+                )
+            )
+        skipped_by_regime_reason = st.state.get("skipped_by_regime_reason")
+        if isinstance(skipped_by_regime_reason, dict) and skipped_by_regime_reason:
+            details.append(
+                "skipped_by_regime_reason: "
+                + ", ".join(
+                    f"{name}={int(skipped_by_regime_reason.get(name, 0) or 0)}"
+                    for name in ("squeeze_up_block_short", "squeeze_down_block_long", "risk_off")
+                )
+            )
+        last_regimes = st.state.get("last_regimes_10")
+        if isinstance(last_regimes, list) and last_regimes:
+            details.append("last_regimes_10: " + ", ".join(str(item) for item in last_regimes[-10:]))
         details.append(f"close_events_detected_total: {int(_CLOSE_NOTIFY_METRICS.get('close_events_detected_total', 0) or 0)}")
         details.append(f"close_notifications_sent_total: {int(_CLOSE_NOTIFY_METRICS.get('close_notifications_sent_total', 0) or 0)}")
         details.append(f"close_notifications_failed_total: {int(_CLOSE_NOTIFY_METRICS.get('close_notifications_failed_total', 0) or 0)}")
@@ -6133,6 +6154,35 @@ async def pump_scan_once(bot: Bot) -> None:
         print("[PUMP] scan_once end")
 
 
+def _normalize_regime_for_diag(btc_regime: str | None) -> str:
+    regime = str(btc_regime or "CHOP").upper()
+    if regime == "RISK_ON":
+        return "TREND"
+    if regime in {"RISK_OFF", "CHOP", "SQUEEZE"}:
+        return regime
+    return "CHOP"
+
+
+def _regime_label_for_history(btc_regime: str | None, btc_direction: str | None) -> str:
+    regime = str(btc_regime or "CHOP").upper()
+    direction = str(btc_direction or "NEUTRAL").upper()
+    if regime == "RISK_ON":
+        if direction == "UP":
+            return "TREND_UP"
+        if direction == "DOWN":
+            return "TREND_DOWN"
+        return "TREND"
+    if regime == "SQUEEZE":
+        if direction == "UP":
+            return "SQUEEZE_UP"
+        if direction == "DOWN":
+            return "SQUEEZE_DOWN"
+        return "SQUEEZE"
+    if regime == "RISK_OFF":
+        return "RISK_OFF"
+    return "CHOP"
+
+
 async def ai_scan_once() -> None:
     start = time.time()
     BUDGET = 35
@@ -6151,6 +6201,17 @@ async def ai_scan_once() -> None:
             module_state.state["btc_regime_reasons"] = btc_context.get("reasons", [])
             module_state.state.setdefault("skipped_by_btc_gate_total", 0)
             module_state.state.setdefault("skipped_by_btc_gate_reasons", {})
+            module_state.state.setdefault("signals_by_regime", {"TREND": 0, "CHOP": 0, "SQUEEZE": 0, "RISK_OFF": 0})
+            module_state.state.setdefault("skipped_by_regime_reason", {
+                "squeeze_up_block_short": 0,
+                "squeeze_down_block_long": 0,
+                "risk_off": 0,
+            })
+            regime_history = module_state.state.get("last_regimes_10")
+            if not isinstance(regime_history, list):
+                regime_history = []
+            regime_history.append(_regime_label_for_history(btc_context.get("btc_regime"), btc_context.get("btc_direction")))
+            module_state.state["last_regimes_10"] = regime_history[-10:]
         reset_binance_metrics("ai_signals")
         reset_ticker_request_count("ai_signals")
         mark_tick("ai_signals", extra="сканирую рынок...")
@@ -6158,6 +6219,31 @@ async def ai_scan_once() -> None:
         retried_close_notifications = await retry_pending_close_notifications(limit=200)
 
         retry_sent = 0
+        cycle_regime_key = _normalize_regime_for_diag(btc_context.get("btc_regime"))
+
+        def _inc_regime_signal() -> None:
+            if not module_state or not isinstance(module_state.state, dict):
+                return
+            buckets = module_state.state.get("signals_by_regime")
+            if not isinstance(buckets, dict):
+                buckets = {"TREND": 0, "CHOP": 0, "SQUEEZE": 0, "RISK_OFF": 0}
+            buckets[cycle_regime_key] = int(buckets.get(cycle_regime_key, 0) or 0) + 1
+            module_state.state["signals_by_regime"] = buckets
+
+        def _inc_regime_skip(reason: str | None) -> None:
+            if not module_state or not isinstance(module_state.state, dict):
+                return
+            counters = module_state.state.get("skipped_by_regime_reason")
+            if not isinstance(counters, dict):
+                counters = {"squeeze_up_block_short": 0, "squeeze_down_block_long": 0, "risk_off": 0}
+            if reason == "skip_btc_squeeze_up_block_short":
+                counters["squeeze_up_block_short"] = int(counters.get("squeeze_up_block_short", 0) or 0) + 1
+            elif reason == "skip_btc_squeeze_down_block_long":
+                counters["squeeze_down_block_long"] = int(counters.get("squeeze_down_block_long", 0) or 0) + 1
+            elif reason == "skip_btc_risk_off_long_score_lt90":
+                counters["risk_off"] = int(counters.get("risk_off", 0) or 0) + 1
+            module_state.state["skipped_by_regime_reason"] = counters
+
         with binance_request_context("ai_signals"):
             retry_signals = await process_confirm_retry_queue(
                 diag_state=module_state.state if module_state else None
@@ -6168,6 +6254,7 @@ async def ai_scan_once() -> None:
                 break
             allow_send, skip_reason, confirm_strict = apply_btc_soft_gate(signal, btc_context)
             if not allow_send:
+                _inc_regime_skip(skip_reason)
                 if module_state and isinstance(module_state.state, dict):
                     module_state.state["skipped_by_btc_gate_total"] = int(
                         module_state.state.get("skipped_by_btc_gate_total", 0) or 0
@@ -6183,6 +6270,7 @@ async def ai_scan_once() -> None:
                     f"{signal.get('direction', '')} score={signal.get('score', 0)} reason={skip_reason}"
                 )
                 continue
+            _inc_regime_signal()
             if confirm_strict:
                 signal["confirm_strict"] = True
             else:
@@ -6366,6 +6454,7 @@ async def ai_scan_once() -> None:
                 continue
             allow_send, skip_reason, confirm_strict = apply_btc_soft_gate(signal, btc_context)
             if not allow_send:
+                _inc_regime_skip(skip_reason)
                 if module_state and isinstance(module_state.state, dict):
                     module_state.state["skipped_by_btc_gate_total"] = int(
                         module_state.state.get("skipped_by_btc_gate_total", 0) or 0
@@ -6381,6 +6470,7 @@ async def ai_scan_once() -> None:
                     f"{signal.get('direction', '')} score={score} reason={skip_reason}"
                 )
                 continue
+            _inc_regime_signal()
             if confirm_strict:
                 signal["confirm_strict"] = True
             else:

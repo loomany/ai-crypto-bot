@@ -190,6 +190,8 @@ AI_ATR_RR_HIGH = _getenv_float("AI_ATR_RR_HIGH", 2.8)
 AI_ATR_TREND_RR_LOW = _getenv_float("AI_ATR_TREND_RR_LOW", AI_ATR_RR_LOW)
 AI_ATR_TREND_RR_MID = _getenv_float("AI_ATR_TREND_RR_MID", AI_ATR_RR_MID)
 AI_ATR_TREND_RR_HIGH = _getenv_float("AI_ATR_TREND_RR_HIGH", AI_ATR_RR_HIGH)
+ALT_SL_ATR_MIN_MULT_90 = _getenv_float("ALT_SL_ATR_MIN_MULT_90", 0.8)
+ALT_SL_ATR_MIN_MULT_70 = _getenv_float("ALT_SL_ATR_MIN_MULT_70", 0.6)
 
 
 def get_ai_fallback_direct() -> int:
@@ -213,6 +215,14 @@ def _parse_tf_seconds(tf: str) -> int:
         return int(float(value) * units[unit])
     except (TypeError, ValueError):
         return 0
+
+
+def _min_sl_atr_multiplier(score_abs: float) -> float | None:
+    if score_abs >= 90:
+        return ALT_SL_ATR_MIN_MULT_90
+    if score_abs >= 70:
+        return ALT_SL_ATR_MIN_MULT_70
+    return None
 
 
 def apply_btc_soft_gate(
@@ -2149,6 +2159,39 @@ async def _prepare_signal(
         _store_final_sample(False, "fail_volume")
         return None
 
+    atr_15m_pct = None
+    if atr_15m and current_price > DIVISION_EPS:
+        atr_15m_pct = atr_15m / current_price * 100
+    sl_pct = None
+    if risk > DIVISION_EPS and entry_ref > DIVISION_EPS:
+        sl_pct = risk / entry_ref * 100
+    min_sl_mult = _min_sl_atr_multiplier(abs(raw_score))
+    if (
+        min_sl_mult is not None
+        and atr_15m_pct is not None
+        and sl_pct is not None
+        and sl_pct < min_sl_mult * atr_15m_pct
+    ):
+        _inc_fail("fail_sl_too_tight_vs_atr")
+        _inc_final_fail("fail_sl_too_tight_vs_atr")
+        _log_final_fail(
+            "fail_sl_too_tight_vs_atr",
+            score_pre=score_pre,
+            final_score=raw_score,
+            details={
+                "sl_pct": round(sl_pct, 4),
+                "atr_15m_pct": round(atr_15m_pct, 4),
+                "min_mult": round(min_sl_mult, 4),
+            },
+        )
+        _add_score_adjustment(
+            "sl_atr_gate",
+            0.0,
+            value=f"sl_pct={sl_pct:.4f}<{min_sl_mult:.2f}*atr_pct={atr_15m_pct:.4f}",
+        )
+        _store_final_sample(False, "fail_sl_too_tight_vs_atr")
+        return None
+
     if timings is not None:
         timings["score_dt"] = time.perf_counter() - score_start
 
@@ -2180,7 +2223,12 @@ async def _prepare_signal(
             "resistance": round(resistance_level or 0.0, 4),
             "atr_30": round(atr_15m or 0.0, 4),
         },
-        "meta": {"setup_id": setup_id, "setup_type": setup_type},
+        "meta": {
+            "setup_id": setup_id,
+            "setup_type": setup_type,
+            "atr_15m_pct": round(atr_15m_pct, 4) if atr_15m_pct is not None else None,
+            "sl_pct": round(sl_pct, 4) if sl_pct is not None else None,
+        },
         "ttl_minutes": calculate_signal_ttl_minutes(min(100, abs(raw_score)), atr_dynamic_atr_pct),
     }
 
