@@ -121,6 +121,9 @@ from db import (
     activate_signal_events,
     mark_signal_events_poi_touched,
     mark_signal_result_notified,
+    claim_signal_result_notification,
+    release_signal_result_notification_claim,
+    list_pending_result_notifications,
     set_last_pumpdump_signal,
     purge_test_signals,
 )
@@ -166,6 +169,31 @@ logger = logging.getLogger(__name__)
 DEFAULT_LANG = "ru"
 _LOG_THROTTLE_SEC = 30.0
 _LAST_LOG_TS: Dict[str, float] = {}
+
+_CLOSE_NOTIFY_METRICS: Dict[str, Any] = {
+    "close_events_detected_total": 0,
+    "close_notifications_sent_total": 0,
+    "close_notifications_failed_total": 0,
+    "last_close_event": None,
+}
+
+
+def _record_close_event(*, symbol: str, side: str, reason: str) -> None:
+    _CLOSE_NOTIFY_METRICS["close_events_detected_total"] = int(_CLOSE_NOTIFY_METRICS.get("close_events_detected_total", 0) or 0) + 1
+    _CLOSE_NOTIFY_METRICS["last_close_event"] = {
+        "symbol": str(symbol or ""),
+        "side": str(side or ""),
+        "reason": str(reason or ""),
+        "time": int(time.time()),
+    }
+
+
+def _record_close_notify_sent() -> None:
+    _CLOSE_NOTIFY_METRICS["close_notifications_sent_total"] = int(_CLOSE_NOTIFY_METRICS.get("close_notifications_sent_total", 0) or 0) + 1
+
+
+def _record_close_notify_failed() -> None:
+    _CLOSE_NOTIFY_METRICS["close_notifications_failed_total"] = int(_CLOSE_NOTIFY_METRICS.get("close_notifications_failed_total", 0) or 0) + 1
 
 
 def _log_throttled(key: str, message: str, *args: Any, exc: Exception | None = None) -> None:
@@ -1495,7 +1523,7 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
 
     body_lines: list[str] = []
     if status == "TP1":
-        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_TP")
+        header = i18n.t(lang, "CLOSE_TP1_TITLE")
         detail_lines = [f"{symbol} {side}"]
         if entry_value:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=entry_value))
@@ -1512,7 +1540,7 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
         if tp2:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP2_LINE", price=_format_price(tp2)))
     elif status == "TP2":
-        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_TP")
+        header = i18n.t(lang, "CLOSE_TP2_TITLE")
         detail_lines = [f"{symbol} {side}"]
         if entry_value:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=entry_value))
@@ -1534,7 +1562,7 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
             f"{symbol} {side}",
         ]
     elif status == "SL":
-        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_SL")
+        header = i18n.t(lang, "CLOSE_SL_TITLE")
         detail_lines = [
             f"{symbol} {side}",
         ]
@@ -1564,6 +1592,13 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP2_LINE", price=_format_price(tp2)))
     detail_lines.extend(body_lines)
     if status in {"TP1", "TP2", "SL"}:
+        close_reason_key = {
+            "TP1": "SIGNAL_RESULT_CLOSED_BY_TP1_LINE",
+            "TP2": "SIGNAL_RESULT_CLOSED_BY_TP2_LINE",
+            "SL": "SIGNAL_RESULT_CLOSED_BY_SL_LINE",
+        }.get(status)
+        if close_reason_key:
+            detail_lines.append(i18n.t(lang, close_reason_key))
         detail_lines.append(i18n.t(lang, "SIGNAL_RESULT_SCORE_LINE", score=score))
     return "\n".join([header, "", *detail_lines])
 
@@ -1574,8 +1609,14 @@ async def notify_signal_result_short(signal: dict) -> bool:
     status_raw = str(signal.get("result") or signal.get("status") or "")
     if not _is_final_signal_status(status_raw):
         return False
-    if bool(signal.get("result_notified")):
+    event_id = int(signal.get("id", 0) or 0)
+    if bool(signal.get("result_notified")) and signal.get("result_notified") != 2:
         return False
+    claimed_here = False
+    if event_id:
+        claimed_here = claim_signal_result_notification(event_id)
+        if not claimed_here and signal.get("result_notified") != 2:
+            return False
 
     user_id = int(signal.get("user_id", 0))
     if user_id <= 0:
@@ -1592,23 +1633,58 @@ async def notify_signal_result_short(signal: dict) -> bool:
     if not message_text:
         return False
 
+    logger.info(
+        "[close_notify] notify attempt event_id=%s user_id=%s status=%s",
+        event_id,
+        user_id,
+        _normalize_signal_status(status_raw),
+    )
     try:
         await bot.send_message(
             user_id,
             message_text,
             disable_notification=_disable_notification_for_event(
                 user_id=user_id,
-                event_type=status,
+                event_type=status_raw,
             ),
         )
     except Exception as exc:
-        print(f"[ai_signals] Failed to send result notification to {user_id}: {exc}")
+        _record_close_notify_failed()
+        logger.warning(
+            "[ai_signals] close notify failed event_id=%s user_id=%s status=%s error=%s",
+            event_id,
+            user_id,
+            _normalize_signal_status(status_raw),
+            exc,
+        )
+        if claimed_here and event_id:
+            release_signal_result_notification_claim(event_id)
         return False
 
-    event_id = int(signal.get("id", 0))
     if event_id:
         mark_signal_result_notified(event_id)
+    _record_close_notify_sent()
+    logger.info(
+        "[close_notify] notify success event_id=%s user_id=%s status=%s",
+        event_id,
+        user_id,
+        _normalize_signal_status(status_raw),
+    )
     return True
+
+
+async def retry_pending_close_notifications(limit: int = 200) -> int:
+    pending_rows = list_pending_result_notifications(limit=limit)
+    sent = 0
+    for row in pending_rows:
+        event = dict(row)
+        status_raw = str(event.get("result") or event.get("status") or "")
+        if not _is_final_signal_status(status_raw):
+            continue
+        ok = await notify_signal_result_short(event)
+        if ok:
+            sent += 1
+    return sent
 
 
 async def notify_signal_activation(signal: dict) -> bool:
@@ -2052,6 +2128,14 @@ async def refresh_signal(event_id: int) -> dict | None:
     if closed_at:
         updated["closed_at"] = closed_at
     if _is_final_signal_status(status_value) and not _is_final_signal_status(previous_status):
+        _record_close_event(symbol=symbol, side=side, reason=_normalize_signal_status(status_value))
+        logger.info(
+            "[close_notify] close detected (refresh) event_id=%s symbol=%s side=%s reason=%s",
+            event_id,
+            symbol,
+            side,
+            _normalize_signal_status(status_value),
+        )
         await notify_signal_result_short(updated)
     return updated
 
@@ -3584,6 +3668,16 @@ def _format_filters_section(st, lang: str) -> str:
                 "skipped_by_btc_gate_reasons(top): "
                 + ", ".join(f"{key}={value}" for key, value in top_items)
             )
+        details.append(f"close_events_detected_total: {int(_CLOSE_NOTIFY_METRICS.get('close_events_detected_total', 0) or 0)}")
+        details.append(f"close_notifications_sent_total: {int(_CLOSE_NOTIFY_METRICS.get('close_notifications_sent_total', 0) or 0)}")
+        details.append(f"close_notifications_failed_total: {int(_CLOSE_NOTIFY_METRICS.get('close_notifications_failed_total', 0) or 0)}")
+        last_close_event = _CLOSE_NOTIFY_METRICS.get("last_close_event")
+        if isinstance(last_close_event, dict) and last_close_event:
+            details.append(
+                "last_close_event: "
+                f"{last_close_event.get('symbol', '-')}/{last_close_event.get('side', '-')} "
+                f"{last_close_event.get('reason', '-')} at {last_close_event.get('time', '-') }"
+            )
     details.extend(_format_confirm_retry_info(st.state if st else None, lang))
     if st and st.fails_top:
         if isinstance(st.fails_top, dict):
@@ -4957,6 +5051,8 @@ def _expanded_signal_inline_kb(*, lang: str, signal_id: int, regular_enabled: bo
 
 
 LOUD_NOTIFICATION_EVENTS = {"NEW_SIGNAL", "ACTIVE_CONFIRMED"}
+LOUD_CLOSE_EVENTS = {"TP1", "TP2"}
+SILENT_CLOSE_EVENTS = {"SL"}
 
 
 def _is_signal_entry_sound_enabled(user_id: int) -> bool:
@@ -4964,9 +5060,13 @@ def _is_signal_entry_sound_enabled(user_id: int) -> bool:
 
 
 def _disable_notification_for_event(*, user_id: int, event_type: str) -> bool:
-    normalized_event = str(event_type or "").upper()
+    normalized_event = _normalize_signal_status(str(event_type or "").upper())
     if normalized_event in LOUD_NOTIFICATION_EVENTS:
         return not _is_signal_entry_sound_enabled(user_id)
+    if normalized_event in LOUD_CLOSE_EVENTS:
+        return False
+    if normalized_event in SILENT_CLOSE_EVENTS:
+        return True
     return True
 
 def _format_signal(signal: Dict[str, Any], lang: str) -> str:
@@ -6017,6 +6117,8 @@ async def ai_scan_once() -> None:
         reset_ticker_request_count("ai_signals")
         mark_tick("ai_signals", extra="сканирую рынок...")
 
+        retried_close_notifications = await retry_pending_close_notifications(limit=200)
+
         retry_sent = 0
         with binance_request_context("ai_signals"):
             retry_signals = await process_confirm_retry_queue(
@@ -6272,7 +6374,7 @@ async def ai_scan_once() -> None:
         print(
             "[AI] "
             f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
-            f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done}"
+            f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done} close_retry_sent={retried_close_notifications}"
         )
         module_state = MODULES.get("ai_signals")
         if module_state:
@@ -6282,7 +6384,7 @@ async def ai_scan_once() -> None:
             "ai_signals",
             extra=(
                 f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
-                f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done} "
+                f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done} close_retry_sent={retried_close_notifications} "
                 f"current={current_symbol or '-'} cycle={int(time.time() - start)}s "
                 f"req={req_count} klines={klines_count} "
                 f"klines_hits={cache_stats.get('hits')} klines_misses={cache_stats.get('misses')} "
