@@ -162,12 +162,9 @@ async def _fetch_btc_context_raw(prev_regime: str = BTC_REGIME_CHOP) -> Dict[str
             vol_z = (volumes[-1] - mean_volume) / std_volume
 
     last_15m = candles_15m[-1]
-    close_near_high = False
-    close_near_low = False
-    if last_15m.high > 0:
-        close_near_high = ((last_15m.high - last_15m.close) / last_15m.high * 100.0) <= BTC_SQUEEZE_CLOSE_NEAR_EXTREME_PCT
-    if last_15m.low > 0:
-        close_near_low = ((last_15m.close - last_15m.low) / last_15m.low * 100.0) <= BTC_SQUEEZE_CLOSE_NEAR_EXTREME_PCT
+    rng = max(last_15m.high - last_15m.low, 1e-12)
+    close_near_high = ((last_15m.high - last_15m.close) / rng) <= BTC_SQUEEZE_CLOSE_NEAR_EXTREME_PCT
+    close_near_low = ((last_15m.close - last_15m.low) / rng) <= BTC_SQUEEZE_CLOSE_NEAR_EXTREME_PCT
 
     is_chop = atr_pct_15m <= 0.6 and (crossovers >= 4 or alternations >= 18)
     reasons: List[str] = [
@@ -208,7 +205,7 @@ async def _fetch_btc_context_raw(prev_regime: str = BTC_REGIME_CHOP) -> Dict[str
         regime = BTC_REGIME_CHOP
         reasons.append("mixed_trend_defaults_to_chop")
 
-    btc_trend = regime in {BTC_REGIME_RISK_ON, BTC_REGIME_RISK_OFF, BTC_REGIME_SQUEEZE}
+    btc_trend = regime == BTC_REGIME_RISK_ON
 
     return {
         "btc_regime": regime,
@@ -256,7 +253,7 @@ async def get_btc_regime() -> Dict[str, Any]:
             reasons.append(f"forced_regime={forced}")
             fresh["btc_regime"] = forced
             fresh["btc_direction"] = "NEUTRAL"
-            fresh["btc_trend"] = forced in {BTC_REGIME_RISK_ON, BTC_REGIME_RISK_OFF, BTC_REGIME_SQUEEZE}
+            fresh["btc_trend"] = forced == BTC_REGIME_RISK_ON
             fresh["reasons"] = reasons
 
         _BTC_CONTEXT_CACHE["value"] = fresh
