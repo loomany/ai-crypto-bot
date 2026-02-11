@@ -118,6 +118,7 @@ from db import (
     get_signal_by_id,
     update_signal_event_refresh,
     update_signal_event_status_by_id,
+    update_signal_event_message_meta,
     activate_signal_events,
     mark_signal_events_poi_touched,
     mark_signal_result_notified,
@@ -2697,70 +2698,132 @@ async def ai_notify_off(callback: CallbackQuery):
         await callback.message.answer(i18n.t(lang, "AI_OFF_OK"))
 
 
-@dp.callback_query(F.data.regexp(r"^expand_signal:\d+$"))
+def _event_expanded_flag(event: Dict[str, Any]) -> bool:
+    return bool(int(event.get("is_expanded") or 0))
+
+
+def _pump_signal_payload_from_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "symbol": str(event.get("symbol") or ""),
+        "type": "pump" if str(event.get("side") or "").upper() == "LONG" else "dump",
+    }
+    reason_raw = event.get("reason_json")
+    if isinstance(reason_raw, str) and reason_raw.strip():
+        with suppress(Exception):
+            parsed = json.loads(reason_raw)
+            if isinstance(parsed, dict):
+                payload.update(parsed)
+    return payload
+
+
+def _render_signal_event_text(event: Dict[str, Any], lang: str, *, expanded: bool) -> str:
+    module_name = str(event.get("module") or "")
+    if module_name == "pumpdump":
+        pump_payload = _pump_signal_payload_from_event(event)
+        text = format_pump_message(pump_payload, lang, expanded=expanded)
+        prefix_key = str(pump_payload.get("prefix_key") or "").strip()
+        suffix_key = str(pump_payload.get("suffix_key") or "").strip()
+        if prefix_key:
+            text = f"{i18n.t(lang, prefix_key)}{text}"
+        if suffix_key:
+            text = f"{text}\n\n{i18n.t(lang, suffix_key)}"
+        trial_suffix = pump_payload.get("trial_suffix")
+        if isinstance(trial_suffix, str) and trial_suffix:
+            text = f"{text}{trial_suffix}"
+        return text
+
+    payload = _signal_payload_from_event(event)
+    if expanded:
+        return _format_signal(payload, lang)
+    return _format_compact_signal(payload, lang)
+
+
+def _signal_toggle_reply_markup(*, lang: str, signal_id: int, symbol: str, expanded: bool) -> InlineKeyboardMarkup:
+    if expanded:
+        return _expanded_signal_inline_kb(lang=lang, signal_id=signal_id, symbol=symbol)
+    return _compact_signal_inline_kb(lang=lang, signal_id=signal_id, symbol=symbol)
+
+
+@dp.callback_query(F.data.regexp(r"^sig:expand:\d+$"))
 async def sig_expand_callback(callback: CallbackQuery):
     if callback.from_user is None or callback.message is None:
         return
-    match = re.match(r"^expand_signal:(\d+)$", callback.data or "")
+    lang = get_user_lang(callback.from_user.id) or "ru"
+    await callback.answer()
+    match = re.match(r"^sig:expand:(\d+)$", callback.data or "")
     if not match:
-        await callback.answer()
         return
     signal_id = int(match.group(1))
-    lang = get_user_lang(callback.from_user.id) or "ru"
     include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
     event = get_signal_by_id(signal_id, include_legacy=include_legacy)
     if event is None or int(event["user_id"]) != callback.from_user.id:
-        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=False)
         return
-    payload = _signal_payload_from_event(dict(event))
+    event_dict = dict(event)
+    if _event_expanded_flag(event_dict):
+        await callback.answer("Уже открыто" if lang == "ru" else "Already expanded", show_alert=False)
+        return
+    text = _render_signal_event_text(event_dict, lang, expanded=True)
     try:
-        full_text = _format_signal(payload, lang)
-    except Exception:
-        full_text = _format_compact_signal(payload, lang)
-    await callback.message.edit_text(
-        full_text,
-        reply_markup=_expanded_signal_inline_kb(
-            lang=lang,
-            signal_id=signal_id,
-            symbol=str(event.get("symbol", "")),
-        ),
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
-    await callback.answer()
+        await callback.message.edit_text(
+            text,
+            reply_markup=_signal_toggle_reply_markup(
+                lang=lang,
+                signal_id=signal_id,
+                symbol=str(event_dict.get("symbol", "")),
+                expanded=True,
+            ),
+            parse_mode="HTML" if str(event_dict.get("module") or "") != "pumpdump" else "Markdown",
+            disable_web_page_preview=True,
+        )
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            await callback.answer("Уже открыто" if lang == "ru" else "Already expanded", show_alert=False)
+            return
+        raise
+    with suppress(Exception):
+        update_signal_event_message_meta(event_id=signal_id, is_expanded=True)
 
 
-@dp.callback_query(F.data.regexp(r"^collapse_signal:\d+$"))
+@dp.callback_query(F.data.regexp(r"^sig:collapse:\d+$"))
 async def sig_collapse_callback(callback: CallbackQuery):
     if callback.from_user is None or callback.message is None:
         return
-    match = re.match(r"^collapse_signal:(\d+)$", callback.data or "")
+    lang = get_user_lang(callback.from_user.id) or "ru"
+    await callback.answer()
+    match = re.match(r"^sig:collapse:(\d+)$", callback.data or "")
     if not match:
-        await callback.answer()
         return
     signal_id = int(match.group(1))
-    lang = get_user_lang(callback.from_user.id) or "ru"
     include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
     event = get_signal_by_id(signal_id, include_legacy=include_legacy)
     if event is None or int(event["user_id"]) != callback.from_user.id:
-        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=False)
         return
-    payload = _signal_payload_from_event(dict(event))
+    event_dict = dict(event)
+    if not _event_expanded_flag(event_dict):
+        await callback.answer("Уже свернуто" if lang == "ru" else "Already collapsed", show_alert=False)
+        return
+    text = _render_signal_event_text(event_dict, lang, expanded=False)
     try:
-        compact_text = _format_compact_signal(payload, lang)
-    except Exception:
-        compact_text = _format_compact_signal({"score": payload.get("score", 0)}, lang)
-    await callback.message.edit_text(
-        compact_text,
-        reply_markup=_compact_signal_inline_kb(
-            lang=lang,
-            signal_id=signal_id,
-            symbol=str(event.get("symbol", "")),
-        ),
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
-    await callback.answer()
+        await callback.message.edit_text(
+            text,
+            reply_markup=_signal_toggle_reply_markup(
+                lang=lang,
+                signal_id=signal_id,
+                symbol=str(event_dict.get("symbol", "")),
+                expanded=False,
+            ),
+            parse_mode="HTML" if str(event_dict.get("module") or "") != "pumpdump" else "Markdown",
+            disable_web_page_preview=True,
+        )
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            await callback.answer("Уже свернуто" if lang == "ru" else "Already collapsed", show_alert=False)
+            return
+        raise
+    with suppress(Exception):
+        update_signal_event_message_meta(event_id=signal_id, is_expanded=False)
 
 
 @dp.callback_query(F.data.regexp(r"^toggle_alerts:(regular|elite)$"))
@@ -5073,7 +5136,7 @@ def _compact_signal_inline_kb(*, lang: str, signal_id: int, symbol: str) -> Inli
             [
                 InlineKeyboardButton(
                     text=i18n.t(lang, "SIGNAL_BUTTON_EXPAND"),
-                    callback_data=f"expand_signal:{signal_id}",
+                    callback_data=f"sig:expand:{signal_id}",
                 ),
             ],
             [build_binance_button(lang, symbol)],
@@ -5087,7 +5150,7 @@ def _expanded_signal_inline_kb(*, lang: str, signal_id: int, symbol: str) -> Inl
             [
                 InlineKeyboardButton(
                     text=i18n.t(lang, "SIGNAL_BUTTON_COLLAPSE"),
-                    callback_data=f"collapse_signal:{signal_id}",
+                    callback_data=f"sig:collapse:{signal_id}",
                 ),
             ],
             [build_binance_button(lang, symbol)],
@@ -5536,6 +5599,7 @@ async def send_signal_to_all(
                 continue
         lang = get_user_lang(chat_id) or "ru"
         signal_reply_markup = None
+        event_id = 0
         if is_test:
             message_text = build_test_ai_signal(lang)
             should_log = False
@@ -5581,6 +5645,38 @@ async def send_signal_to_all(
 
         if kind == "paywall":
             stats["paywall"] += 1
+
+        if kind == "signal" and not is_test and should_log:
+            try:
+                event_id = insert_signal_event(
+                    ts=sent_at,
+                    user_id=chat_id,
+                    module="ai_signals",
+                    symbol=symbol,
+                    side="LONG" if direction == "long" else "SHORT",
+                    timeframe="1H",
+                    score=float(signal_dict.get("score", 0.0)),
+                    poi_low=float(entry_low),
+                    poi_high=float(entry_high),
+                    sl=float(signal_dict.get("sl", 0.0)),
+                    tp1=float(signal_dict.get("tp1", 0.0)),
+                    tp2=float(signal_dict.get("tp2", 0.0)),
+                    status="OPEN",
+                    tg_message_id=None,
+                    is_test=is_test,
+                    reason_json=reason_json,
+                    breakdown_json=breakdown_json,
+                    ttl_minutes=int(signal_dict.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60),
+                )
+                signal_reply_markup = _compact_signal_inline_kb(
+                    lang=lang,
+                    signal_id=event_id,
+                    symbol=symbol,
+                )
+            except Exception as exc:
+                print(f"[ai_signals] Failed to pre-log signal event for {chat_id}: {exc}")
+                await asyncio.sleep(random.uniform(0.05, 0.15))
+                continue
 
         signal_parse_mode = None if is_test else "HTML"
         paywall_parse_mode = None if is_test else "HTML"
@@ -5630,6 +5726,7 @@ async def send_signal_to_all(
                         event_type="NEW_SIGNAL",
                         parse_mode=signal_parse_mode,
                         disable_web_page_preview=True,
+                        reply_markup=signal_reply_markup,
                     )
                 stats["sent"] += 1
                 if chat_id == admin_chat_id:
@@ -5709,46 +5806,13 @@ async def send_signal_to_all(
             logger.exception(f"[{log_tag}] unexpected send error user_id=%s chat_id=%s", chat_id, chat_id)
             continue
 
-        if is_test or not should_log:
-            await asyncio.sleep(random.uniform(0.05, 0.15))
-            continue
+        if not is_test and should_log and event_id > 0:
+            with suppress(Exception):
+                update_signal_event_message_meta(
+                    event_id=event_id,
+                    tg_message_id=int(res.message_id),
+                )
 
-        try:
-            event_id = insert_signal_event(
-                ts=sent_at,
-                user_id=chat_id,
-                module="ai_signals",
-                symbol=symbol,
-                side="LONG" if direction == "long" else "SHORT",
-                timeframe="1H",
-                score=float(signal_dict.get("score", 0.0)),
-                poi_low=float(entry_low),
-                poi_high=float(entry_high),
-                sl=float(signal_dict.get("sl", 0.0)),
-                tp1=float(signal_dict.get("tp1", 0.0)),
-                tp2=float(signal_dict.get("tp2", 0.0)),
-                status="OPEN",
-                tg_message_id=int(res.message_id),
-                is_test=is_test,
-                reason_json=reason_json,
-                breakdown_json=breakdown_json,
-                ttl_minutes=int(signal_dict.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60),
-            )
-        except Exception as exc:
-            print(f"[ai_signals] Failed to log signal event for {chat_id}: {exc}")
-            await asyncio.sleep(random.uniform(0.05, 0.15))
-            continue
-
-        with suppress(Exception):
-            await bot.edit_message_reply_markup(
-                chat_id=chat_id,
-                message_id=int(res.message_id),
-                reply_markup=_compact_signal_inline_kb(
-                    lang=lang,
-                    signal_id=event_id,
-                    symbol=symbol,
-                ),
-            )
         await asyncio.sleep(random.uniform(0.05, 0.15))
     return stats if return_stats else stats["sent"]
 
@@ -5870,13 +5934,45 @@ async def _deliver_pumpdump_signal_stats(
                     continue
 
             if is_admin_user or is_sub_active(chat_id):
-                sent_message = await bot.send_message(chat_id, collapsed_text, parse_mode="Markdown")
-                _save_pump_message_state(
-                    chat_id=chat_id,
-                    message_id=int(sent_message.message_id),
-                    collapsed_text=collapsed_text,
-                    expanded_text=expanded_text,
-                    lang=lang,
+                signal_for_event = dict(signal)
+                if prefix_key:
+                    signal_for_event["prefix_key"] = prefix_key
+                if suffix_key:
+                    signal_for_event["suffix_key"] = suffix_key
+                event_id = insert_signal_event(
+                    ts=int(time.time()),
+                    user_id=chat_id,
+                    module="pumpdump",
+                    symbol=symbol,
+                    side="LONG" if str(signal.get("type") or "").lower() == "pump" else "SHORT",
+                    timeframe="5M",
+                    score=0.0,
+                    poi_low=0.0,
+                    poi_high=0.0,
+                    sl=0.0,
+                    tp1=0.0,
+                    tp2=0.0,
+                    status="OPEN",
+                    tg_message_id=None,
+                    reason_json=json.dumps(signal_for_event, ensure_ascii=False),
+                    breakdown_json=None,
+                    ttl_minutes=SIGNAL_TTL_SECONDS // 60,
+                )
+                sent_message = await bot.send_message(
+                    chat_id,
+                    collapsed_text,
+                    parse_mode="Markdown",
+                    reply_markup=_compact_signal_inline_kb(
+                        lang=lang,
+                        signal_id=event_id,
+                        symbol=symbol,
+                    ),
+                    disable_web_page_preview=True,
+                )
+                update_signal_event_message_meta(
+                    event_id=event_id,
+                    tg_message_id=int(sent_message.message_id),
+                    is_expanded=False,
                 )
                 increment_pumpdump_daily_count(chat_id, date_key)
                 sent_count += 1
@@ -5894,13 +5990,46 @@ async def _deliver_pumpdump_signal_stats(
                 )
                 collapsed_with_trial = collapsed_text + trial_suffix
                 expanded_with_trial = expanded_text + trial_suffix
-                sent_message = await bot.send_message(chat_id, collapsed_with_trial, parse_mode="Markdown")
-                _save_pump_message_state(
-                    chat_id=chat_id,
-                    message_id=int(sent_message.message_id),
-                    collapsed_text=collapsed_with_trial,
-                    expanded_text=expanded_with_trial,
-                    lang=lang,
+                signal_for_event = dict(signal)
+                if prefix_key:
+                    signal_for_event["prefix_key"] = prefix_key
+                if suffix_key:
+                    signal_for_event["suffix_key"] = suffix_key
+                signal_for_event["trial_suffix"] = trial_suffix
+                event_id = insert_signal_event(
+                    ts=int(time.time()),
+                    user_id=chat_id,
+                    module="pumpdump",
+                    symbol=symbol,
+                    side="LONG" if str(signal.get("type") or "").lower() == "pump" else "SHORT",
+                    timeframe="5M",
+                    score=0.0,
+                    poi_low=0.0,
+                    poi_high=0.0,
+                    sl=0.0,
+                    tp1=0.0,
+                    tp2=0.0,
+                    status="OPEN",
+                    tg_message_id=None,
+                    reason_json=json.dumps(signal_for_event, ensure_ascii=False),
+                    breakdown_json=None,
+                    ttl_minutes=SIGNAL_TTL_SECONDS // 60,
+                )
+                sent_message = await bot.send_message(
+                    chat_id,
+                    collapsed_with_trial,
+                    parse_mode="Markdown",
+                    reply_markup=_compact_signal_inline_kb(
+                        lang=lang,
+                        signal_id=event_id,
+                        symbol=symbol,
+                    ),
+                    disable_web_page_preview=True,
+                )
+                update_signal_event_message_meta(
+                    event_id=event_id,
+                    tg_message_id=int(sent_message.message_id),
+                    is_expanded=False,
                 )
                 increment_pumpdump_daily_count(chat_id, date_key)
                 sent_count += 1
