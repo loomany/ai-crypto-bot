@@ -202,7 +202,8 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
     tp2_r = 0.0 if zero_risk else safe_div(abs(tp2 - entry_ref), r_value, 0.0)
 
     activated_at = signal.get("activated_at")
-    is_activated = bool(signal.get("is_activated")) or activated_at is not None
+    state = str(signal.get("state") or "WAITING_ENTRY").upper()
+    is_activated = bool(signal.get("is_activated")) or activated_at is not None or state == "ACTIVE_CONFIRMED"
     if activated_at is None:
         age_sec = int(time.time()) - sent_at
         if age_sec >= ttl_sec and not is_activated:
@@ -332,10 +333,11 @@ async def evaluate_open_signals(
                 continue
 
             state = str(signal.get("state") or "WAITING_ENTRY").upper()
+            is_activated = bool(signal.get("is_activated")) or signal.get("activated_at") is not None
             ttl_minutes = int(signal.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
             ttl_sec = max(60, ttl_minutes * 60)
             now_ts = int(time.time())
-            if now_ts > sent_at + ttl_sec and state != "ACTIVE_CONFIRMED":
+            if now_ts > sent_at + ttl_sec and state != "ACTIVE_CONFIRMED" and not is_activated:
                 mark_signal_closed(
                     signal_id=signal["signal_id"],
                     outcome="NO_FILL",
@@ -425,13 +427,20 @@ async def evaluate_open_signals(
                 str(signal.get("direction", "")).upper(),
                 result.get("outcome"),
             )
+            close_state_map = {
+                "TP1": "CLOSED_TP1",
+                "TP2": "CLOSED_TP2",
+                "SL": "CLOSED_SL",
+                "BE": "CLOSED_BE",
+                "NO_FILL": "EXPIRED",
+            }
             mark_signal_closed(
                 signal_id=signal["signal_id"],
                 outcome=result["outcome"],
                 pnl_r=result["pnl_r"],
                 filled_at=result["filled_at"],
                 notes=result["notes"],
-                close_state=("EXPIRED" if result["outcome"] == "NO_FILL" else None),
+                close_state=close_state_map.get(str(result["outcome"])),
             )
             logger.info(
                 "[close_notify] db updated signal_id=%s outcome=%s",

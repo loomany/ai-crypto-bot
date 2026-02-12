@@ -1413,7 +1413,16 @@ def enforce_signal_ttl() -> int:
         if age_sec < ttl_sec:
             continue
         state = str(event.get("state") or "").upper()
-        is_activated = bool(event.get("activated_at")) or state == "ACTIVE_CONFIRMED"
+        status_raw = str(event.get("status") or "").upper()
+        result_raw = str(event.get("result") or "").upper()
+        is_activated = (
+            bool(event.get("activated_at"))
+            or bool(event.get("is_activated"))
+            or bool(event.get("entry_touched"))
+            or state in {"ACTIVE_CONFIRMED", "ACTIVATED", "ENTRY_CONFIRMED"}
+            or status_raw == "ACTIVE"
+            or result_raw == "ACTIVE"
+        )
         if is_activated:
             continue
         tp2_hit = bool(event.get("tp2_hit"))
