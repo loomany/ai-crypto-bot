@@ -39,6 +39,22 @@ def _collect_status_tokens(signal: dict[str, Any]) -> set[str]:
 
 
 def _infer_expired_from_ttl(signal: dict[str, Any], now_ts: int) -> bool:
+    activated_at = _as_int(signal.get("activated_at"))
+    state = str(signal.get("state") or "").strip().upper()
+    status = str(signal.get("status") or "").strip().upper()
+    result = str(signal.get("result") or "").strip().upper()
+    is_activated = bool(signal.get("is_activated"))
+    entry_touched = bool(signal.get("entry_touched"))
+    if (
+        activated_at > 0
+        or state in _ACTIVATED_STATES
+        or status in _ACTIVATED_STATES
+        or result in _ACTIVATED_STATES
+        or is_activated
+        or entry_touched
+    ):
+        return False
+
     expires_at = _as_int(signal.get("expires_at"))
     if expires_at <= 0:
         base_ts = _as_int(signal.get("created_at")) or _as_int(signal.get("ts"))

@@ -5,7 +5,7 @@ from typing import Iterable, List, Optional, Tuple
 
 from cutoff_config import get_effective_cutoff_ts
 from db_path import get_db_path
-from history_status import get_signal_status_key, is_terminal_status_key
+from history_status import get_signal_badge, get_signal_status_key
 from symbol_cache import get_blocked_symbols
 from utils.safe_math import safe_div, safe_pct
 
@@ -802,15 +802,16 @@ def get_history_winrate_summary(
         outcome_type = get_signal_status_key(dict(row))
         totals = summary["totals"]
         if isinstance(totals, dict):
-            if outcome_type == "TP":
+            badge = get_signal_badge(dict(row))
+            if badge == "🟢":
                 totals["tp"] = int(totals.get("tp", 0) or 0) + 1
-            elif outcome_type == "SL":
+            elif badge == "🔴":
                 totals["sl"] = int(totals.get("sl", 0) or 0) + 1
-            elif outcome_type == "EXPIRED_NO_ENTRY":
+            elif badge == "⚪":
                 totals["expired_no_entry"] = int(totals.get("expired_no_entry", 0) or 0) + 1
-            elif outcome_type == "NO_CONFIRMATION":
+            elif badge == "🔵":
                 totals["no_confirmation"] = int(totals.get("no_confirmation", 0) or 0) + 1
-            elif not is_terminal_status_key(outcome_type):
+            else:
                 totals["in_progress"] = int(totals.get("in_progress", 0) or 0) + 1
 
         if 90 <= score <= 100:
