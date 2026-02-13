@@ -99,6 +99,8 @@ from db import (
     TRIAL_PUMP_LIMIT,
     get_state,
     set_state,
+    get_inversion_enabled,
+    set_inversion_enabled,
     kv_get_int,
     kv_set_int,
     purge_symbol,
@@ -166,6 +168,7 @@ from keyboards import (
     stats_inline_kb,
 )
 from settings import SIGNAL_TTL_SECONDS
+from signal_inversion import apply_inversion
 
 logger = logging.getLogger(__name__)
 DEFAULT_LANG = "ru"
@@ -4359,39 +4362,71 @@ async def system_menu(message: Message):
     await show_system_menu(message)
 
 
+def _is_inversion_toggle_text(text: str | None) -> bool:
+    if not isinstance(text, str):
+        return False
+    return text in {
+        i18n.t("ru", "INVERSION_TOGGLE_BUTTON", state=i18n.t("ru", "INVERSION_STATE_ON")),
+        i18n.t("ru", "INVERSION_TOGGLE_BUTTON", state=i18n.t("ru", "INVERSION_STATE_OFF")),
+        i18n.t("en", "INVERSION_TOGGLE_BUTTON", state=i18n.t("en", "INVERSION_STATE_ON")),
+        i18n.t("en", "INVERSION_TOGGLE_BUTTON", state=i18n.t("en", "INVERSION_STATE_OFF")),
+    }
+
+
+@dp.message(F.text.func(_is_inversion_toggle_text))
+async def inversion_toggle_message(message: Message) -> None:
+    lang = get_user_lang(message.chat.id) or "ru"
+    if message.from_user is None or not is_admin(message.from_user.id):
+        await message.answer(i18n.t(lang, "NO_ACCESS"))
+        return
+
+    new_state = not get_inversion_enabled()
+    set_inversion_enabled(new_state)
+    await message.answer(
+        i18n.t(lang, "INVERSION_ENABLED_ALERT" if new_state else "INVERSION_DISABLED_ALERT"),
+        reply_markup=build_system_menu_kb(lang, is_admin=True, inversion_enabled=new_state),
+    )
+
+
 async def show_system_menu(message: Message) -> None:
     lang = get_user_lang(message.chat.id) or "ru"
+    is_admin_user = is_admin(message.from_user.id) if message.from_user else False
     await message.answer(
         i18n.t(lang, "SYSTEM_SECTION_TEXT"),
         reply_markup=build_system_menu_kb(
             lang,
-            is_admin=is_admin(message.from_user.id) if message.from_user else False
+            is_admin=is_admin_user,
+            inversion_enabled=get_inversion_enabled() if is_admin_user else False,
         ),
     )
 
 
 @dp.callback_query(F.data == "about_back")
 async def about_back_callback(callback: CallbackQuery):
+    lang = _resolve_user_lang(callback.from_user.id if callback.from_user else None)
     await callback.answer()
     if callback.message:
         await callback.message.answer(
             i18n.t(lang, "SYSTEM_SECTION_TEXT"),
             reply_markup=build_system_menu_kb(
                 lang,
-                is_admin=is_admin(callback.from_user.id) if callback.from_user else False
+                is_admin=is_admin(callback.from_user.id) if callback.from_user else False,
+                inversion_enabled=get_inversion_enabled() if callback.from_user and is_admin(callback.from_user.id) else False,
             ),
         )
 
 
 @dp.callback_query(F.data == "system_back")
 async def system_back_callback(callback: CallbackQuery):
+    lang = _resolve_user_lang(callback.from_user.id if callback.from_user else None)
     await callback.answer()
     if callback.message:
         await callback.message.answer(
             i18n.t(lang, "SYSTEM_SECTION_TEXT"),
             reply_markup=build_system_menu_kb(
                 lang,
-                is_admin=is_admin(callback.from_user.id) if callback.from_user else False
+                is_admin=is_admin(callback.from_user.id) if callback.from_user else False,
+                inversion_enabled=get_inversion_enabled() if callback.from_user and is_admin(callback.from_user.id) else False,
             ),
         )
 
@@ -4834,22 +4869,26 @@ async def user_delete_callback(callback: CallbackQuery):
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_STATUS")))
 async def status_button(message: Message):
+    is_admin_user = is_admin(message.from_user.id) if message.from_user else False
     await message.answer(
         _format_user_bot_status(message.chat.id),
         reply_markup=build_system_menu_kb(
             get_user_lang(message.chat.id) or "ru",
-            is_admin=is_admin(message.from_user.id) if message.from_user else False
+            is_admin=is_admin_user,
+            inversion_enabled=get_inversion_enabled() if is_admin_user else False,
         ),
     )
 
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_DIAG")))
 async def diagnostics_button(message: Message):
+    is_admin_user = is_admin(message.from_user.id) if message.from_user else False
     await message.answer(
         _format_user_bot_status(message.chat.id),
         reply_markup=build_system_menu_kb(
             get_user_lang(message.chat.id) or "ru",
-            is_admin=is_admin(message.from_user.id) if message.from_user else False
+            is_admin=is_admin_user,
+            inversion_enabled=get_inversion_enabled() if is_admin_user else False,
         ),
     )
 
@@ -5398,6 +5437,10 @@ async def send_signal_to_all(
     if bot is None:
         print("[ai_signals] Bot is not initialized; skipping send.")
         return 0
+
+    if get_inversion_enabled() and not bool(signal_dict.get("_inversion_applied", False)):
+        signal_dict = apply_inversion(signal_dict)
+        signal_dict["_inversion_applied"] = True
 
     symbol = signal_dict.get("symbol", "")
     blocked_symbols = get_blocked_symbols()
