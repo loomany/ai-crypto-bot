@@ -311,6 +311,14 @@ def set_state(key: str, value: str) -> None:
         conn.close()
 
 
+def get_inversion_enabled() -> bool:
+    return get_state("inversion_enabled", "0") == "1"
+
+
+def set_inversion_enabled(enabled: bool) -> None:
+    set_state("inversion_enabled", "1" if enabled else "0")
+
+
 def get_last_pumpdump_signal() -> Optional[dict]:
     payload = get_state("last_pumpdump_signal")
     if not payload:

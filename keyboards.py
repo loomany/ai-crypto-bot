@@ -22,7 +22,11 @@ def build_main_menu_kb(lang: str, is_admin: bool = False) -> ReplyKeyboardMarkup
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-def build_system_menu_kb(lang: str, is_admin: bool = False) -> ReplyKeyboardMarkup:
+def build_system_menu_kb(
+    lang: str,
+    is_admin: bool = False,
+    inversion_enabled: bool = False,
+) -> ReplyKeyboardMarkup:
     """Системное меню."""
     if is_admin:
         keyboard = [
@@ -33,6 +37,15 @@ def build_system_menu_kb(lang: str, is_admin: bool = False) -> ReplyKeyboardMark
             [
                 KeyboardButton(text=i18n.t(lang, "SYS_USERS")),
                 KeyboardButton(text=i18n.t(lang, "SYS_PAY")),
+            ],
+            [
+                KeyboardButton(
+                    text=i18n.t(
+                        lang,
+                        "INVERSION_TOGGLE_BUTTON",
+                        state=i18n.t(lang, "INVERSION_STATE_ON" if inversion_enabled else "INVERSION_STATE_OFF"),
+                    )
+                )
             ],
             [KeyboardButton(text=i18n.t(lang, "MENU_BACK"))],
         ]
@@ -123,14 +136,31 @@ def stats_inline_kb(lang: str) -> InlineKeyboardMarkup:
     )
 
 
-def build_about_inline_kb(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=i18n.t(lang, "SYS_PAY"), callback_data="sub_pay")],
-            [InlineKeyboardButton(text=i18n.t(lang, "BTN_CONTACT_ADMIN"), callback_data="sub_contact")],
-            [InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data="about_back")],
-        ]
-    )
+def build_about_inline_kb(
+    lang: str,
+    *,
+    is_admin: bool = False,
+    inversion_enabled: bool = False,
+) -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton(text=i18n.t(lang, "SYS_PAY"), callback_data="sub_pay")],
+        [InlineKeyboardButton(text=i18n.t(lang, "BTN_CONTACT_ADMIN"), callback_data="sub_contact")],
+    ]
+    if is_admin:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(
+                        lang,
+                        "INVERSION_TOGGLE_BUTTON",
+                        state=i18n.t(lang, "INVERSION_STATE_ON" if inversion_enabled else "INVERSION_STATE_OFF"),
+                    ),
+                    callback_data="admin_toggle_inversion",
+                )
+            ]
+        )
+    keyboard.append([InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data="about_back")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def build_offer_inline_kb(lang: str, back_callback: str = "system_back") -> InlineKeyboardMarkup:
