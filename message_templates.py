@@ -168,7 +168,6 @@ def format_scenario_message(
         "",
         symbol_text,
         i18n.t(lang, "SCENARIO_POSSIBLE_LINE", emoji=emoji, scenario=scenario_text),
-        *_market_regime_lines(market_regime, market_direction, market_trend, lang),
         i18n.t(lang, "SCENARIO_TIMEFRAME_LINE", timeframe=timeframe),
         i18n.t(lang, "SCENARIO_LIFETIME_MINUTES_LINE", minutes=max(1, int(lifetime_minutes))),
         "",
@@ -323,7 +322,6 @@ def format_compact_scenario_message(
             timeframe=timeframe,
             entry_tf=timeframe,
         ),
-        *_market_regime_lines(market_regime, market_direction, market_trend, lang),
         i18n.t(
             lang,
             "SIGNAL_COMPACT_POI_LINE",
