@@ -5306,6 +5306,75 @@ def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
     return signal_text
 
 
+def _normalize_signal_direction(value: Any) -> str:
+    direction = str(value or "").strip().upper()
+    if direction in {"LONG", "SHORT"}:
+        return direction
+    return "?"
+
+
+def _with_admin_inversion_line(
+    text: str,
+    *,
+    signal: Dict[str, Any],
+    lang: str,
+    is_admin_user: bool,
+) -> str:
+    if not is_admin_user:
+        return text
+
+    raw = _normalize_signal_direction(signal.get("_raw_direction") or signal.get("direction") or signal.get("side"))
+    final = _normalize_signal_direction(signal.get("_final_direction") or signal.get("direction") or signal.get("side") or raw)
+    inverted = raw != final
+    if lang == "ru":
+        inversion_word = "ДА" if inverted else "НЕТ"
+        inversion_line = f"🔁 Инверсия: {inversion_word} (raw: {raw} → final: {final})"
+    else:
+        inversion_word = "YES" if inverted else "NO"
+        inversion_line = f"🔁 Inversion: {inversion_word} (raw: {raw} → final: {final})"
+
+    lines = text.split("\n")
+    for idx, line in enumerate(lines):
+        if "TTL:" in line:
+            lines.insert(idx + 1, inversion_line)
+            return "\n".join(lines)
+
+    return f"{text}\n{inversion_line}"
+
+
+def _apply_signal_inversion_metadata(signal: Dict[str, Any], *, inversion_enabled: bool) -> Dict[str, Any]:
+    raw_direction = signal.get("_raw_direction")
+    if not raw_direction:
+        raw_direction = signal.get("direction") or signal.get("side")
+        signal["_raw_direction"] = raw_direction
+
+    if bool(signal.get("_inversion_applied", False)):
+        final_direction = signal.get("_final_direction") or signal.get("direction") or signal.get("side")
+        signal["_final_direction"] = final_direction
+        signal["_inverted"] = _normalize_signal_direction(raw_direction) != _normalize_signal_direction(final_direction)
+        return signal
+
+    if inversion_enabled:
+        prev_direction = raw_direction
+        signal = apply_inversion(signal)
+        final_direction = signal.get("direction") or signal.get("side")
+        signal["_final_direction"] = final_direction
+        signal["_inverted"] = _normalize_signal_direction(prev_direction) != _normalize_signal_direction(final_direction)
+        signal["_inversion_applied"] = True
+        return signal
+
+    signal["_final_direction"] = raw_direction
+    signal["_inverted"] = False
+    return signal
+
+
+def _strip_runtime_signal_fields(signal_dict: Dict[str, Any]) -> Dict[str, Any]:
+    db_signal = dict(signal_dict)
+    for key in ("_raw_direction", "_final_direction", "_inverted", "_inversion_applied"):
+        db_signal.pop(key, None)
+    return db_signal
+
+
 def _signal_payload_from_event(event: Dict[str, Any]) -> Dict[str, Any]:
     reason_raw = event.get("reason_json")
     reason = {}
@@ -5478,7 +5547,7 @@ async def send_signal_to_all(
     dedup_key = f"{symbol}:24h"
 
     sent_at = int(time.time())
-    insert_signal_audit(signal_dict, tier="free", module="ai_signals", sent_at=sent_at)
+    insert_signal_audit(_strip_runtime_signal_fields(signal_dict), tier="free", module="ai_signals", sent_at=sent_at)
     reason = signal_dict.get("reason")
     breakdown = (
         signal_dict.get("score_breakdown")
@@ -5587,6 +5656,7 @@ async def send_signal_to_all(
             should_log = False
             kind = "signal"
         else:
+            is_admin_user = allow_admin_bypass and is_admin(chat_id)
             try:
                 message_text = _format_compact_signal(signal_dict, lang)
             except Exception:
@@ -5602,9 +5672,15 @@ async def send_signal_to_all(
                     symbol=fallback_symbol,
                     side=fallback_side,
                 )
+            message_text = _with_admin_inversion_line(
+                message_text,
+                signal=signal_dict,
+                lang=lang,
+                is_admin_user=is_admin_user,
+            )
             should_log = True
             kind = "signal"
-            if allow_admin_bypass and is_admin(chat_id):
+            if is_admin_user:
                 pass
             elif is_sub_active(chat_id):
                 pass
@@ -6316,9 +6392,10 @@ async def ai_scan_once() -> None:
             if time.time() - start > BUDGET:
                 print("[AI] budget exceeded during confirm retry sends")
                 break
-            if get_inversion_enabled() and not bool(signal.get("_inversion_applied", False)):
-                signal = apply_inversion(signal)
-                signal["_inversion_applied"] = True
+            signal = _apply_signal_inversion_metadata(
+                signal,
+                inversion_enabled=get_inversion_enabled(),
+            )
             allow_send, skip_reason, confirm_strict = apply_btc_soft_gate(signal, btc_context)
             if not allow_send:
                 _inc_regime_skip(skip_reason)
@@ -6516,9 +6593,10 @@ async def ai_scan_once() -> None:
             if time.time() - start > BUDGET:
                 print("[AI] budget exceeded, stopping early")
                 break
-            if get_inversion_enabled() and not bool(signal.get("_inversion_applied", False)):
-                signal = apply_inversion(signal)
-                signal["_inversion_applied"] = True
+            signal = _apply_signal_inversion_metadata(
+                signal,
+                inversion_enabled=get_inversion_enabled(),
+            )
             score = signal.get("score", 0)
             if score < FREE_MIN_SCORE:
                 continue
