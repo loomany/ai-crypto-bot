@@ -5438,10 +5438,6 @@ async def send_signal_to_all(
         print("[ai_signals] Bot is not initialized; skipping send.")
         return 0
 
-    if get_inversion_enabled() and not bool(signal_dict.get("_inversion_applied", False)):
-        signal_dict = apply_inversion(signal_dict)
-        signal_dict["_inversion_applied"] = True
-
     symbol = signal_dict.get("symbol", "")
     blocked_symbols = get_blocked_symbols()
     if symbol and symbol.upper() in blocked_symbols:
@@ -6320,6 +6316,9 @@ async def ai_scan_once() -> None:
             if time.time() - start > BUDGET:
                 print("[AI] budget exceeded during confirm retry sends")
                 break
+            if get_inversion_enabled() and not bool(signal.get("_inversion_applied", False)):
+                signal = apply_inversion(signal)
+                signal["_inversion_applied"] = True
             allow_send, skip_reason, confirm_strict = apply_btc_soft_gate(signal, btc_context)
             if not allow_send:
                 _inc_regime_skip(skip_reason)
@@ -6517,6 +6516,9 @@ async def ai_scan_once() -> None:
             if time.time() - start > BUDGET:
                 print("[AI] budget exceeded, stopping early")
                 break
+            if get_inversion_enabled() and not bool(signal.get("_inversion_applied", False)):
+                signal = apply_inversion(signal)
+                signal["_inversion_applied"] = True
             score = signal.get("score", 0)
             if score < FREE_MIN_SCORE:
                 continue
