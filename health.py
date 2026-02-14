@@ -176,6 +176,9 @@ def mark_ok(key: str, extra: str = ""):
     now = time.time()
     st.last_tick = now
     st.last_ok = now
+    # Successful cycle should reset transient health flags.
+    st.last_error = None
+    st.last_warn = None
     if extra:
         st.extra = extra
     persist_module_status(key)
