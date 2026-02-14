@@ -2707,72 +2707,6 @@ async def ai_notify_off(callback: CallbackQuery):
         await callback.message.answer(i18n.t(lang, "AI_OFF_OK"))
 
 
-@dp.callback_query(F.data.regexp(r"^expand_signal:\d+$"))
-async def sig_expand_callback(callback: CallbackQuery):
-    if callback.from_user is None or callback.message is None:
-        return
-    match = re.match(r"^expand_signal:(\d+)$", callback.data or "")
-    if not match:
-        await callback.answer()
-        return
-    signal_id = int(match.group(1))
-    lang = get_user_lang(callback.from_user.id) or "ru"
-    include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
-    event = get_signal_by_id(signal_id, include_legacy=include_legacy)
-    if event is None or int(event["user_id"]) != callback.from_user.id:
-        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
-        return
-    payload = _signal_payload_from_event(dict(event))
-    try:
-        full_text = _format_signal(payload, lang)
-    except Exception:
-        full_text = _format_compact_signal(payload, lang)
-    await callback.message.edit_text(
-        full_text,
-        reply_markup=_expanded_signal_inline_kb(
-            lang=lang,
-            signal_id=signal_id,
-            symbol=str(event.get("symbol", "")),
-        ),
-        parse_mode=None,
-        disable_web_page_preview=True,
-    )
-    await callback.answer()
-
-
-@dp.callback_query(F.data.regexp(r"^collapse_signal:\d+$"))
-async def sig_collapse_callback(callback: CallbackQuery):
-    if callback.from_user is None or callback.message is None:
-        return
-    match = re.match(r"^collapse_signal:(\d+)$", callback.data or "")
-    if not match:
-        await callback.answer()
-        return
-    signal_id = int(match.group(1))
-    lang = get_user_lang(callback.from_user.id) or "ru"
-    include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
-    event = get_signal_by_id(signal_id, include_legacy=include_legacy)
-    if event is None or int(event["user_id"]) != callback.from_user.id:
-        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
-        return
-    payload = _signal_payload_from_event(dict(event))
-    try:
-        compact_text = _format_compact_signal(payload, lang)
-    except Exception:
-        compact_text = _format_compact_signal({"score": payload.get("score", 0)}, lang)
-    await callback.message.edit_text(
-        compact_text,
-        reply_markup=_compact_signal_inline_kb(
-            lang=lang,
-            signal_id=signal_id,
-            symbol=str(event.get("symbol", "")),
-        ),
-        parse_mode=None,
-        disable_web_page_preview=True,
-    )
-    await callback.answer()
-
-
 @dp.callback_query(F.data.regexp(r"^toggle_alerts:(regular|elite)$"))
 async def toggle_alerts_callback(callback: CallbackQuery):
     if callback.from_user is None or callback.message is None:
@@ -5113,29 +5047,9 @@ def build_binance_button(lang: str, symbol: str) -> InlineKeyboardButton:
     )
 
 
-def _compact_signal_inline_kb(*, lang: str, signal_id: int, symbol: str) -> InlineKeyboardMarkup:
+def _signal_inline_kb(*, lang: str, symbol: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=i18n.t(lang, "SIGNAL_BUTTON_EXPAND"),
-                    callback_data=f"expand_signal:{signal_id}",
-                ),
-            ],
-            [build_binance_button(lang, symbol)],
-        ]
-    )
-
-
-def _expanded_signal_inline_kb(*, lang: str, signal_id: int, symbol: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=i18n.t(lang, "SIGNAL_BUTTON_COLLAPSE"),
-                    callback_data=f"collapse_signal:{signal_id}",
-                ),
-            ],
             [build_binance_button(lang, symbol)],
         ]
     )
@@ -5194,9 +5108,6 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
         price_precision=4,
         score_breakdown=breakdown,
         lifetime_minutes=int(signal.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60),
-        market_regime=signal.get("btc_regime"),
-        market_direction=signal.get("btc_direction"),
-        market_trend=signal.get("btc_trend"),
     )
     prefix = signal.get("title_prefix")
     if isinstance(prefix, dict):
@@ -5204,31 +5115,6 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
     if prefix:
         return f"{text}\n\n{prefix}"
     return text
-
-
-def _market_regime_lines_for_signal(signal: Dict[str, Any], lang: str) -> list[str]:
-    regime_text = i18n.t(
-        lang,
-        {
-            "RISK_ON": "SIGNAL_MARKET_REGIME_TREND",
-            "RISK_OFF": "SIGNAL_MARKET_REGIME_RISK_OFF",
-            "CHOP": "SIGNAL_MARKET_REGIME_CHOP",
-            "SQUEEZE": "SIGNAL_MARKET_REGIME_SQUEEZE",
-        }.get(str(signal.get("btc_regime") or "").upper(), "SIGNAL_MARKET_REGIME_CHOP"),
-    )
-    direction_text = i18n.t(
-        lang,
-        {
-            "UP": "SIGNAL_MARKET_DIR_UP",
-            "DOWN": "SIGNAL_MARKET_DIR_DOWN",
-            "NEUTRAL": "SIGNAL_MARKET_DIR_NEUTRAL",
-        }.get(str(signal.get("btc_direction") or "").upper(), "SIGNAL_MARKET_DIR_NEUTRAL"),
-    )
-    trend_text = i18n.t(lang, "SIGNAL_TREND_YES") if bool(signal.get("btc_trend")) else i18n.t(lang, "SIGNAL_TREND_NO")
-    return [
-        i18n.t(lang, "SIGNAL_MARKET_REGIME_LINE", regime=regime_text, direction=direction_text),
-        i18n.t(lang, "SIGNAL_MARKET_TREND_LINE", trend=trend_text),
-    ]
 
 
 def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
@@ -5268,7 +5154,6 @@ def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
             f"TP1: {_format_price(float(signal.get('tp1') or 0.0))}",
             f"TP2: {_format_price(float(signal.get('tp2') or 0.0))}",
             i18n.t(lang, "SIGNAL_SHORT_80_89_SCORE_LINE", score=score),
-            *_market_regime_lines_for_signal(signal, lang),
             i18n.t(
                 lang,
                 "SIGNAL_SHORT_80_89_TTL_LINE",
@@ -5292,7 +5177,6 @@ def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
             i18n.t(lang, "SIGNAL_SHORT_TP1_LINE", tp1=_format_price(float(signal.get("tp1") or 0.0))),
             i18n.t(lang, "SIGNAL_SHORT_TP2_LINE", tp2=_format_price(float(signal.get("tp2") or 0.0))),
             i18n.t(lang, "SIGNAL_SHORT_SL_LINE", sl=_format_price(float(signal.get("sl") or 0.0))),
-            *_market_regime_lines_for_signal(signal, lang),
         ]
 
     prefix = signal.get("title_prefix")
@@ -5658,7 +5542,7 @@ async def send_signal_to_all(
         else:
             is_admin_user = allow_admin_bypass and is_admin(chat_id)
             try:
-                message_text = _format_compact_signal(signal_dict, lang)
+                message_text = _format_signal(signal_dict, lang)
             except Exception:
                 fallback_symbol = _signal_symbol_text(str(signal_dict.get("symbol") or ""))
                 fallback_side = (
@@ -5865,9 +5749,8 @@ async def send_signal_to_all(
             await bot.edit_message_reply_markup(
                 chat_id=chat_id,
                 message_id=int(res.message_id),
-                reply_markup=_compact_signal_inline_kb(
+                reply_markup=_signal_inline_kb(
                     lang=lang,
-                    signal_id=event_id,
                     symbol=symbol,
                 ),
             )
