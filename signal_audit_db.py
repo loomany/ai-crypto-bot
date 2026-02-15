@@ -51,6 +51,7 @@ def init_signal_audit_tables() -> None:
                 max_profit_pct REAL NOT NULL DEFAULT 0,
                 be_triggered INTEGER NOT NULL DEFAULT 0,
                 be_trigger_price REAL,
+                be_level_pct REAL NOT NULL DEFAULT 0,
                 be_finalised INTEGER NOT NULL DEFAULT 0,
                 be_trigger_notified INTEGER NOT NULL DEFAULT 0,
                 be_finalised_notified INTEGER NOT NULL DEFAULT 0,
@@ -58,6 +59,9 @@ def init_signal_audit_tables() -> None:
                 tp2_notified INTEGER NOT NULL DEFAULT 0,
                 sl_notified INTEGER NOT NULL DEFAULT 0,
                 be_notified INTEGER NOT NULL DEFAULT 0,
+                final_status TEXT DEFAULT NULL,
+                finalised_at TEXT DEFAULT NULL,
+                final_notified INTEGER NOT NULL DEFAULT 0,
                 exp_notified INTEGER NOT NULL DEFAULT 0,
                 nf_notified INTEGER NOT NULL DEFAULT 0,
                 confirm_strict INTEGER NOT NULL DEFAULT 0,
@@ -94,6 +98,8 @@ def init_signal_audit_tables() -> None:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN be_triggered INTEGER NOT NULL DEFAULT 0")
         if "be_trigger_price" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN be_trigger_price REAL")
+        if "be_level_pct" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN be_level_pct REAL NOT NULL DEFAULT 0")
         if "be_finalised" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN be_finalised INTEGER NOT NULL DEFAULT 0")
         if "be_trigger_notified" not in cols:
@@ -108,6 +114,12 @@ def init_signal_audit_tables() -> None:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN sl_notified INTEGER NOT NULL DEFAULT 0")
         if "be_notified" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN be_notified INTEGER NOT NULL DEFAULT 0")
+        if "final_status" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN final_status TEXT DEFAULT NULL")
+        if "finalised_at" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN finalised_at TEXT DEFAULT NULL")
+        if "final_notified" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN final_notified INTEGER NOT NULL DEFAULT 0")
         if "exp_notified" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN exp_notified INTEGER NOT NULL DEFAULT 0")
         if "nf_notified" not in cols:
@@ -264,13 +276,15 @@ def mark_signal_closed(
             SET status = 'closed',
                 closed_at = ?,
                 outcome = ?,
+                final_status = ?,
+                finalised_at = datetime('now'),
                 pnl_r = ?,
                 filled_at = ?,
                 {state_expr}
                 notes = ?
             WHERE signal_id = ?
             """.format(state_expr=state_expr),
-            params,
+            [params[0], params[1], params[1], *params[2:]],
         )
         conn.commit()
     finally:
@@ -375,7 +389,9 @@ def claim_signal_notification(signal_id: str, *, event_type: str) -> bool:
         "SL": "sl_notified",
         "BE": "be_notified",
         "BE_TRIGGERED": "be_trigger_notified",
+        "BE_ACTIVATED": "be_notified",
         "BE_FINALISED": "be_finalised_notified",
+        "FINAL": "final_notified",
         "EXP": "exp_notified",
         "NO_FILL": "nf_notified",
     }
@@ -403,6 +419,7 @@ def update_signal_be_tracking(
     signal_id: str,
     *,
     max_profit_pct: float,
+    be_level_pct: float,
     be_triggered: bool,
     be_trigger_price: float | None,
 ) -> None:
@@ -412,6 +429,7 @@ def update_signal_be_tracking(
             """
             UPDATE signal_audit
             SET max_profit_pct = MAX(COALESCE(max_profit_pct, 0), ?),
+                be_level_pct = MAX(COALESCE(be_level_pct, 0), ?),
                 be_triggered = CASE WHEN ? = 1 THEN 1 ELSE COALESCE(be_triggered, 0) END,
                 be_trigger_price = CASE
                     WHEN ? = 1 AND COALESCE(be_trigger_price, 0) = 0 THEN ?
@@ -421,6 +439,7 @@ def update_signal_be_tracking(
             """,
             (
                 float(max_profit_pct),
+                float(be_level_pct),
                 1 if be_triggered else 0,
                 1 if be_triggered else 0,
                 float(be_trigger_price) if be_trigger_price is not None else None,
