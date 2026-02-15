@@ -39,8 +39,17 @@ _signal_progress_notifier = None
 
 logger = logging.getLogger(__name__)
 
-BE_TRIGGER_PCT = 8.0
+BE_LEVELS = [8.0, 10.0, 12.0]
+BE_TRIGGER_PCT = BE_LEVELS[0]
 DEFAULT_LEVERAGE = 10.0
+
+
+def be_level_label(max_profit_pct: float) -> float:
+    level = 0.0
+    for value in BE_LEVELS:
+        if float(max_profit_pct) >= value:
+            level = value
+    return level
 
 
 def set_signal_result_notifier(handler) -> None:
@@ -259,6 +268,7 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
         )
         if current_profit_pct > max_profit_pct:
             max_profit_pct = current_profit_pct
+        be_level_pct = be_level_label(max_profit_pct)
 
         be_trigger_event = False
         if current_profit_pct >= BE_TRIGGER_PCT and not tp1_hit and not be_triggered:
@@ -276,6 +286,7 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
                 "be_triggered": be_triggered,
                 "be_trigger_price": be_trigger_price,
                 "be_trigger_event": be_trigger_event,
+                "be_level_pct": be_level_pct,
             }
 
         if tp2_hit_candle:
@@ -288,6 +299,7 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
                 "be_triggered": be_triggered,
                 "be_trigger_price": be_trigger_price,
                 "be_trigger_event": be_trigger_event,
+                "be_level_pct": be_level_pct,
             }
 
         if tp1_hit_candle and not tp1_hit:
@@ -304,6 +316,7 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
                 "be_triggered": be_triggered,
                 "be_trigger_price": be_trigger_price,
                 "be_trigger_event": be_trigger_event,
+                "be_level_pct": be_level_pct,
             }
 
         if be_triggered and not tp1_hit and sl_hit:
@@ -316,6 +329,7 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
                 "be_triggered": be_triggered,
                 "be_trigger_price": be_trigger_price,
                 "be_trigger_event": be_trigger_event,
+                "be_level_pct": be_level_pct,
             }
 
         if not tp1_hit and sl_hit:
@@ -328,6 +342,7 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
                 "be_triggered": be_triggered,
                 "be_trigger_price": be_trigger_price,
                 "be_trigger_event": be_trigger_event,
+                "be_level_pct": be_level_pct,
             }
 
         if tp1_hit and be_hit:
@@ -340,10 +355,11 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
                 "be_triggered": be_triggered,
                 "be_trigger_price": be_trigger_price,
                 "be_trigger_event": be_trigger_event,
+                "be_level_pct": be_level_pct,
             }
 
     age_sec = int(time.time()) - sent_at
-    if age_sec < ttl_sec or is_activated:
+    if age_sec < ttl_sec:
         return None
 
     last_close = candles[-1]["close"] if candles else None
@@ -368,6 +384,7 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
             "be_triggered": be_triggered,
             "be_trigger_price": be_trigger_price,
             "be_trigger_event": False,
+            "be_level_pct": be_level_label(max_profit_pct),
         }
 
     return {
@@ -379,6 +396,7 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
         "be_triggered": be_triggered,
         "be_trigger_price": be_trigger_price,
         "be_trigger_event": False,
+        "be_level_pct": be_level_label(max_profit_pct),
     }
 
 
@@ -492,6 +510,7 @@ async def evaluate_open_signals(
             update_signal_be_tracking(
                 str(signal["signal_id"]),
                 max_profit_pct=float(result.get("max_profit_pct") or 0.0),
+                be_level_pct=float(result.get("be_level_pct") or 0.0),
                 be_triggered=bool(result.get("be_triggered")),
                 be_trigger_price=(
                     float(result["be_trigger_price"])
@@ -504,6 +523,7 @@ async def evaluate_open_signals(
                 symbol=str(signal.get("symbol", "")),
                 ts=int(signal.get("sent_at", 0)),
                 max_profit_pct=float(result.get("max_profit_pct") or 0.0),
+                be_level_pct=float(result.get("be_level_pct") or 0.0),
                 be_triggered=bool(result.get("be_triggered")),
                 be_trigger_price=(
                     float(result["be_trigger_price"])
@@ -513,20 +533,21 @@ async def evaluate_open_signals(
             )
 
             if bool(result.get("be_trigger_event")) and claim_signal_notification(
-                str(signal["signal_id"]), event_type="BE_TRIGGERED"
+                str(signal["signal_id"]), event_type="BE_ACTIVATED"
             ):
                 logger.info("[admin] BE_TRIGGERED signal_id=%s", signal.get("signal_id"))
                 if _signal_progress_notifier is not None:
                     progress_signal = dict(signal)
                     progress_signal["be_trigger_price"] = result.get("be_trigger_price")
                     progress_signal["max_profit_pct"] = result.get("max_profit_pct")
-                    await _signal_progress_notifier(progress_signal, "BE_TRIGGERED")
+                    progress_signal["be_level_pct"] = float(result.get("be_level_pct") or 0.0)
+                    await _signal_progress_notifier(progress_signal, "BE_ACTIVATED")
 
             progress_event = str(result.get("progress_event") or "").upper()
             if progress_event == "TP1":
                 event_at = int(result.get("event_at") or time.time())
                 marked_tp1 = mark_signal_tp1_hit(str(signal["signal_id"]), tp1_hit_at=event_at)
-                if marked_tp1 > 0 and claim_signal_notification(str(signal["signal_id"]), event_type="TP1"):
+                if marked_tp1 > 0:
                     module = str(signal.get("module", ""))
                     symbol = str(signal.get("symbol", ""))
                     ts_value = int(signal.get("sent_at", 0))
@@ -536,15 +557,6 @@ async def evaluate_open_signals(
                         ts=ts_value,
                         status="TP1",
                     )
-                    if _signal_result_notifier is not None:
-                        events = list_signal_events_by_identity(
-                            module=module,
-                            symbol=symbol,
-                            ts=ts_value,
-                        )
-                        notify_tasks = [_signal_result_notifier(dict(event)) for event in events]
-                        if notify_tasks:
-                            await asyncio.gather(*notify_tasks)
                 continue
 
             logger.info(
@@ -592,8 +604,7 @@ async def evaluate_open_signals(
                     mark_be_finalised(str(signal["signal_id"]))
                     mark_signal_events_be_finalised(module=module, symbol=symbol, ts=ts_value)
                     logger.info("[admin] BE_FINALISED signal_id=%s", signal.get("signal_id"))
-                claim_event = "BE_FINALISED" if status_value == "BE" else status_value
-                claimed = claim_signal_notification(str(signal["signal_id"]), event_type=claim_event)
+                claimed = claim_signal_notification(str(signal["signal_id"]), event_type="FINAL")
                 if not claimed:
                     continue
                 update_signal_events_status(

@@ -889,8 +889,8 @@ def _status_icon(status: str | None) -> str:
     if normalized in neutral:
         return "⚪"
     if normalized in {"ACTIVE"}:
-        return "🟡"
-    return "🟡"
+        return "🟣"
+    return "🟣"
 
 
 def _format_signal_event_status(raw_status: str, lang: str) -> str:
@@ -1177,6 +1177,34 @@ def _history_row_icon(row: dict[str, Any]) -> str:
     return get_signal_badge(row)
 
 
+
+
+def _signal_list_status_label(row: dict[str, Any]) -> str:
+    normalized = _normalize_signal_status(str(row.get("result") or row.get("status") or ""))
+    if normalized in {"TP1", "TP2", "TP"}:
+        return "TP"
+    if normalized == "BE":
+        level = float(row.get("be_level_pct") or 8.0)
+        return f"+{level:.0f}%"
+    if normalized == "SL":
+        return "SL"
+    if normalized in {"EXP", "EXPIRED", "NO_FILL", "NF"}:
+        return "EXP"
+    return "…"
+
+
+def _dedupe_signals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        sid = row.get("signal_id")
+        if sid:
+            key = f"id:{sid}"
+        else:
+            created_min = int((_safe_int(row.get("created_at") or row.get("ts"), 0)) / 60)
+            key = f"{row.get('symbol','')}|{row.get('side','')}|{_safe_int(row.get('score'),0)}|{created_min}"
+        unique[key] = row
+    return list(unique.values())
+
 def _signal_side_label(side: Any) -> str:
     normalized_side = str(side or "").upper().strip()
     if normalized_side in {"LONG", "BUY"}:
@@ -1193,6 +1221,7 @@ def _format_signal_list_row(
     score: Any,
     symbol: Any,
     created_at: Any,
+    status_label: str = "…",
     access_level: str = "FULL",
 ) -> str:
     side_label = _signal_side_label(side)
@@ -1201,7 +1230,7 @@ def _format_signal_list_row(
     score_value = _safe_int(score, 0)
     symbol_value = _short_symbol(str(symbol or "—"))
     created_at_value = _safe_int(created_at, 0)
-    row_core = f"{side_prefix} {icon_value} | Score {score_value} | {symbol_value} | {_format_event_time(created_at_value)}"
+    row_core = f"{side_prefix} {icon_value} {status_label} | Score {score_value} | {symbol_value}"
     if access_level == "PREVIEW":
         return f"🔒 {row_core}"
     return row_core
@@ -1242,67 +1271,37 @@ def _format_history_item(row: dict[str, Any], lang: str, *, access_level: str = 
         score=row.get("score"),
         symbol=row.get("symbol"),
         created_at=row.get("created_at") or row.get("ts"),
+        status_label=_signal_list_status_label(row),
         access_level=access_level,
     )
 
 
 def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str:
-    bucket_90 = history_summary.get("90_100", {}) if isinstance(history_summary, dict) else {}
-    bucket_80 = history_summary.get("80_89", {}) if isinstance(history_summary, dict) else {}
     totals = history_summary.get("totals", {}) if isinstance(history_summary, dict) else {}
+    metrics = history_summary.get("metrics", {}) if isinstance(history_summary, dict) else {}
 
-    avg_rr_value = bucket_90.get("avg_rr") if isinstance(bucket_90, dict) else None
-    avg_rr = f"{float(avg_rr_value):.2f}" if isinstance(avg_rr_value, (int, float)) else "—"
-
-    winrate_90 = (
-        str(_safe_int(bucket_90.get("winrate"), 0))
-        if isinstance(bucket_90, dict) and bucket_90.get("winrate") is not None
-        else "—"
-    )
-    winrate_80 = (
-        str(_safe_int(bucket_80.get("winrate"), 0))
-        if isinstance(bucket_80, dict) and bucket_80.get("winrate") is not None
-        else "—"
-    )
-    closed_90 = _safe_int(bucket_90.get("closed"), 0) if isinstance(bucket_90, dict) else 0
-    closed_80 = _safe_int(bucket_80.get("closed"), 0) if isinstance(bucket_80, dict) else 0
     tp_total = _safe_int(totals.get("tp"), 0) if isinstance(totals, dict) else 0
     be_total = _safe_int(totals.get("be"), 0) if isinstance(totals, dict) else 0
     sl_total = _safe_int(totals.get("sl"), 0) if isinstance(totals, dict) else 0
-    expired_no_entry_total = _safe_int(totals.get("expired_no_entry"), 0) if isinstance(totals, dict) else 0
-    no_confirmation_total = _safe_int(totals.get("no_confirmation"), 0) if isinstance(totals, dict) else 0
-    in_progress_total = _safe_int(totals.get("in_progress"), 0) if isinstance(totals, dict) else 0
-    metrics = history_summary.get("metrics", {}) if isinstance(history_summary, dict) else {}
+    expired_total = _safe_int(totals.get("expired_no_entry"), 0) if isinstance(totals, dict) else 0
+    active_total = _safe_int(totals.get("in_progress"), 0) if isinstance(totals, dict) else 0
+
+    be_avg = float(metrics.get("be_avg") or 0.0) if isinstance(metrics, dict) else 0.0
+    trades = _safe_int(metrics.get("trades"), tp_total + be_total + sl_total) if isinstance(metrics, dict) else (tp_total + be_total + sl_total)
     winrate_value = metrics.get("winrate") if isinstance(metrics, dict) else None
     winrate_text = f"{float(winrate_value):.1f}" if isinstance(winrate_value, (int, float)) else "—"
 
     return "\n".join(
         [
-            i18n.t(lang, "section_recommended_title"),
-            i18n.t(lang, "line_winrate", value=winrate_90),
-            i18n.t(lang, "line_avg_rr", value=avg_rr),
-            i18n.t(lang, "line_trades", value=closed_90),
-            i18n.t(lang, "line_status", value=i18n.t(lang, "status_main_focus")),
-            "",
-            i18n.t(lang, "section_higher_risk_title"),
-            i18n.t(lang, "line_winrate", value=winrate_80),
-            i18n.t(lang, "line_trades", value=closed_80),
-            i18n.t(lang, "line_status", value=i18n.t(lang, "status_use_selectively")),
-            "",
-            i18n.t(lang, "section_score_below_title"),
-            i18n.t(lang, "line_not_included"),
-            i18n.t(lang, "line_market_analysis_only"),
-            "",
             i18n.t(lang, "totals_title"),
-            i18n.t(lang, "totals_tp", value=tp_total),
-            i18n.t(lang, "totals_be", value=be_total),
-            i18n.t(lang, "totals_sl", value=sl_total),
-            i18n.t(lang, "totals_expired_no_entry", value=expired_no_entry_total),
-            i18n.t(lang, "totals_no_confirmation", value=no_confirmation_total),
-            i18n.t(lang, "totals_in_progress", value=in_progress_total),
             "",
-            i18n.t(lang, "line_winrate_strict", value=winrate_text),
-            i18n.t(lang, "history_expired_helper"),
+            i18n.t(lang, "totals_tp", value=tp_total),
+            i18n.t(lang, "totals_be_avg", value=be_total, avg=f"{be_avg:.1f}"),
+            i18n.t(lang, "totals_sl", value=sl_total),
+            i18n.t(lang, "totals_exp", value=expired_total),
+            i18n.t(lang, "totals_active", value=active_total),
+            "",
+            i18n.t(lang, "line_winrate_tp_be", value=winrate_text, trades=trades),
         ]
     )
 
@@ -1359,6 +1358,7 @@ def _history_nav_kb(
     viewer_user_id: int,
 ) -> InlineKeyboardMarkup:
     kb_rows: list[list[InlineKeyboardButton]] = []
+    events = _dedupe_signals(events)
     for event in events:
         event_id = _safe_int(event.get("id"), 0)
         if event_id <= 0:
@@ -1416,6 +1416,8 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         page=page,
         include_legacy=include_legacy,
     )
+
+    rows = _dedupe_signals(rows)
 
     history_summary = get_history_winrate_summary(
         time_window=time_window,
@@ -1624,7 +1626,8 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
         if tp2:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP2_LINE", price=_format_price(tp2)))
     elif status == "BE":
-        header = i18n.t(lang, "SIGNAL_BE_FINALISED_HEADER")
+        be_level_pct = float(event.get("be_level_pct") or 8.0)
+        header = i18n.t(lang, "SIGNAL_BE_FINALISED_HEADER", level=f"{be_level_pct:.0f}")
         detail_lines = [f"{symbol} {side}"]
         if entry_value:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=entry_value))
@@ -1640,11 +1643,10 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
         be_trigger_price = float(event.get("be_trigger_price") or 0.0)
         if be_trigger_price > 0:
             body_lines.append(
-                i18n.t(lang, "SIGNAL_BE_REACHED_LINE", price=_format_price(be_trigger_price))
+                i18n.t(lang, "SIGNAL_BE_REACHED_LINE", price=_format_price(be_trigger_price), level=f"{be_level_pct:.0f}")
             )
         max_profit_pct = float(event.get("max_profit_pct") or 0.0)
         body_lines.append(i18n.t(lang, "SIGNAL_BE_MAX_PNL_LINE", pnl=f"{max_profit_pct:.2f}"))
-        body_lines.append(i18n.t(lang, "SIGNAL_BE_CLOSED_BY_LINE"))
         body_lines.append(i18n.t(lang, "SIGNAL_RESULT_SCORE_LINE", score=score))
     elif status == "SL":
         header = i18n.t(lang, "CLOSE_SL_TITLE")
@@ -1666,7 +1668,7 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
     else:
         return None
 
-    if status in {"SL", "EXP", "NF", "BE"}:
+    if status in {"SL", "EXP", "NF"}:
         if entry_value:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=entry_value))
         if status in {"SL", "EXP"}:
@@ -1927,7 +1929,7 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
         return False
 
     normalized = _normalize_signal_status(str(event_type or "").upper())
-    if normalized not in {"TP1", "BE_TRIGGERED"}:
+    if normalized not in {"BE_ACTIVATED"}:
         return False
 
     module = str(signal.get("module", ""))
@@ -1954,17 +1956,18 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
         lang = _resolve_user_lang(user_id)
         side = str(signal.get("direction", "")).upper()
         try:
-            if normalized == "BE_TRIGGERED":
+            if normalized == "BE_ACTIVATED":
                 be_trigger_price = float(signal.get("be_trigger_price") or 0.0)
                 max_profit_pct = float(signal.get("max_profit_pct") or 0.0)
                 entry_price = float(signal.get("entry_price") or 0.0)
                 title_key = "SIGNAL_BE_TRIGGERED_HEADER"
+                be_level_pct = float(signal.get("be_level_pct") or 8.0)
                 message_lines = [
                     i18n.t(lang, title_key),
                     "",
                     f"{ui_symbol(symbol)} {side}",
                     i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=_format_price(entry_price)) if entry_price > 0 else "",
-                    i18n.t(lang, "SIGNAL_BE_LEVEL_LINE", price=_format_price(be_trigger_price)) if be_trigger_price > 0 else "",
+                    i18n.t(lang, "SIGNAL_BE_LEVEL_LINE", level=f"{be_level_pct:.0f}", price=_format_price(be_trigger_price)) if be_trigger_price > 0 else i18n.t(lang, "SIGNAL_BE_LEVEL_ONLY_LINE", level=f"{be_level_pct:.0f}"),
                     i18n.t(lang, "SIGNAL_BE_MAX_PNL_LINE", pnl=f"{max_profit_pct:.2f}"),
                     i18n.t(lang, "SIGNAL_RESULT_SCORE_LINE", score=int(signal.get("score", 0))),
                 ]
@@ -2023,7 +2026,8 @@ def _format_outcome_block(event: dict, lang: str) -> list[str]:
             header = "📌 Result: ✅ TP2 hit" if is_en else "📌 Итог: ✅ TP2 достигнут"
             comment = "price reached TP2, scenario completed" if is_en else "цена дошла до TP2, сценарий выполнен полностью"
         elif status == "BE":
-            header = "📌 Result: 🟢 BE (+8%) | 🛡 Profit protected" if is_en else "📌 Итог: 🟢 BE (+8%) | 🛡 Прибыль защищена"
+            be_level_pct = float(event.get("be_level_pct") or 8.0)
+            header = f"📌 Result: 🟢 BE (+{be_level_pct:.0f}%)" if is_en else f"📌 Итог: 🟢 BE (+{be_level_pct:.0f}%)"
             comment = (
                 "price gave at least +8% profit, then closed as BE"
                 if is_en
@@ -2389,9 +2393,9 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
     status_raw = _normalize_signal_status(str(event.get("result") or event.get("status") or ""))
     if status_raw == "BE":
         status_line = (
-            "📌 Result: 🟢 BE (+8%) | 🛡 Profit protected"
+            f"📌 Result: 🟢 BE (+{float(event.get('be_level_pct') or 8.0):.0f}%)"
             if lang == "en"
-            else "📌 Итог: 🟢 BE (+8%) | 🛡 Прибыль защищена"
+            else f"📌 Итог: 🟢 BE (+{float(event.get('be_level_pct') or 8.0):.0f}%)"
         )
     ttl_hours = max(1, int(round(float(event.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60)))
 
@@ -2434,6 +2438,9 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
         "",
         status_line,
     ]
+    max_profit_pct = float(event.get('max_profit_pct') or 0.0)
+    if status_raw in {"TP1", "TP2", "TP", "BE", "SL"} and max_profit_pct > 0:
+        lines.append(f"📈 Max PnL: +{max_profit_pct:.1f}%")
     if breakdown_lines:
         lines.extend(["", "🧠 Why this signal was chosen:", *breakdown_lines])
     return "\n".join(lines)
@@ -2520,6 +2527,7 @@ def _archive_inline_kb(
     viewer_user_id: int,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    events = _dedupe_signals(events)
     period_label = _period_label(time_window, lang)
     if not events:
         rows.append(
@@ -2542,6 +2550,7 @@ def _archive_inline_kb(
                         score=event.get("score"),
                         symbol=event.get("symbol"),
                         created_at=event.get("created_at") or event.get("ts"),
+                        status_label=_signal_list_status_label(event),
                         access_level=get_signal_access_level(viewer_user_id, _event_created_at_utc(event)),
                     ),
                     callback_data=f"history_open:{event.get('id')}",
