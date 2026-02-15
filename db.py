@@ -133,10 +133,6 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signal_events ADD COLUMN be_triggered INTEGER NOT NULL DEFAULT 0")
         if "be_trigger_price" not in cols:
             conn.execute("ALTER TABLE signal_events ADD COLUMN be_trigger_price REAL")
-        if "be_notified" not in cols:
-            conn.execute("ALTER TABLE signal_events ADD COLUMN be_notified INTEGER NOT NULL DEFAULT 0")
-        if "be_level_pct" not in cols:
-            conn.execute("ALTER TABLE signal_events ADD COLUMN be_level_pct REAL NOT NULL DEFAULT 0")
         if "be_finalised" not in cols:
             conn.execute("ALTER TABLE signal_events ADD COLUMN be_finalised INTEGER NOT NULL DEFAULT 0")
         conn.execute(
@@ -560,7 +556,6 @@ def update_signal_events_be_tracking(
     max_profit_pct: float,
     be_triggered: bool,
     be_trigger_price: float | None,
-    be_level_pct: float,
 ) -> int:
     conn = get_conn()
     try:
@@ -573,7 +568,6 @@ def update_signal_events_be_tracking(
                     WHEN ? = 1 AND COALESCE(be_trigger_price, 0) = 0 THEN ?
                     ELSE be_trigger_price
                 END,
-                be_level_pct = MAX(COALESCE(be_level_pct, 0), ?),
                 updated_at = ?
             WHERE module = ? AND symbol = ? AND ts = ?
             """,
@@ -582,7 +576,6 @@ def update_signal_events_be_tracking(
                 1 if be_triggered else 0,
                 1 if be_triggered else 0,
                 float(be_trigger_price) if be_trigger_price is not None else None,
-                float(be_level_pct),
                 int(time.time()),
                 module,
                 symbol,
@@ -762,9 +755,7 @@ def get_signal_history(
                 tp1,
                 tp2,
                 sl AS sl_price,
-                timeframe,
-                max_profit_pct,
-                be_level_pct
+                timeframe
             FROM signal_events
             WHERE {where_clause}
             ORDER BY ts DESC
@@ -861,8 +852,7 @@ def get_history_winrate_summary(
                 poi_low,
                 poi_high,
                 sl,
-                tp1,
-                be_level_pct
+                tp1
             FROM signal_events
             WHERE {where_clause}
             """,
@@ -885,27 +875,20 @@ def get_history_winrate_summary(
         },
         "metrics": {
             "winrate": None,
-            "be_count": 0,
-            "be_avg": None,
         },
     }
 
     rr_sum_90_100 = 0.0
     rr_count_90_100 = 0
-    be_level_sum = 0.0
-    be_count = 0
 
     for row in rows:
         score = int(row["score"] or 0)
         outcome_type = get_signal_status_key(dict(row))
-        outcome_upper = str(row["outcome"] or "").upper()
-        if outcome_upper == "BE":
-            be_level_sum += float(row["be_level_pct"] or 0.0)
-            be_count += 1
         totals = summary["totals"]
         if isinstance(totals, dict):
             badge = get_signal_badge(dict(row))
             if badge == "🟢":
+                outcome_upper = str(row["outcome"] or "").upper()
                 if outcome_upper == "BE":
                     totals["be"] = int(totals.get("be", 0) or 0) + 1
                 else:
@@ -978,8 +961,6 @@ def get_history_winrate_summary(
                 if be_inclusive_denom
                 else None
             )
-            metrics["be_count"] = be_count
-            metrics["be_avg"] = round(safe_div(be_level_sum, be_count, 0.0), 1) if be_count else None
 
     return summary
 
