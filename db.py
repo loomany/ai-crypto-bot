@@ -734,39 +734,31 @@ def get_signal_history(
         _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
-        dedup_params = list(params)
-        params.extend([*dedup_params, int(limit), int(offset)])
+        params.extend([int(limit), int(offset)])
         cur = conn.execute(
             f"""
-            WITH deduped_events AS (
-                SELECT MAX(id) AS id
-                FROM signal_events
-                WHERE {where_clause}
-                GROUP BY user_id, module, symbol, side, ts
-            )
             SELECT
-                se.id,
-                se.symbol,
-                se.side,
-                CAST(ROUND(se.score) AS INTEGER) AS score,
-                COALESCE(se.result, se.status) AS outcome,
-                se.result,
-                se.status,
-                se.state,
-                se.poi_touched_at,
-                se.activated_at,
-                se.ttl_minutes,
-                se.ts AS created_at,
-                se.poi_low AS entry_low,
-                se.poi_high AS entry_high,
-                se.tp1,
-                se.tp2,
-                se.sl AS sl_price,
-                se.timeframe
-            FROM signal_events se
-            JOIN deduped_events de ON de.id = se.id
+                id,
+                symbol,
+                side,
+                CAST(ROUND(score) AS INTEGER) AS score,
+                COALESCE(result, status) AS outcome,
+                result,
+                status,
+                state,
+                poi_touched_at,
+                activated_at,
+                ttl_minutes,
+                ts AS created_at,
+                poi_low AS entry_low,
+                poi_high AS entry_high,
+                tp1,
+                tp2,
+                sl AS sl_price,
+                timeframe
+            FROM signal_events
             WHERE {where_clause}
-            ORDER BY se.ts DESC, se.id DESC
+            ORDER BY ts DESC
             LIMIT ? OFFSET ?
             """,
             params,
@@ -807,21 +799,8 @@ def count_signal_history(
         _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
-        dedup_params = list(params)
-        params.extend(dedup_params)
         cur = conn.execute(
-            f"""
-            WITH deduped_events AS (
-                SELECT MAX(id) AS id
-                FROM signal_events
-                WHERE {where_clause}
-                GROUP BY user_id, module, symbol, side, ts
-            )
-            SELECT COUNT(*) AS cnt
-            FROM signal_events se
-            JOIN deduped_events de ON de.id = se.id
-            WHERE {where_clause}
-            """,
+            f"SELECT COUNT(*) AS cnt FROM signal_events WHERE {where_clause}",
             params,
         )
         row = cur.fetchone()
@@ -857,33 +836,24 @@ def get_history_winrate_summary(
         _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
-        dedup_params = list(params)
-        params.extend(dedup_params)
 
         cur = conn.execute(
             f"""
-            WITH deduped_events AS (
-                SELECT MAX(id) AS id
-                FROM signal_events
-                WHERE {where_clause}
-                GROUP BY user_id, module, symbol, side, ts
-            )
             SELECT
-                CAST(ROUND(se.score) AS INTEGER) AS score,
-                UPPER(TRIM(COALESCE(se.result, se.status, ''))) AS outcome,
-                se.result,
-                se.status,
-                se.state,
-                se.poi_touched_at,
-                se.activated_at,
-                se.ttl_minutes,
-                se.ts,
-                se.poi_low,
-                se.poi_high,
-                se.sl,
-                se.tp1
-            FROM signal_events se
-            JOIN deduped_events de ON de.id = se.id
+                CAST(ROUND(score) AS INTEGER) AS score,
+                UPPER(TRIM(COALESCE(result, status, ''))) AS outcome,
+                result,
+                status,
+                state,
+                poi_touched_at,
+                activated_at,
+                ttl_minutes,
+                ts,
+                poi_low,
+                poi_high,
+                sl,
+                tp1
+            FROM signal_events
             WHERE {where_clause}
             """,
             params,
