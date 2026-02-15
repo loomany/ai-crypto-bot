@@ -1516,13 +1516,13 @@ def _format_price(value: float) -> str:
     return f"{value:.6f}"
 
 
-def _format_duration(seconds: int) -> str:
+def _format_duration(seconds: int, *, lang: str = "ru") -> str:
     seconds = max(0, int(seconds))
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
     if hours > 0:
-        return f"{hours}ч {minutes}м"
-    return f"{minutes}м"
+        return f"{hours}h {minutes}m" if lang == "en" else f"{hours}ч {minutes}м"
+    return f"{minutes}m" if lang == "en" else f"{minutes}м"
 
 
 def _normalize_signal_status(status: str) -> str:
@@ -1996,7 +1996,7 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
     return sent
 
 
-def _format_outcome_block(event: dict) -> list[str]:
+def _format_outcome_block(event: dict, lang: str) -> list[str]:
     status_raw = str(event.get("result") or event.get("status") or "OPEN")
     status = _normalize_signal_status(status_raw)
     entry_touched = bool(event.get("entry_touched"))
@@ -2008,62 +2008,71 @@ def _format_outcome_block(event: dict) -> list[str]:
     close_reason = event.get("close_reason")
     now = int(time.time())
     final_statuses = {"TP1", "TP2", "BE", "SL", "EXP", "NF"}
+    is_en = lang == "en"
 
     lines: list[str] = []
     if status in final_statuses:
         if status == "TP1":
-            header = "📌 Итог: ✅ TP1 достигнут"
-            comment = "цена дошла до TP1, дальше до TP2 не дошла (это нормально)"
+            header = "📌 Result: ✅ TP1 hit" if is_en else "📌 Итог: ✅ TP1 достигнут"
+            comment = (
+                "price reached TP1, TP2 was not reached (this is normal)"
+                if is_en
+                else "цена дошла до TP1, дальше до TP2 не дошла (это нормально)"
+            )
         elif status == "TP2":
-            header = "📌 Итог: ✅ TP2 достигнут"
-            comment = "цена дошла до TP2, сценарий выполнен полностью"
+            header = "📌 Result: ✅ TP2 hit" if is_en else "📌 Итог: ✅ TP2 достигнут"
+            comment = "price reached TP2, scenario completed" if is_en else "цена дошла до TP2, сценарий выполнен полностью"
         elif status == "BE":
-            header = "📌 Итог: 🟢 BE (+8%) | 🛡 Прибыль защищена"
-            comment = "цена дала минимум +8% прибыли, затем сценарий закрылся как BE"
+            header = "📌 Result: 🟢 BE (+8%) | 🛡 Profit protected" if is_en else "📌 Итог: 🟢 BE (+8%) | 🛡 Прибыль защищена"
+            comment = (
+                "price gave at least +8% profit, then closed as BE"
+                if is_en
+                else "цена дала минимум +8% прибыли, затем сценарий закрылся как BE"
+            )
         elif status == "SL":
-            header = "📌 Итог: ❌ SL"
-            comment = "цена дошла до стопа до выполнения TP1"
+            header = "📌 Result: ❌ SL" if is_en else "📌 Итог: ❌ SL"
+            comment = "price reached stop before TP1" if is_en else "цена дошла до стопа до выполнения TP1"
         elif status == "NF":
-            header = "📌 Итог: ⏳ NF (вход не был активирован)"
-            comment = "цена не дошла до зоны POI"
+            header = "📌 Result: ⏳ NF (entry was not activated)" if is_en else "📌 Итог: ⏳ NF (вход не был активирован)"
+            comment = "price did not reach the POI zone" if is_en else "цена не дошла до зоны POI"
         else:
-            entry_label = "вход был активирован" if entry_touched else "вход не был активирован"
-            header = "📌 Итог: ⚪ EXP (сценарий устарел)"
-            comment = f"{entry_label}, но условия не реализовались"
+            entry_label = ("entry was activated" if entry_touched else "entry was not activated") if is_en else ("вход был активирован" if entry_touched else "вход не был активирован")
+            header = "📌 Result: ⚪ EXP (scenario expired)" if is_en else "📌 Итог: ⚪ EXP (сценарий устарел)"
+            comment = f"{entry_label}, but the conditions were not fulfilled" if is_en else f"{entry_label}, но условия не реализовались"
 
         lines.append(header)
         if status in {"NF", "EXP"}:
             ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
-            lines.append(f"⏱ Прошло ~{ttl_minutes} минут")
+            lines.append(f"⏱ Elapsed ~{ttl_minutes} min" if is_en else f"⏱ Прошло ~{ttl_minutes} минут")
         elif finalized_at:
-            lines.append(f"⏱ Время: {_format_event_time(finalized_at)}")
+            lines.append(f"⏱ Time: {_format_event_time(finalized_at)}" if is_en else f"⏱ Время: {_format_event_time(finalized_at)}")
         elif last_checked_at:
-            lines.append(f"⏱ Время: {_format_event_time(last_checked_at)}")
+            lines.append(f"⏱ Time: {_format_event_time(last_checked_at)}" if is_en else f"⏱ Время: {_format_event_time(last_checked_at)}")
         if close_reason:
-            lines.append(f"🧾 Причина: {close_reason}")
-        lines.append(f"💬 Комментарий: {comment}")
+            lines.append(f"🧾 Reason: {close_reason}" if is_en else f"🧾 Причина: {close_reason}")
+        lines.append(f"💬 Comment: {comment}" if is_en else f"💬 Комментарий: {comment}")
         return lines
 
     if status == "ACTIVE":
         lines.extend(
             [
-                "📌 Итог: 🟡 Активирован — ожидается результат",
-                "💬 Сейчас: Активирован — ожидается результат",
+                "📌 Result: 🟡 Activated — waiting for outcome" if is_en else "📌 Итог: 🟡 Активирован — ожидается результат",
+                "💬 Now: Activated — waiting for outcome" if is_en else "💬 Сейчас: Активирован — ожидается результат",
             ]
         )
     else:
         ttl_minutes = int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
         remaining = ttl_minutes * 60 - (now - created_at)
-        status_hint = "ожидает подтверждение" if entry_touched else "ожидает вход"
+        status_hint = ("awaiting confirmation" if entry_touched else "awaiting entry") if is_en else ("ожидает подтверждение" if entry_touched else "ожидает вход")
         lines.extend(
             [
-                "📌 Итог: ⏰ В процессе",
-                f"🕒 До истечения: {_format_duration(remaining)}",
-                f"💬 Сейчас: {status_hint}",
+                "📌 Result: ⏰ In progress" if is_en else "📌 Итог: ⏰ В процессе",
+                f"🕒 Time left: {_format_duration(remaining, lang=lang)}" if is_en else f"🕒 До истечения: {_format_duration(remaining, lang=lang)}",
+                f"💬 Now: {status_hint}" if is_en else f"💬 Сейчас: {status_hint}",
             ]
         )
     if last_checked_at:
-        lines.append(f"🔎 Последняя проверка: {_format_event_time(last_checked_at)}")
+        lines.append(f"🔎 Last check: {_format_event_time(last_checked_at)}" if is_en else f"🔎 Последняя проверка: {_format_event_time(last_checked_at)}")
     return lines
 
 
@@ -2366,16 +2375,17 @@ def _signal_breakdown_lines(event: dict, lang: str) -> list[str]:
     return breakdown_lines
 
 
-def _remaining_delay_text(event: dict) -> str:
+def _remaining_delay_text(event: dict, lang: str) -> str:
     created_at = _event_created_at_utc(event)
     unlock_at = created_at + timedelta(hours=SIGNAL_DELAY_NON_SUB_HOURS)
     remaining_seconds = max(0, int((unlock_at - now_utc()).total_seconds()))
-    return _format_duration(remaining_seconds)
+    return _format_duration(remaining_seconds, lang=lang)
 
 
 def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
     score = int(event.get("score", 0))
-    status_line = _format_outcome_block(event)[0] if _format_outcome_block(event) else "📌 Итог: —"
+    status_lines = _format_outcome_block(event, lang)
+    status_line = status_lines[0] if status_lines else ("📌 Result: —" if lang == "en" else "📌 Итог: —")
     status_raw = _normalize_signal_status(str(event.get("result") or event.get("status") or ""))
     if status_raw == "BE":
         status_line = (
@@ -2394,7 +2404,7 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
             "",
             f"⏱ TTL: {ttl_hours}h",
             "",
-            "Уровни доступны по подписке:",
+            "Levels are available with subscription:" if lang == "en" else "Уровни доступны по подписке:",
             "",
             "• POI: *** – ***",
             "• SL: ***",
@@ -2403,8 +2413,10 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
             "",
             status_line,
             "",
-            "👉 Buy subscription — чтобы видеть уровни сразу",
-            f"🔓 Полный доступ откроется через {_remaining_delay_text(event)}",
+            "👉 Buy subscription — to unlock levels instantly" if lang == "en" else "👉 Buy subscription — чтобы видеть уровни сразу",
+            f"🔓 Full access unlocks in {_remaining_delay_text(event, lang)}"
+            if lang == "en"
+            else f"🔓 Полный доступ откроется через {_remaining_delay_text(event, lang)}",
         ]
         return "\n".join(lines)
 
@@ -5413,12 +5425,13 @@ def _with_admin_inversion_line(
     return f"{text}\n{inversion_line}"
 
 
-def _format_preview_signal_from_payload(signal: Dict[str, Any]) -> str:
+def _format_preview_signal_from_payload(signal: Dict[str, Any], lang: str) -> str:
     score = int(signal.get("score", 0) or 0)
     side = "LONG" if str(signal.get("direction") or "").lower() == "long" else "SHORT"
     symbol = _signal_symbol_text(str(signal.get("symbol") or ""))
     ttl_hours = max(1, int(round(float(signal.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60)))
-    remaining = _format_duration(max(0, SIGNAL_DELAY_NON_SUB_HOURS * 3600))
+    remaining = _format_duration(max(0, SIGNAL_DELAY_NON_SUB_HOURS * 3600), lang=lang)
+    result_line = "📌 Result: ⏰ In progress" if lang == "en" else "📌 Итог: ⏰ В процессе"
     return "\n".join(
         [
             "🔒 PREVIEW (Real-time)",
@@ -5428,17 +5441,17 @@ def _format_preview_signal_from_payload(signal: Dict[str, Any]) -> str:
             "",
             f"⏱ TTL: {ttl_hours}h",
             "",
-            "Уровни доступны по подписке:",
+            "Levels are available with subscription:" if lang == "en" else "Уровни доступны по подписке:",
             "",
             "• POI: *** – ***",
             "• SL: ***",
             "• TP1: ***",
             "• TP2: ***",
             "",
-            "📌 Итог: ⏰ В процессе",
+            result_line,
             "",
-            "👉 Buy subscription — чтобы видеть уровни сразу",
-            f"🔓 Полный доступ откроется через {remaining}",
+            "👉 Buy subscription — to unlock levels instantly" if lang == "en" else "👉 Buy subscription — чтобы видеть уровни сразу",
+            f"🔓 Full access unlocks in {remaining}" if lang == "en" else f"🔓 Полный доступ откроется через {remaining}",
         ]
     )
 
@@ -5839,7 +5852,7 @@ async def send_signal_to_all(
                 access_level = "FULL"
             else:
                 access_level = "PREVIEW"
-                message_text = _format_preview_signal_from_payload(signal_dict)
+                message_text = _format_preview_signal_from_payload(signal_dict, lang)
                 collapsed_text = message_text
                 expanded_text = message_text
 
