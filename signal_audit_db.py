@@ -51,6 +51,7 @@ def init_signal_audit_tables() -> None:
                 max_profit_pct REAL NOT NULL DEFAULT 0,
                 be_triggered INTEGER NOT NULL DEFAULT 0,
                 be_trigger_price REAL,
+                be_level_pct REAL NOT NULL DEFAULT 0,
                 be_finalised INTEGER NOT NULL DEFAULT 0,
                 be_trigger_notified INTEGER NOT NULL DEFAULT 0,
                 be_finalised_notified INTEGER NOT NULL DEFAULT 0,
@@ -94,6 +95,8 @@ def init_signal_audit_tables() -> None:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN be_triggered INTEGER NOT NULL DEFAULT 0")
         if "be_trigger_price" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN be_trigger_price REAL")
+        if "be_level_pct" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN be_level_pct REAL NOT NULL DEFAULT 0")
         if "be_finalised" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN be_finalised INTEGER NOT NULL DEFAULT 0")
         if "be_trigger_notified" not in cols:
@@ -405,6 +408,7 @@ def update_signal_be_tracking(
     max_profit_pct: float,
     be_triggered: bool,
     be_trigger_price: float | None,
+    be_level_pct: float,
 ) -> None:
     conn = sqlite3.connect(get_db_path())
     try:
@@ -416,7 +420,8 @@ def update_signal_be_tracking(
                 be_trigger_price = CASE
                     WHEN ? = 1 AND COALESCE(be_trigger_price, 0) = 0 THEN ?
                     ELSE be_trigger_price
-                END
+                END,
+                be_level_pct = MAX(COALESCE(be_level_pct, 0), ?)
             WHERE signal_id = ?
             """,
             (
@@ -424,6 +429,7 @@ def update_signal_be_tracking(
                 1 if be_triggered else 0,
                 1 if be_triggered else 0,
                 float(be_trigger_price) if be_trigger_price is not None else None,
+                float(be_level_pct),
                 signal_id,
             ),
         )
