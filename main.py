@@ -119,6 +119,7 @@ from db import (
     get_signal_event_by_message,
     get_signal_by_id,
     update_signal_event_refresh,
+    update_signal_event_expanded,
     update_signal_event_status_by_id,
     activate_signal_events,
     mark_signal_events_poi_touched,
@@ -2580,6 +2581,60 @@ async def sig_toggle(callback: CallbackQuery):
             symbol=str(event.get("symbol", "")),
         ),
     )
+
+
+@dp.callback_query(F.data.regexp(r"^sig:(expand|collapse):\d+$"))
+async def signal_message_toggle(callback: CallbackQuery):
+    if callback.message is None or callback.from_user is None:
+        return
+    lang = get_user_lang(callback.from_user.id) or "ru"
+    match = re.match(r"^sig:(expand|collapse):(\d+)$", callback.data or "")
+    if not match:
+        await callback.answer()
+        return
+
+    action = match.group(1)
+    event_id = int(match.group(2))
+    expanded = action == "expand"
+
+    include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
+    event_row = get_signal_event(
+        user_id=callback.from_user.id,
+        event_id=event_id,
+        include_legacy=include_legacy,
+    )
+    if event_row is None:
+        await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+        return
+
+    event = dict(event_row)
+    collapsed_text, expanded_text = _build_signal_text_variants_from_event(
+        event,
+        lang,
+        is_admin_user=is_admin(callback.from_user.id),
+    )
+    target_text = expanded_text if expanded else collapsed_text
+
+    update_signal_event_expanded(event_id=event_id, expanded=expanded)
+
+    with suppress(Exception):
+        await callback.answer()
+    try:
+        await callback.message.edit_text(
+            target_text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=_signal_inline_kb(
+                lang=lang,
+                symbol=str(event.get("symbol") or ""),
+                signal_id=event_id,
+                expanded=expanded,
+            ),
+        )
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            return
+        raise
 
 
 @dp.callback_query(F.data.regexp(r"^sig_refresh:\d+$"))
@@ -5047,9 +5102,16 @@ def build_binance_button(lang: str, symbol: str) -> InlineKeyboardButton:
     )
 
 
-def _signal_inline_kb(*, lang: str, symbol: str) -> InlineKeyboardMarkup:
+def _signal_inline_kb(*, lang: str, symbol: str, signal_id: int, expanded: bool) -> InlineKeyboardMarkup:
+    callback_prefix = "sig:collapse" if expanded else "sig:expand"
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "SIGNAL_BUTTON_COLLAPSE" if expanded else "SIGNAL_BUTTON_EXPAND"),
+                    callback_data=f"{callback_prefix}:{int(signal_id)}",
+                )
+            ],
             [build_binance_button(lang, symbol)],
         ]
     )
@@ -5118,76 +5180,40 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
 
 
 def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
-    recommended_header = (
-        "🔥 РЕКОМЕНДУЕМЫЙ СИГНАЛ\n"
-        "Основной рабочий диапазон (Score 90–100)\n"
-        "Используется для торговли"
-        if lang == "ru"
-        else "🔥 RECOMMENDED SIGNAL\n"
-        "Primary working range (Score 90–100)\n"
-        "Designed for active trading"
-    )
     score = max(0, min(100, int(signal.get("score", 0) or 0)))
     symbol_text = _signal_symbol_text(str(signal.get("symbol") or ""))
     is_long = str(signal.get("direction") or "").lower() == "long"
-    side_key = "SIGNAL_SHORT_SIDE_LONG" if is_long else "SIGNAL_SHORT_SIDE_SHORT"
+    side = "LONG" if is_long else "SHORT"
     entry_low, entry_high = signal.get("entry_zone", (0.0, 0.0))
+    scenario_tf = str(signal.get("tf") or signal.get("timeframe") or "1H").strip().upper() or "1H"
+    entry_tf = str(signal.get("entry_tf") or signal.get("confirm_tf") or "5-15m").strip() or "5-15m"
 
-    scenario_tf = str(signal.get("tf") or signal.get("timeframe") or "1H").strip() or "1H"
-    entry_tf = str(signal.get("entry_tf") or signal.get("confirm_tf") or scenario_tf).strip() or scenario_tf
-    scenario_tf = scenario_tf.upper()
-
-    if 80 <= score <= 89:
-        lines = [
-            i18n.t(lang, "SIGNAL_COMPACT_HIGH_RISK_HEADER"),
-            i18n.t(lang, "SIGNAL_SHORT_80_89_SYMBOL_LINE", symbol=symbol_text),
-            i18n.t(
-                lang,
-                "SIGNAL_SHORT_80_89_META_LINE",
-                side="LONG" if is_long else "SHORT",
-                timeframe=scenario_tf,
-                entry_tf=entry_tf,
-            ),
-            "",
-            f"POI: {_format_price(float(entry_low or 0.0))}–{_format_price(float(entry_high or 0.0))}",
-            f"SL: {_format_price(float(signal.get('sl') or 0.0))}",
-            f"TP1: {_format_price(float(signal.get('tp1') or 0.0))}",
-            f"TP2: {_format_price(float(signal.get('tp2') or 0.0))}",
-            i18n.t(lang, "SIGNAL_SHORT_80_89_SCORE_LINE", score=score),
-            i18n.t(
-                lang,
-                "SIGNAL_SHORT_80_89_TTL_LINE",
-                minutes=max(1, int(signal.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)),
-            ),
-        ]
+    if score >= 90:
+        header = i18n.t(lang, "SIGNAL_QUALITY_RECOMMENDED")
+    elif score >= 80:
+        header = i18n.t(lang, "SIGNAL_QUALITY_HIGH_RISK")
     else:
-        lines = [
-            i18n.t(
-                lang,
-                "SIGNAL_SHORT_SYMBOL_SIDE_LINE",
-                symbol=symbol_text,
-                side=i18n.t(lang, side_key),
-            ),
-            i18n.t(
-                lang,
-                "SIGNAL_SHORT_POI_LINE",
-                poi_from=_format_price(float(entry_low or 0.0)),
-                poi_to=_format_price(float(entry_high or 0.0)),
-            ),
-            i18n.t(lang, "SIGNAL_SHORT_TP1_LINE", tp1=_format_price(float(signal.get("tp1") or 0.0))),
-            i18n.t(lang, "SIGNAL_SHORT_TP2_LINE", tp2=_format_price(float(signal.get("tp2") or 0.0))),
-            i18n.t(lang, "SIGNAL_SHORT_SL_LINE", sl=_format_price(float(signal.get("sl") or 0.0))),
-        ]
+        header = i18n.t(lang, "SIGNAL_QUALITY_ANALYSIS_ONLY")
+
+    lines = [
+        header,
+        "",
+        i18n.t(lang, "SIGNAL_SHORT_SYMBOL_SIDE_LINE", symbol=symbol_text, side=side),
+        i18n.t(lang, "SIGNAL_SHORT_80_89_META_LINE", side=side, timeframe=scenario_tf, entry_tf=entry_tf),
+        f"POI: {_format_price(float(entry_low or 0.0))}–{_format_price(float(entry_high or 0.0))}",
+        f"SL: {_format_price(float(signal.get('sl') or 0.0))}",
+        f"TP1: {_format_price(float(signal.get('tp1') or 0.0))}",
+        f"TP2: {_format_price(float(signal.get('tp2') or 0.0))}",
+        f"Score: {score}",
+        i18n.t(lang, "SIGNAL_SHORT_80_89_TTL_LINE", minutes=max(1, int(signal.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60))),
+    ]
 
     prefix = signal.get("title_prefix")
     if isinstance(prefix, dict):
         prefix = prefix.get(lang) or prefix.get("ru")
     if prefix:
         lines.extend(["", str(prefix)])
-    signal_text = "\n".join(lines)
-    if score >= 90:
-        return f"{recommended_header}\n\n{signal_text}"
-    return signal_text
+    return "\n".join(lines)
 
 
 def _normalize_signal_direction(value: Any) -> str:
@@ -5288,6 +5314,58 @@ def _signal_payload_from_event(event: Dict[str, Any]) -> Dict[str, Any]:
         "score_breakdown": breakdown,
         "ttl_minutes": int(event.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60),
     }
+
+
+def _limit_signal_expanded_text(text: str, lang: str) -> str:
+    if len(text) <= 4096:
+        return text
+
+    lines = text.split("\n")
+    breakdown_header = i18n.t(lang, "SCENARIO_BREAKDOWN_HEADER")
+    breakdown_total_prefix = i18n.t(lang, "SCENARIO_BREAKDOWN_TOTAL", score=0).split("0", 1)[0]
+    compacted: list[str] = []
+    in_breakdown = False
+    for line in lines:
+        if line == breakdown_header:
+            in_breakdown = True
+            compacted.append(line)
+            compacted.append("…")
+            continue
+        if in_breakdown and line.startswith(breakdown_total_prefix):
+            in_breakdown = False
+            compacted.append(line)
+            continue
+        if in_breakdown and line.startswith("• "):
+            continue
+        compacted.append(line)
+
+    shortened = "\n".join(compacted)
+    if len(shortened) <= 4096:
+        return shortened
+    return f"{shortened[:4092]}…"
+
+
+def _build_signal_text_variants(signal: Dict[str, Any], lang: str, *, is_admin_user: bool) -> tuple[str, str]:
+    expanded_text = _with_admin_inversion_line(
+        _format_signal(signal, lang),
+        signal=signal,
+        lang=lang,
+        is_admin_user=is_admin_user,
+    )
+    collapsed_text = _with_admin_inversion_line(
+        _format_compact_signal(signal, lang),
+        signal=signal,
+        lang=lang,
+        is_admin_user=is_admin_user,
+    )
+    return collapsed_text, _limit_signal_expanded_text(expanded_text, lang)
+
+
+def _build_signal_text_variants_from_event(event: Dict[str, Any], lang: str, *, is_admin_user: bool) -> tuple[str, str]:
+    signal = _signal_payload_from_event(event)
+    signal["timeframe"] = str(event.get("timeframe") or "1H")
+    signal["tf"] = str(event.get("timeframe") or "1H")
+    return _build_signal_text_variants(signal, lang, is_admin_user=is_admin_user)
 
 
 def build_test_ai_signal(lang: str) -> str:
@@ -5542,7 +5620,12 @@ async def send_signal_to_all(
         else:
             is_admin_user = allow_admin_bypass and is_admin(chat_id)
             try:
-                message_text = _format_signal(signal_dict, lang)
+                collapsed_text, expanded_text = _build_signal_text_variants(
+                    signal_dict,
+                    lang,
+                    is_admin_user=is_admin_user,
+                )
+                message_text = collapsed_text
             except Exception:
                 fallback_symbol = _signal_symbol_text(str(signal_dict.get("symbol") or ""))
                 fallback_side = (
@@ -5556,12 +5639,8 @@ async def send_signal_to_all(
                     symbol=fallback_symbol,
                     side=fallback_side,
                 )
-            message_text = _with_admin_inversion_line(
-                message_text,
-                signal=signal_dict,
-                lang=lang,
-                is_admin_user=is_admin_user,
-            )
+                collapsed_text = message_text
+                expanded_text = message_text
             should_log = True
             kind = "signal"
             if is_admin_user:
@@ -5572,12 +5651,15 @@ async def send_signal_to_all(
                 ensure_trial_defaults(chat_id)
                 allowed, left = try_consume_trial(chat_id, "trial_ai_left", 1)
                 if allowed:
-                    message_text = message_text + i18n.t(
+                    trial_suffix = i18n.t(
                         lang,
                         "TRIAL_SUFFIX_AI",
                         left=left,
                         limit=TRIAL_AI_LIMIT,
                     )
+                    message_text = message_text + trial_suffix
+                    collapsed_text = collapsed_text + trial_suffix
+                    expanded_text = expanded_text + trial_suffix
                 else:
                     if not _should_send_paywall(chat_id, "ai", sent_at):
                         continue
@@ -5739,6 +5821,7 @@ async def send_signal_to_all(
                 reason_json=reason_json,
                 breakdown_json=breakdown_json,
                 ttl_minutes=int(signal_dict.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60),
+                is_expanded=False,
             )
         except Exception as exc:
             print(f"[ai_signals] Failed to log signal event for {chat_id}: {exc}")
@@ -5752,6 +5835,8 @@ async def send_signal_to_all(
                 reply_markup=_signal_inline_kb(
                     lang=lang,
                     symbol=symbol,
+                    signal_id=event_id,
+                    expanded=False,
                 ),
             )
         await asyncio.sleep(random.uniform(0.05, 0.15))
