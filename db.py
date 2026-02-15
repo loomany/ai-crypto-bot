@@ -72,7 +72,8 @@ def init_db() -> None:
                 reason_json TEXT,
                 breakdown_json TEXT,
                 result_notified INTEGER NOT NULL DEFAULT 0,
-                ttl_minutes INTEGER NOT NULL DEFAULT 720
+                ttl_minutes INTEGER NOT NULL DEFAULT 720,
+                is_expanded INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -116,6 +117,8 @@ def init_db() -> None:
             )
         if "ttl_minutes" not in cols:
             conn.execute("ALTER TABLE signal_events ADD COLUMN ttl_minutes INTEGER NOT NULL DEFAULT 720")
+        if "is_expanded" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN is_expanded INTEGER NOT NULL DEFAULT 0")
         if "activated_at" not in cols:
             conn.execute("ALTER TABLE signal_events ADD COLUMN activated_at INTEGER")
         if "entry_price" not in cols:
@@ -467,6 +470,7 @@ def insert_signal_event(
     reason_json: str | None = None,
     breakdown_json: str | None = None,
     ttl_minutes: int = 720,
+    is_expanded: bool = False,
 ) -> int:
     if is_test:
         return 0
@@ -480,8 +484,8 @@ def insert_signal_event(
             INSERT INTO signal_events (
                 ts, user_id, module, symbol, side, timeframe, score,
                 poi_low, poi_high, sl, tp1, tp2, status, is_test, tg_message_id,
-                reason_json, breakdown_json, ttl_minutes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                reason_json, breakdown_json, ttl_minutes, is_expanded
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(ts),
@@ -502,6 +506,7 @@ def insert_signal_event(
                 reason_json,
                 breakdown_json,
                 int(ttl_minutes),
+                1 if is_expanded else 0,
             ),
         )
         conn.commit()
@@ -1468,6 +1473,23 @@ def update_signal_event_refresh(
                 closed_at,
                 int(event_id),
             ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_signal_event_expanded(*, event_id: int, expanded: bool) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE signal_events
+            SET is_expanded = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (1 if expanded else 0, int(time.time()), int(event_id)),
         )
         conn.commit()
     finally:
