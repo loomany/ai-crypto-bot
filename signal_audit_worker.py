@@ -416,8 +416,15 @@ async def evaluate_open_signals(
                         ts=ts_value,
                         status="TP1",
                     )
-                    if _signal_progress_notifier is not None:
-                        await _signal_progress_notifier(dict(signal), "TP1")
+                    if _signal_result_notifier is not None:
+                        events = list_signal_events_by_identity(
+                            module=module,
+                            symbol=symbol,
+                            ts=ts_value,
+                        )
+                        notify_tasks = [_signal_result_notifier(dict(event)) for event in events]
+                        if notify_tasks:
+                            await asyncio.gather(*notify_tasks)
                 continue
 
             logger.info(
@@ -458,10 +465,9 @@ async def evaluate_open_signals(
             }
             status_value = status_map.get(result["outcome"])
             if status_value is not None:
-                if status_value in {"TP2", "SL", "BE"}:
-                    claimed = claim_signal_notification(str(signal["signal_id"]), event_type=status_value)
-                    if not claimed:
-                        continue
+                claimed = claim_signal_notification(str(signal["signal_id"]), event_type=status_value)
+                if not claimed:
+                    continue
                 module = str(signal.get("module", ""))
                 symbol = str(signal.get("symbol", ""))
                 ts_value = int(signal.get("sent_at", 0))
