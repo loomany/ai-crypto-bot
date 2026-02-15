@@ -445,7 +445,15 @@ def _pump_state_cleanup(now_ts: int | None = None) -> None:
         _PUMP_MESSAGE_STATE.pop(key, None)
 
 
-def _save_pump_message_state(*, chat_id: int, message_id: int, collapsed_text: str, expanded_text: str, lang: str) -> None:
+def _save_pump_message_state(
+    *,
+    chat_id: int,
+    message_id: int,
+    collapsed_text: str,
+    expanded_text: str,
+    lang: str,
+    symbol: str,
+) -> None:
     _pump_state_cleanup()
     _PUMP_MESSAGE_STATE[(int(chat_id), int(message_id))] = {
         "ts": int(time.time()),
@@ -453,6 +461,7 @@ def _save_pump_message_state(*, chat_id: int, message_id: int, collapsed_text: s
         "expanded": expanded_text,
         "is_expanded": False,
         "lang": lang,
+        "symbol": str(symbol or ""),
     }
 
 
@@ -467,17 +476,16 @@ def _get_pump_message_state(chat_id: int, message_id: int) -> dict[str, Any] | N
     return state
 
 
-def _pump_toggle_inline_kb(*, lang: str, chat_id: int, message_id: int, expanded: bool) -> InlineKeyboardMarkup:
-    key = "PUMP_BUTTON_COLLAPSE" if expanded else "PUMP_BUTTON_EXPAND"
+def _pump_toggle_inline_kb(
+    *,
+    lang: str,
+    chat_id: int,
+    message_id: int,
+    expanded: bool,
+    symbol: str,
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=i18n.t(lang, key),
-                    callback_data=f"pump_toggle:{int(chat_id)}:{int(message_id)}",
-                )
-            ]
-        ]
+        inline_keyboard=[[build_binance_button(lang, symbol)]],
     )
 
 
@@ -2865,6 +2873,7 @@ async def pump_toggle_callback(callback: CallbackQuery):
             chat_id=chat_id,
             message_id=message_id,
             expanded=next_expanded,
+            symbol=str(state.get("symbol", "")),
         ),
     )
     toast_key = "PUMP_TOGGLE_EXPANDED" if next_expanded else "PUMP_TOGGLE_COLLAPSED"
@@ -5960,14 +5969,31 @@ async def _deliver_pumpdump_signal_stats(
                     continue
 
             if is_admin_user or is_sub_active(chat_id):
-                sent_message = await bot.send_message(chat_id, collapsed_text, parse_mode="Markdown")
+                sent_message = await bot.send_message(
+                    chat_id,
+                    collapsed_text,
+                    parse_mode="Markdown",
+                )
                 _save_pump_message_state(
                     chat_id=chat_id,
                     message_id=int(sent_message.message_id),
                     collapsed_text=collapsed_text,
                     expanded_text=expanded_text,
                     lang=lang,
+                    symbol=symbol,
                 )
+                with suppress(Exception):
+                    await bot.edit_message_reply_markup(
+                        chat_id=chat_id,
+                        message_id=int(sent_message.message_id),
+                        reply_markup=_pump_toggle_inline_kb(
+                            lang=lang,
+                            chat_id=chat_id,
+                            message_id=int(sent_message.message_id),
+                            expanded=False,
+                            symbol=symbol,
+                        ),
+                    )
                 increment_pumpdump_daily_count(chat_id, date_key)
                 sent_count += 1
                 recipient_count += 1
@@ -5984,14 +6010,31 @@ async def _deliver_pumpdump_signal_stats(
                 )
                 collapsed_with_trial = collapsed_text + trial_suffix
                 expanded_with_trial = expanded_text + trial_suffix
-                sent_message = await bot.send_message(chat_id, collapsed_with_trial, parse_mode="Markdown")
+                sent_message = await bot.send_message(
+                    chat_id,
+                    collapsed_with_trial,
+                    parse_mode="Markdown",
+                )
                 _save_pump_message_state(
                     chat_id=chat_id,
                     message_id=int(sent_message.message_id),
                     collapsed_text=collapsed_with_trial,
                     expanded_text=expanded_with_trial,
                     lang=lang,
+                    symbol=symbol,
                 )
+                with suppress(Exception):
+                    await bot.edit_message_reply_markup(
+                        chat_id=chat_id,
+                        message_id=int(sent_message.message_id),
+                        reply_markup=_pump_toggle_inline_kb(
+                            lang=lang,
+                            chat_id=chat_id,
+                            message_id=int(sent_message.message_id),
+                            expanded=False,
+                            symbol=symbol,
+                        ),
+                    )
                 increment_pumpdump_daily_count(chat_id, date_key)
                 sent_count += 1
                 recipient_count += 1
@@ -6661,7 +6704,6 @@ async def main():
     set_signal_result_notifier(notify_signal_result_short)
     set_signal_activation_notifier(notify_signal_activation)
     set_signal_poi_touched_notifier(notify_signal_poi_touched)
-    set_signal_progress_notifier(notify_signal_progress)
     print("Бот запущен!")
     init_app_db()
 

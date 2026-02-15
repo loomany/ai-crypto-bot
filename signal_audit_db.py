@@ -52,6 +52,8 @@ def init_signal_audit_tables() -> None:
                 tp2_notified INTEGER NOT NULL DEFAULT 0,
                 sl_notified INTEGER NOT NULL DEFAULT 0,
                 be_notified INTEGER NOT NULL DEFAULT 0,
+                exp_notified INTEGER NOT NULL DEFAULT 0,
+                nf_notified INTEGER NOT NULL DEFAULT 0,
                 confirm_strict INTEGER NOT NULL DEFAULT 0,
                 confirm_count INTEGER NOT NULL DEFAULT 0
             )
@@ -88,6 +90,10 @@ def init_signal_audit_tables() -> None:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN sl_notified INTEGER NOT NULL DEFAULT 0")
         if "be_notified" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN be_notified INTEGER NOT NULL DEFAULT 0")
+        if "exp_notified" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN exp_notified INTEGER NOT NULL DEFAULT 0")
+        if "nf_notified" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN nf_notified INTEGER NOT NULL DEFAULT 0")
         if "confirm_strict" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN confirm_strict INTEGER NOT NULL DEFAULT 0")
         if "confirm_count" not in cols:
@@ -350,6 +356,8 @@ def claim_signal_notification(signal_id: str, *, event_type: str) -> bool:
         "TP2": "tp2_notified",
         "SL": "sl_notified",
         "BE": "be_notified",
+        "EXP": "exp_notified",
+        "NO_FILL": "nf_notified",
     }
     col = col_map.get(str(event_type).upper())
     if col is None:
