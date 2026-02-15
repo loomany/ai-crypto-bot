@@ -127,6 +127,14 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signal_events ADD COLUMN state TEXT NOT NULL DEFAULT 'WAITING_ENTRY'")
         if "poi_touched_at" not in cols:
             conn.execute("ALTER TABLE signal_events ADD COLUMN poi_touched_at INTEGER")
+        if "max_profit_pct" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN max_profit_pct REAL NOT NULL DEFAULT 0")
+        if "be_triggered" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN be_triggered INTEGER NOT NULL DEFAULT 0")
+        if "be_trigger_price" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN be_trigger_price REAL")
+        if "be_finalised" not in cols:
+            conn.execute("ALTER TABLE signal_events ADD COLUMN be_finalised INTEGER NOT NULL DEFAULT 0")
         conn.execute(
             """
             UPDATE signal_events
@@ -540,6 +548,65 @@ def update_signal_events_status(
         conn.close()
 
 
+def update_signal_events_be_tracking(
+    *,
+    module: str,
+    symbol: str,
+    ts: int,
+    max_profit_pct: float,
+    be_triggered: bool,
+    be_trigger_price: float | None,
+) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE signal_events
+            SET max_profit_pct = MAX(COALESCE(max_profit_pct, 0), ?),
+                be_triggered = CASE WHEN ? = 1 THEN 1 ELSE COALESCE(be_triggered, 0) END,
+                be_trigger_price = CASE
+                    WHEN ? = 1 AND COALESCE(be_trigger_price, 0) = 0 THEN ?
+                    ELSE be_trigger_price
+                END,
+                updated_at = ?
+            WHERE module = ? AND symbol = ? AND ts = ?
+            """,
+            (
+                float(max_profit_pct),
+                1 if be_triggered else 0,
+                1 if be_triggered else 0,
+                float(be_trigger_price) if be_trigger_price is not None else None,
+                int(time.time()),
+                module,
+                symbol,
+                int(ts),
+            ),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
+def mark_signal_events_be_finalised(*, module: str, symbol: str, ts: int) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE signal_events
+            SET be_finalised = 1,
+                updated_at = ?
+            WHERE module = ? AND symbol = ? AND ts = ?
+              AND COALESCE(be_finalised, 0) = 0
+            """,
+            (int(time.time()), module, symbol, int(ts)),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
 
 
 def activate_signal_events(
@@ -800,10 +867,15 @@ def get_history_winrate_summary(
         "80_89": {"wins": 0, "losses": 0, "closed": 0, "winrate": None},
         "totals": {
             "tp": 0,
+            "be": 0,
             "sl": 0,
             "expired_no_entry": 0,
             "no_confirmation": 0,
             "in_progress": 0,
+        },
+        "metrics": {
+            "winrate": None,
+            "success_rate": None,
         },
     }
 
@@ -817,7 +889,11 @@ def get_history_winrate_summary(
         if isinstance(totals, dict):
             badge = get_signal_badge(dict(row))
             if badge == "🟢":
-                totals["tp"] = int(totals.get("tp", 0) or 0) + 1
+                outcome_upper = str(row["outcome"] or "").upper()
+                if outcome_upper == "BE":
+                    totals["be"] = int(totals.get("be", 0) or 0) + 1
+                else:
+                    totals["tp"] = int(totals.get("tp", 0) or 0) + 1
             elif badge == "🔴":
                 totals["sl"] = int(totals.get("sl", 0) or 0) + 1
             elif badge == "⚪":
@@ -872,6 +948,18 @@ def get_history_winrate_summary(
     bucket_90 = summary.get("90_100")
     if isinstance(bucket_90, dict):
         bucket_90["avg_rr"] = safe_div(rr_sum_90_100, rr_count_90_100, None) if rr_count_90_100 else None
+
+    totals = summary.get("totals")
+    if isinstance(totals, dict):
+        tp_value = int(totals.get("tp", 0) or 0)
+        be_value = int(totals.get("be", 0) or 0)
+        sl_value = int(totals.get("sl", 0) or 0)
+        strict_denom = tp_value + sl_value
+        success_denom = tp_value + be_value + sl_value
+        metrics = summary.get("metrics")
+        if isinstance(metrics, dict):
+            metrics["winrate"] = round(safe_pct(tp_value, strict_denom, 0.0), 1) if strict_denom else None
+            metrics["success_rate"] = round(safe_pct(tp_value + be_value, success_denom, 0.0), 1) if success_denom else None
 
     return summary
 

@@ -48,6 +48,12 @@ def init_signal_audit_tables() -> None:
                 tp1_hit INTEGER NOT NULL DEFAULT 0,
                 tp1_hit_at INTEGER,
                 be_armed INTEGER NOT NULL DEFAULT 0,
+                max_profit_pct REAL NOT NULL DEFAULT 0,
+                be_triggered INTEGER NOT NULL DEFAULT 0,
+                be_trigger_price REAL,
+                be_finalised INTEGER NOT NULL DEFAULT 0,
+                be_trigger_notified INTEGER NOT NULL DEFAULT 0,
+                be_finalised_notified INTEGER NOT NULL DEFAULT 0,
                 tp1_notified INTEGER NOT NULL DEFAULT 0,
                 tp2_notified INTEGER NOT NULL DEFAULT 0,
                 sl_notified INTEGER NOT NULL DEFAULT 0,
@@ -82,6 +88,18 @@ def init_signal_audit_tables() -> None:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN tp1_hit_at INTEGER")
         if "be_armed" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN be_armed INTEGER NOT NULL DEFAULT 0")
+        if "max_profit_pct" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN max_profit_pct REAL NOT NULL DEFAULT 0")
+        if "be_triggered" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN be_triggered INTEGER NOT NULL DEFAULT 0")
+        if "be_trigger_price" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN be_trigger_price REAL")
+        if "be_finalised" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN be_finalised INTEGER NOT NULL DEFAULT 0")
+        if "be_trigger_notified" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN be_trigger_notified INTEGER NOT NULL DEFAULT 0")
+        if "be_finalised_notified" not in cols:
+            conn.execute("ALTER TABLE signal_audit ADD COLUMN be_finalised_notified INTEGER NOT NULL DEFAULT 0")
         if "tp1_notified" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN tp1_notified INTEGER NOT NULL DEFAULT 0")
         if "tp2_notified" not in cols:
@@ -356,6 +374,8 @@ def claim_signal_notification(signal_id: str, *, event_type: str) -> bool:
         "TP2": "tp2_notified",
         "SL": "sl_notified",
         "BE": "be_notified",
+        "BE_TRIGGERED": "be_trigger_notified",
+        "BE_FINALISED": "be_finalised_notified",
         "EXP": "exp_notified",
         "NO_FILL": "nf_notified",
     }
@@ -375,6 +395,77 @@ def claim_signal_notification(signal_id: str, *, event_type: str) -> bool:
         )
         conn.commit()
         return int(cur.rowcount or 0) > 0
+    finally:
+        conn.close()
+
+
+def update_signal_be_tracking(
+    signal_id: str,
+    *,
+    max_profit_pct: float,
+    be_triggered: bool,
+    be_trigger_price: float | None,
+) -> None:
+    conn = sqlite3.connect(get_db_path())
+    try:
+        conn.execute(
+            """
+            UPDATE signal_audit
+            SET max_profit_pct = MAX(COALESCE(max_profit_pct, 0), ?),
+                be_triggered = CASE WHEN ? = 1 THEN 1 ELSE COALESCE(be_triggered, 0) END,
+                be_trigger_price = CASE
+                    WHEN ? = 1 AND COALESCE(be_trigger_price, 0) = 0 THEN ?
+                    ELSE be_trigger_price
+                END
+            WHERE signal_id = ?
+            """,
+            (
+                float(max_profit_pct),
+                1 if be_triggered else 0,
+                1 if be_triggered else 0,
+                float(be_trigger_price) if be_trigger_price is not None else None,
+                signal_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_be_finalised(signal_id: str) -> int:
+    conn = sqlite3.connect(get_db_path())
+    try:
+        cur = conn.execute(
+            """
+            UPDATE signal_audit
+            SET be_finalised = 1
+            WHERE signal_id = ?
+              AND COALESCE(be_finalised, 0) = 0
+            """,
+            (signal_id,),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
+def get_signal_audit_by_identity(*, module: str, symbol: str, sent_at: int) -> dict | None:
+    conn = sqlite3.connect(get_db_path())
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM signal_audit
+            WHERE module = ? AND symbol = ? AND sent_at = ?
+            ORDER BY rowid DESC
+            LIMIT 1
+            """,
+            (module, symbol, int(sent_at)),
+        )
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
     finally:
         conn.close()
 

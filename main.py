@@ -1267,10 +1267,18 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
     closed_90 = _safe_int(bucket_90.get("closed"), 0) if isinstance(bucket_90, dict) else 0
     closed_80 = _safe_int(bucket_80.get("closed"), 0) if isinstance(bucket_80, dict) else 0
     tp_total = _safe_int(totals.get("tp"), 0) if isinstance(totals, dict) else 0
+    be_total = _safe_int(totals.get("be"), 0) if isinstance(totals, dict) else 0
     sl_total = _safe_int(totals.get("sl"), 0) if isinstance(totals, dict) else 0
     expired_no_entry_total = _safe_int(totals.get("expired_no_entry"), 0) if isinstance(totals, dict) else 0
     no_confirmation_total = _safe_int(totals.get("no_confirmation"), 0) if isinstance(totals, dict) else 0
     in_progress_total = _safe_int(totals.get("in_progress"), 0) if isinstance(totals, dict) else 0
+    metrics = history_summary.get("metrics", {}) if isinstance(history_summary, dict) else {}
+    winrate_value = metrics.get("winrate") if isinstance(metrics, dict) else None
+    success_rate_value = metrics.get("success_rate") if isinstance(metrics, dict) else None
+    winrate_text = f"{float(winrate_value):.1f}" if isinstance(winrate_value, (int, float)) else "—"
+    success_rate_text = (
+        f"{float(success_rate_value):.1f}" if isinstance(success_rate_value, (int, float)) else "—"
+    )
 
     return "\n".join(
         [
@@ -1291,10 +1299,14 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
             "",
             i18n.t(lang, "totals_title"),
             i18n.t(lang, "totals_tp", value=tp_total),
+            i18n.t(lang, "totals_be", value=be_total),
             i18n.t(lang, "totals_sl", value=sl_total),
             i18n.t(lang, "totals_expired_no_entry", value=expired_no_entry_total),
             i18n.t(lang, "totals_no_confirmation", value=no_confirmation_total),
             i18n.t(lang, "totals_in_progress", value=in_progress_total),
+            "",
+            i18n.t(lang, "line_winrate_strict", value=winrate_text),
+            i18n.t(lang, "line_success_rate", value=success_rate_text),
             i18n.t(lang, "history_expired_helper"),
         ]
     )
@@ -1329,6 +1341,8 @@ def _build_history_text(
         "━━━━━━━━━━━━━━━━",
         i18n.t(lang, "explanation_line_1"),
         i18n.t(lang, "explanation_line_2"),
+        i18n.t(lang, "explanation_line_be"),
+        i18n.t(lang, "explanation_line_be_2"),
         i18n.t(lang, "history_indicator_waiting"),
         i18n.t(lang, "history_indicator_poi_touched"),
         i18n.t(lang, "history_indicator_activated"),
@@ -1615,10 +1629,28 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
         if tp2:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP2_LINE", price=_format_price(tp2)))
     elif status == "BE":
-        header = i18n.t(lang, "SIGNAL_RESULT_HEADER_BE_AFTER_TP1")
-        detail_lines = [
-            f"{symbol} {side}",
-        ]
+        header = i18n.t(lang, "SIGNAL_BE_FINALISED_HEADER")
+        detail_lines = [f"{symbol} {side}"]
+        if entry_value:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=entry_value))
+        exit_price = float(event.get("be_trigger_price") or event.get("entry_price") or 0.0)
+        if exit_price > 0:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_EXIT_LINE", price=_format_price(exit_price)))
+        final_pnl_pct = event.get("pnl_pct")
+        if final_pnl_pct is None and entry_price > 0 and exit_price > 0:
+            side_mult = 1.0 if side == "LONG" else -1.0
+            final_pnl_pct = ((exit_price - entry_price) / entry_price) * 100.0 * side_mult
+        if final_pnl_pct is not None:
+            body_lines.append(i18n.t(lang, "SIGNAL_RESULT_PNL_LINE", pnl=f"{float(final_pnl_pct):.2f}"))
+        be_trigger_price = float(event.get("be_trigger_price") or 0.0)
+        if be_trigger_price > 0:
+            body_lines.append(
+                i18n.t(lang, "SIGNAL_BE_REACHED_LINE", price=_format_price(be_trigger_price))
+            )
+        max_profit_pct = float(event.get("max_profit_pct") or 0.0)
+        body_lines.append(i18n.t(lang, "SIGNAL_BE_MAX_PNL_LINE", pnl=f"{max_profit_pct:.2f}"))
+        body_lines.append(i18n.t(lang, "SIGNAL_BE_CLOSED_BY_LINE"))
+        body_lines.append(i18n.t(lang, "SIGNAL_RESULT_SCORE_LINE", score=score))
     elif status == "SL":
         header = i18n.t(lang, "CLOSE_SL_TITLE")
         detail_lines = [
@@ -1900,7 +1932,7 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
         return False
 
     normalized = _normalize_signal_status(str(event_type or "").upper())
-    if normalized != "TP1":
+    if normalized not in {"TP1", "BE_TRIGGERED"}:
         return False
 
     module = str(signal.get("module", ""))
@@ -1927,15 +1959,32 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
         lang = _resolve_user_lang(user_id)
         side = str(signal.get("direction", "")).upper()
         try:
-            await bot.send_message(
-                user_id,
-                "\n".join(
+            if normalized == "BE_TRIGGERED":
+                be_trigger_price = float(signal.get("be_trigger_price") or 0.0)
+                max_profit_pct = float(signal.get("max_profit_pct") or 0.0)
+                entry_price = float(signal.get("entry_price") or 0.0)
+                title_key = "SIGNAL_BE_TRIGGERED_HEADER"
+                message_lines = [
+                    i18n.t(lang, title_key),
+                    "",
+                    f"{ui_symbol(symbol)} {side}",
+                    i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=_format_price(entry_price)) if entry_price > 0 else "",
+                    i18n.t(lang, "SIGNAL_BE_LEVEL_LINE", price=_format_price(be_trigger_price)) if be_trigger_price > 0 else "",
+                    i18n.t(lang, "SIGNAL_BE_MAX_PNL_LINE", pnl=f"{max_profit_pct:.2f}"),
+                    i18n.t(lang, "SIGNAL_RESULT_SCORE_LINE", score=int(signal.get("score", 0))),
+                ]
+                message_text = "\n".join([line for line in message_lines if line])
+            else:
+                message_text = "\n".join(
                     [
                         i18n.t(lang, "SIGNAL_PROGRESS_TP1_HEADER"),
                         "",
                         f"{ui_symbol(symbol)} {side}",
                     ]
-                ),
+                )
+            await bot.send_message(
+                user_id,
+                message_text,
                 disable_notification=False,
                 reply_markup=InlineKeyboardMarkup(
                     inline_keyboard=[[build_binance_button(lang, symbol)]],
@@ -1974,8 +2023,8 @@ def _format_outcome_block(event: dict) -> list[str]:
             header = "📌 Итог: ✅ TP2 достигнут"
             comment = "цена дошла до TP2, сценарий выполнен полностью"
         elif status == "BE":
-            header = "📌 Итог: ✅ BE (безубыток)"
-            comment = "сценарий дал движение, риск снят"
+            header = "📌 Итог: 🟢 BE (+8%) | 🛡 Прибыль защищена"
+            comment = "цена дала минимум +8% прибыли, затем сценарий закрылся как BE"
         elif status == "SL":
             header = "📌 Итог: ❌ SL"
             comment = "цена дошла до стопа до выполнения TP1"
@@ -2332,6 +2381,13 @@ def _remaining_delay_text(event: dict) -> str:
 def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
     score = int(event.get("score", 0))
     status_line = _format_outcome_block(event)[0] if _format_outcome_block(event) else "📌 Итог: —"
+    status_raw = _normalize_signal_status(str(event.get("result") or event.get("status") or ""))
+    if status_raw == "BE":
+        status_line = (
+            "📌 Result: 🟢 BE (+8%) | 🛡 Profit protected"
+            if lang == "en"
+            else "📌 Итог: 🟢 BE (+8%) | 🛡 Прибыль защищена"
+        )
     ttl_hours = max(1, int(round(float(event.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60)))
 
     if access_level == "PREVIEW":
@@ -6821,6 +6877,7 @@ async def main():
     set_signal_result_notifier(notify_signal_result_short)
     set_signal_activation_notifier(notify_signal_activation)
     set_signal_poi_touched_notifier(notify_signal_poi_touched)
+    set_signal_progress_notifier(notify_signal_progress)
     print("Бот запущен!")
     init_app_db()
 
