@@ -239,6 +239,7 @@ PAYWALL_COOLDOWN_SEC = int(os.getenv("PAYWALL_COOLDOWN_SEC", "60"))
 SUB_SOURCE_SYSTEM = 1
 SUB_SOURCE_AI = 2
 SUB_SOURCE_PUMP = 3
+SIGNAL_DELAY_NON_SUB_HOURS = int(os.getenv("SIGNAL_DELAY_NON_SUB_HOURS", "12"))
 
 
 def _env_bool(name: str, default: str = "0") -> bool:
@@ -247,6 +248,25 @@ def _env_bool(name: str, default: str = "0") -> bool:
 
 def is_admin(user_id: int) -> bool:
     return ADMIN_USER_ID != 0 and user_id == ADMIN_USER_ID
+
+
+def is_subscribed(user_id: int) -> bool:
+    return is_sub_active(user_id)
+
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def get_signal_access_level(user_id: int, signal_created_at: datetime) -> str:
+    if user_id == ADMIN_USER_ID:
+        return "FULL"
+    if is_subscribed(user_id):
+        return "FULL"
+
+    delay_hours = int(os.getenv("SIGNAL_DELAY_NON_SUB_HOURS", str(SIGNAL_DELAY_NON_SUB_HOURS)))
+    cutoff = now_utc() - timedelta(hours=delay_hours)
+    return "FULL" if signal_created_at <= cutoff else "PREVIEW"
 
 
 def _hidden_status_modules() -> set[str]:
@@ -1173,6 +1193,7 @@ def _format_signal_list_row(
     score: Any,
     symbol: Any,
     created_at: Any,
+    access_level: str = "FULL",
 ) -> str:
     side_label = _signal_side_label(side)
     side_prefix = side_label.ljust(5)
@@ -1180,7 +1201,10 @@ def _format_signal_list_row(
     score_value = _safe_int(score, 0)
     symbol_value = _short_symbol(str(symbol or "—"))
     created_at_value = _safe_int(created_at, 0)
-    return f"{side_prefix} {icon_value} | Score {score_value} | {symbol_value} | {_format_event_time(created_at_value)}"
+    row_core = f"{side_prefix} {icon_value} | Score {score_value} | {symbol_value} | {_format_event_time(created_at_value)}"
+    if access_level == "PREVIEW":
+        return f"🔒 {row_core}"
+    return row_core
 
 
 def _get_history_page(
@@ -1209,7 +1233,7 @@ def _get_history_page(
     return page_value, pages, total, [dict(row) for row in rows]
 
 
-def _format_history_item(row: dict[str, Any], lang: str) -> str:
+def _format_history_item(row: dict[str, Any], lang: str, *, access_level: str = "FULL") -> str:
     del lang
     icon = _history_row_icon(row)
     return _format_signal_list_row(
@@ -1218,6 +1242,7 @@ def _format_history_item(row: dict[str, Any], lang: str) -> str:
         score=row.get("score"),
         symbol=row.get("symbol"),
         created_at=row.get("created_at") or row.get("ts"),
+        access_level=access_level,
     )
 
 
@@ -1322,6 +1347,7 @@ def _history_nav_kb(
     page: int,
     pages: int,
     events: list[dict],
+    viewer_user_id: int,
 ) -> InlineKeyboardMarkup:
     kb_rows: list[list[InlineKeyboardButton]] = []
     for event in events:
@@ -1331,7 +1357,11 @@ def _history_nav_kb(
         kb_rows.append(
             [
                 InlineKeyboardButton(
-                    text=_format_history_item(event, lang),
+                    text=_format_history_item(
+                        event,
+                        lang,
+                        access_level=get_signal_access_level(viewer_user_id, _event_created_at_utc(event)),
+                    ),
                     callback_data=f"history_open:{event_id}",
                 )
             ]
@@ -1406,6 +1436,7 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         page=page_value,
         pages=pages,
         events=rows,
+        viewer_user_id=callback.from_user.id,
     )
     await _edit_message_with_chunks(callback.message, text, reply_markup=markup)
 
@@ -2239,76 +2270,109 @@ async def refresh_signal(event_id: int) -> dict | None:
     return updated
 
 
-def _format_archive_detail(event: dict, lang: str) -> str:
-    score = int(event.get("score", 0))
+def _event_created_at_utc(event: dict) -> datetime:
+    ts = _safe_int(event.get("created_at") or event.get("ts"), 0)
+    if ts <= 0:
+        return now_utc()
+    return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+
+def _signal_breakdown_lines(event: dict, lang: str) -> list[str]:
     breakdown_lines: list[str] = []
     raw_breakdown = event.get("breakdown_json")
-    if raw_breakdown:
-        try:
-            breakdown_items = json.loads(raw_breakdown)
-        except json.JSONDecodeError:
-            breakdown_items = []
-        if isinstance(breakdown_items, list):
-            label_map = {
-                "global_trend": i18n.t(lang, "BREAKDOWN_GLOBAL_TREND"),
-                "local_trend": i18n.t(lang, "BREAKDOWN_LOCAL_TREND"),
-                "near_key_level": i18n.t(lang, "BREAKDOWN_NEAR_KEY_LEVEL"),
-                "liquidity_sweep": i18n.t(lang, "BREAKDOWN_LIQUIDITY_SWEEP"),
-                "volume_climax": i18n.t(lang, "BREAKDOWN_VOLUME_CLIMAX"),
-                "rsi_divergence": i18n.t(lang, "BREAKDOWN_RSI_DIVERGENCE"),
-                "atr_ok": i18n.t(lang, "BREAKDOWN_ATR_OK"),
-                "bb_extreme": i18n.t(lang, "BREAKDOWN_BB_EXTREME"),
-                "ma_trend_ok": i18n.t(lang, "BREAKDOWN_MA_TREND_OK"),
-                "orderflow": i18n.t(lang, "BREAKDOWN_ORDERFLOW"),
-                "whale_activity": i18n.t(lang, "BREAKDOWN_WHALE_ACTIVITY"),
-                "ai_pattern": i18n.t(lang, "BREAKDOWN_AI_PATTERN"),
-                "market_regime": i18n.t(lang, "BREAKDOWN_MARKET_REGIME"),
-            }
-            for item in breakdown_items:
-                if not isinstance(item, dict):
-                    continue
-                key = item.get("key")
-                label = item.get("label")
-                if key in label_map:
-                    label = label_map[key]
-                label = label or key or i18n.t(lang, "BREAKDOWN_FALLBACK")
-                delta = item.get("points", item.get("delta", 0))
-                try:
-                    delta_value = int(round(float(delta)))
-                except (TypeError, ValueError):
-                    delta_value = 0
-                sign = "−" if delta_value < 0 else "+"
-                breakdown_lines.append(f"• {label}: {sign}{abs(delta_value)}")
+    if not raw_breakdown:
+        return breakdown_lines
+    try:
+        breakdown_items = json.loads(raw_breakdown)
+    except json.JSONDecodeError:
+        return breakdown_lines
+    if not isinstance(breakdown_items, list):
+        return breakdown_lines
 
-    status_raw = str(event.get("result") or event.get("status") or "OPEN").upper()
-    compact_lines = [
-        f"📌 {event.get('symbol')} {event.get('side')} {score}",
+    label_map = {
+        "global_trend": i18n.t(lang, "BREAKDOWN_GLOBAL_TREND"),
+        "local_trend": i18n.t(lang, "BREAKDOWN_LOCAL_TREND"),
+        "near_key_level": i18n.t(lang, "BREAKDOWN_NEAR_KEY_LEVEL"),
+        "liquidity_sweep": i18n.t(lang, "BREAKDOWN_LIQUIDITY_SWEEP"),
+        "volume_climax": i18n.t(lang, "BREAKDOWN_VOLUME_CLIMAX"),
+        "rsi_divergence": i18n.t(lang, "BREAKDOWN_RSI_DIVERGENCE"),
+        "atr_ok": i18n.t(lang, "BREAKDOWN_ATR_OK"),
+        "bb_extreme": i18n.t(lang, "BREAKDOWN_BB_EXTREME"),
+        "ma_trend_ok": i18n.t(lang, "BREAKDOWN_MA_TREND_OK"),
+        "orderflow": i18n.t(lang, "BREAKDOWN_ORDERFLOW"),
+        "whale_activity": i18n.t(lang, "BREAKDOWN_WHALE_ACTIVITY"),
+        "ai_pattern": i18n.t(lang, "BREAKDOWN_AI_PATTERN"),
+        "market_regime": i18n.t(lang, "BREAKDOWN_MARKET_REGIME"),
+    }
+    for item in breakdown_items:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("key")
+        label = item.get("label")
+        if key in label_map:
+            label = label_map[key]
+        label = label or key or i18n.t(lang, "BREAKDOWN_FALLBACK")
+        delta = item.get("points", item.get("delta", 0))
+        try:
+            delta_value = int(round(float(delta)))
+        except (TypeError, ValueError):
+            delta_value = 0
+        sign = "−" if delta_value < 0 else "+"
+        breakdown_lines.append(f"• {label}: {sign}{abs(delta_value)}")
+    return breakdown_lines
+
+
+def _remaining_delay_text(event: dict) -> str:
+    created_at = _event_created_at_utc(event)
+    unlock_at = created_at + timedelta(hours=SIGNAL_DELAY_NON_SUB_HOURS)
+    remaining_seconds = max(0, int((unlock_at - now_utc()).total_seconds()))
+    return _format_duration(remaining_seconds)
+
+
+def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
+    score = int(event.get("score", 0))
+    status_line = _format_outcome_block(event)[0] if _format_outcome_block(event) else "📌 Итог: —"
+    ttl_hours = max(1, int(round(float(event.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60)))
+
+    if access_level == "PREVIEW":
+        lines = [
+            "🔒 PREVIEW (Real-time)",
+            "",
+            f"📌 {event.get('symbol')} {event.get('side')} · Score {score}",
+            f"🕒 {_format_event_time(int(event.get('ts', 0)))}",
+            "",
+            f"⏱ TTL: {ttl_hours}h",
+            "",
+            "Уровни доступны по подписке:",
+            "",
+            "• POI: *** – ***",
+            "• SL: ***",
+            "• TP1: ***",
+            "• TP2: ***",
+            "",
+            status_line,
+            "",
+            "👉 Buy subscription — чтобы видеть уровни сразу",
+            f"🔓 Полный доступ откроется через {_remaining_delay_text(event)}",
+        ]
+        return "\n".join(lines)
+
+    breakdown_lines = _signal_breakdown_lines(event, lang)
+    lines = [
+        f"📌 {event.get('symbol')} {event.get('side')} · Score {score}",
         f"🕒 {_format_event_time(int(event.get('ts', 0)))}",
-        f"POI: {float(event.get('poi_low')):.4f} - {float(event.get('poi_high')):.4f}",
+        "",
+        f"POI: {float(event.get('poi_low')):.4f} – {float(event.get('poi_high')):.4f}",
         f"SL: {float(event.get('sl')):.4f}",
         f"TP1: {float(event.get('tp1')):.4f}",
         f"TP2: {float(event.get('tp2')):.4f}",
+        "",
+        f"⏱ Scenario lifetime: {ttl_hours}h",
+        "",
+        status_line,
     ]
-    if status_raw == "OPEN":
-        compact_lines.append(
-            i18n.t(
-                lang,
-                "ARCHIVE_DETAIL_LIFETIME",
-                hours=max(1, int(round(float(event.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60))),
-            )
-        )
-
-    lines = list(compact_lines)
-    lines.extend(["", *_format_outcome_block(event)])
-    lines.extend(_format_issue_hint_block(event))
     if breakdown_lines:
-        lines.extend(
-            [
-                "",
-                i18n.t(lang, "ARCHIVE_DETAIL_REASON_HEADER", score=score),
-                *breakdown_lines,
-            ]
-        )
+        lines.extend(["", "🧠 Why this signal was chosen:", *breakdown_lines])
     return "\n".join(lines)
 
 
@@ -2325,9 +2389,9 @@ def _set_signal_detail_expanded(*, user_id: int, signal_id: int, expanded: bool)
     set_state(_signal_detail_expand_state_key(user_id=user_id, signal_id=signal_id), "1" if expanded else "0")
 
 
-def _format_archive_detail_view(event: dict, lang: str, *, expanded: bool) -> str:
-    full_text = _format_archive_detail(event, lang)
-    if expanded:
+def _format_archive_detail_view(event: dict, lang: str, *, expanded: bool, access_level: str) -> str:
+    full_text = _format_archive_detail(event, lang, access_level=access_level)
+    if expanded or access_level == "PREVIEW":
         return full_text
     compact_lines = full_text.split("\n")[:6]
     return "\n".join(compact_lines)
@@ -2390,6 +2454,7 @@ def _archive_inline_kb(
     events: list[dict],
     *,
     is_admin_user: bool,
+    viewer_user_id: int,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     period_label = _period_label(time_window, lang)
@@ -2414,6 +2479,7 @@ def _archive_inline_kb(
                         score=event.get("score"),
                         symbol=event.get("symbol"),
                         created_at=event.get("created_at") or event.get("ts"),
+                        access_level=get_signal_access_level(viewer_user_id, _event_created_at_utc(event)),
                     ),
                     callback_data=f"history_open:{event.get('id')}",
                 )
@@ -2465,16 +2531,27 @@ def _archive_detail_kb(
     event_id: int,
     expanded: bool,
     symbol: str,
+    access_level: str,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text=i18n.t(lang, "BTN_COLLAPSE" if expanded else "BTN_EXPAND"),
-                callback_data=f"sig_toggle:{event_id}",
-            )
-        ]
-    )
+    if access_level == "PREVIEW":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "BTN_BUY_SUB"),
+                    callback_data="sub_paywall:ai",
+                )
+            ]
+        )
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "BTN_COLLAPSE" if expanded else "BTN_EXPAND"),
+                    callback_data=f"sig_toggle:{event_id}",
+                )
+            ]
+        )
     rows.append([build_binance_button(lang, symbol)])
     rows.append(
         [
@@ -2508,14 +2585,16 @@ async def sig_open(callback: CallbackQuery):
         if context:
             stored_window, page, _ = context
             back_callback = f"history:{stored_window}:page={max(1, page)}"
+        access_level = get_signal_access_level(callback.from_user.id, _event_created_at_utc(event))
         expanded = _get_signal_detail_expanded(user_id=callback.from_user.id, signal_id=event_id)
-        detail_text = _format_archive_detail_view(event, lang, expanded=expanded)
+        detail_text = _format_archive_detail_view(event, lang, expanded=expanded, access_level=access_level)
         detail_markup = _archive_detail_kb(
             lang=lang,
             back_callback=back_callback,
             event_id=event_id,
             expanded=expanded,
             symbol=str(event.get("symbol", "")),
+            access_level=access_level,
         )
         try:
             await callback.message.edit_text(detail_text, reply_markup=detail_markup)
@@ -2567,8 +2646,9 @@ async def sig_toggle(callback: CallbackQuery):
         return
     event = dict(event_row)
 
+    access_level = get_signal_access_level(callback.from_user.id, _event_created_at_utc(event))
     current = _get_signal_detail_expanded(user_id=callback.from_user.id, signal_id=event_id)
-    next_state = not current
+    next_state = False if access_level == "PREVIEW" else not current
     _set_signal_detail_expanded(user_id=callback.from_user.id, signal_id=event_id, expanded=next_state)
 
     back_callback = "history:all:page=1"
@@ -2580,13 +2660,14 @@ async def sig_toggle(callback: CallbackQuery):
     with suppress(Exception):
         await callback.answer()
     await callback.message.edit_text(
-        _format_archive_detail_view(event, lang, expanded=next_state),
+        _format_archive_detail_view(event, lang, expanded=next_state, access_level=access_level),
         reply_markup=_archive_detail_kb(
             lang=lang,
             back_callback=back_callback,
             event_id=event_id,
             expanded=next_state,
             symbol=str(event.get("symbol", "")),
+            access_level=access_level,
         ),
     )
 
@@ -2616,12 +2697,17 @@ async def signal_message_toggle(callback: CallbackQuery):
         return
 
     event = dict(event_row)
-    collapsed_text, expanded_text = _build_signal_text_variants_from_event(
-        event,
-        lang,
-        is_admin_user=is_admin(callback.from_user.id),
-    )
-    target_text = expanded_text if expanded else collapsed_text
+    access_level = get_signal_access_level(callback.from_user.id, _event_created_at_utc(event))
+    if access_level == "PREVIEW":
+        expanded = False
+        target_text = _format_archive_detail(event, lang, access_level="PREVIEW")
+    else:
+        collapsed_text, expanded_text = _build_signal_text_variants_from_event(
+            event,
+            lang,
+            is_admin_user=is_admin(callback.from_user.id),
+        )
+        target_text = expanded_text if expanded else collapsed_text
 
     update_signal_event_expanded(event_id=event_id, expanded=expanded)
 
@@ -2630,13 +2716,14 @@ async def signal_message_toggle(callback: CallbackQuery):
     try:
         await callback.message.edit_text(
             target_text,
-            parse_mode="HTML",
+            parse_mode="HTML" if access_level == "FULL" else None,
             disable_web_page_preview=True,
             reply_markup=_signal_inline_kb(
                 lang=lang,
                 symbol=str(event.get("symbol") or ""),
                 signal_id=event_id,
                 expanded=expanded,
+                access_level=access_level,
             ),
         )
     except TelegramBadRequest as exc:
@@ -2699,6 +2786,7 @@ async def sig_refresh(callback: CallbackQuery):
                         pages,
                         events,
                         is_admin_user=True,
+                        viewer_user_id=callback.from_user.id,
                     ),
                 )
                 await callback.message.answer(report_text)
@@ -2718,15 +2806,18 @@ async def sig_refresh(callback: CallbackQuery):
             time_window, page, _ = context
             back_callback = f"history:{time_window}:page={max(1, page + 1)}"
         with suppress(Exception):
+            event_data = dict(event)
+            access_level = get_signal_access_level(callback.from_user.id, _event_created_at_utc(event_data))
             expanded = _get_signal_detail_expanded(user_id=callback.from_user.id, signal_id=event_id)
             await callback.message.edit_text(
-                _format_archive_detail_view(dict(event), lang, expanded=expanded),
+                _format_archive_detail_view(event_data, lang, expanded=expanded, access_level=access_level),
                 reply_markup=_archive_detail_kb(
                     lang=lang,
                     back_callback=back_callback,
                     event_id=event_id,
                     expanded=expanded,
                     symbol=str(event.get("symbol", "")),
+                    access_level=access_level,
                 ),
             )
         await callback.message.answer(report_text)
@@ -5111,19 +5202,29 @@ def build_binance_button(lang: str, symbol: str) -> InlineKeyboardButton:
     )
 
 
-def _signal_inline_kb(*, lang: str, symbol: str, signal_id: int, expanded: bool) -> InlineKeyboardMarkup:
-    callback_prefix = "sig:collapse" if expanded else "sig:expand"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def _signal_inline_kb(
+    *,
+    lang: str,
+    symbol: str,
+    signal_id: int,
+    expanded: bool,
+    access_level: str = "FULL",
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if access_level == "PREVIEW":
+        rows.append([InlineKeyboardButton(text=i18n.t(lang, "BTN_BUY_SUB"), callback_data="sub_paywall:ai")])
+    else:
+        callback_prefix = "sig:collapse" if expanded else "sig:expand"
+        rows.append(
             [
                 InlineKeyboardButton(
                     text=i18n.t(lang, "SIGNAL_BUTTON_COLLAPSE" if expanded else "SIGNAL_BUTTON_EXPAND"),
                     callback_data=f"{callback_prefix}:{int(signal_id)}",
                 )
-            ],
-            [build_binance_button(lang, symbol)],
-        ]
-    )
+            ]
+        )
+    rows.append([build_binance_button(lang, symbol)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 LOUD_NOTIFICATION_EVENTS = {"NEW_SIGNAL", "ACTIVE_CONFIRMED"}
@@ -5259,6 +5360,36 @@ def _with_admin_inversion_line(
             return "\n".join(lines)
 
     return f"{text}\n{inversion_line}"
+
+
+def _format_preview_signal_from_payload(signal: Dict[str, Any]) -> str:
+    score = int(signal.get("score", 0) or 0)
+    side = "LONG" if str(signal.get("direction") or "").lower() == "long" else "SHORT"
+    symbol = _signal_symbol_text(str(signal.get("symbol") or ""))
+    ttl_hours = max(1, int(round(float(signal.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60)))
+    remaining = _format_duration(max(0, SIGNAL_DELAY_NON_SUB_HOURS * 3600))
+    return "\n".join(
+        [
+            "🔒 PREVIEW (Real-time)",
+            "",
+            f"📌 {symbol} {side} · Score {score}",
+            f"🕒 {_format_event_time(int(time.time()))}",
+            "",
+            f"⏱ TTL: {ttl_hours}h",
+            "",
+            "Уровни доступны по подписке:",
+            "",
+            "• POI: *** – ***",
+            "• SL: ***",
+            "• TP1: ***",
+            "• TP2: ***",
+            "",
+            "📌 Итог: ⏰ В процессе",
+            "",
+            "👉 Buy subscription — чтобы видеть уровни сразу",
+            f"🔓 Полный доступ откроется через {remaining}",
+        ]
+    )
 
 
 def _apply_signal_inversion_metadata(signal: Dict[str, Any], *, inversion_enabled: bool) -> Dict[str, Any]:
@@ -5652,29 +5783,14 @@ async def send_signal_to_all(
                 expanded_text = message_text
             should_log = True
             kind = "signal"
-            if is_admin_user:
-                pass
-            elif is_sub_active(chat_id):
-                pass
+            access_level = "FULL"
+            if is_admin_user or is_sub_active(chat_id):
+                access_level = "FULL"
             else:
-                ensure_trial_defaults(chat_id)
-                allowed, left = try_consume_trial(chat_id, "trial_ai_left", 1)
-                if allowed:
-                    trial_suffix = i18n.t(
-                        lang,
-                        "TRIAL_SUFFIX_AI",
-                        left=left,
-                        limit=TRIAL_AI_LIMIT,
-                    )
-                    message_text = message_text + trial_suffix
-                    collapsed_text = collapsed_text + trial_suffix
-                    expanded_text = expanded_text + trial_suffix
-                else:
-                    if not _should_send_paywall(chat_id, "ai", sent_at):
-                        continue
-                    message_text = i18n.t(lang, "PAYWALL_AI")
-                    should_log = False
-                    kind = "paywall"
+                access_level = "PREVIEW"
+                message_text = _format_preview_signal_from_payload(signal_dict)
+                collapsed_text = message_text
+                expanded_text = message_text
 
         if kind == "paywall":
             stats["paywall"] += 1
@@ -5846,6 +5962,7 @@ async def send_signal_to_all(
                     symbol=symbol,
                     signal_id=event_id,
                     expanded=False,
+                    access_level=access_level if not is_test else "FULL",
                 ),
             )
         await asyncio.sleep(random.uniform(0.05, 0.15))
