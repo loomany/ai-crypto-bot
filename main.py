@@ -1274,11 +1274,7 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
     in_progress_total = _safe_int(totals.get("in_progress"), 0) if isinstance(totals, dict) else 0
     metrics = history_summary.get("metrics", {}) if isinstance(history_summary, dict) else {}
     winrate_value = metrics.get("winrate") if isinstance(metrics, dict) else None
-    success_rate_value = metrics.get("success_rate") if isinstance(metrics, dict) else None
     winrate_text = f"{float(winrate_value):.1f}" if isinstance(winrate_value, (int, float)) else "—"
-    success_rate_text = (
-        f"{float(success_rate_value):.1f}" if isinstance(success_rate_value, (int, float)) else "—"
-    )
 
     return "\n".join(
         [
@@ -1306,7 +1302,6 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
             i18n.t(lang, "totals_in_progress", value=in_progress_total),
             "",
             i18n.t(lang, "line_winrate_strict", value=winrate_text),
-            i18n.t(lang, "line_success_rate", value=success_rate_text),
             i18n.t(lang, "history_expired_helper"),
         ]
     )
