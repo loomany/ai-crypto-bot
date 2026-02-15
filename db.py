@@ -875,7 +875,6 @@ def get_history_winrate_summary(
         },
         "metrics": {
             "winrate": None,
-            "success_rate": None,
         },
     }
 
@@ -954,12 +953,14 @@ def get_history_winrate_summary(
         tp_value = int(totals.get("tp", 0) or 0)
         be_value = int(totals.get("be", 0) or 0)
         sl_value = int(totals.get("sl", 0) or 0)
-        strict_denom = tp_value + sl_value
-        success_denom = tp_value + be_value + sl_value
+        be_inclusive_denom = tp_value + be_value + sl_value
         metrics = summary.get("metrics")
         if isinstance(metrics, dict):
-            metrics["winrate"] = round(safe_pct(tp_value, strict_denom, 0.0), 1) if strict_denom else None
-            metrics["success_rate"] = round(safe_pct(tp_value + be_value, success_denom, 0.0), 1) if success_denom else None
+            metrics["winrate"] = (
+                round(safe_pct(tp_value + be_value, be_inclusive_denom, 0.0), 1)
+                if be_inclusive_denom
+                else None
+            )
 
     return summary
 

@@ -777,7 +777,7 @@ def get_ai_signal_stats(days: int | None, *, include_legacy: bool = False) -> di
 
         total = len(rows)
         tp2 = sum(1 for row in rows if row["outcome"] == "TP2")
-        tp1 = sum(1 for row in rows if row["outcome"] in ("TP1", "TP2") or (row["outcome"] == "BE" and int(row["tp1_hit"] or 0) == 1))
+        tp1 = sum(1 for row in rows if row["outcome"] in ("TP1", "TP2", "BE"))
         sl = sum(1 for row in rows if row["outcome"] == "SL")
         exp = 0
         winrate = safe_pct(tp1, total, 0.0) if total else 0.0
@@ -799,7 +799,7 @@ def get_ai_signal_stats(days: int | None, *, include_legacy: bool = False) -> di
             else:
                 bucket = buckets["80-100"]
             bucket["total"] += 1
-            if row["outcome"] in ("TP1", "TP2") or (row["outcome"] == "BE" and int(row["tp1_hit"] or 0) == 1):
+            if row["outcome"] in ("TP1", "TP2", "BE"):
                 bucket["tp1plus"] += 1
 
         for bucket in buckets.values():
