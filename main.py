@@ -1186,32 +1186,10 @@ def _signal_side_label(side: Any) -> str:
     return "SHORT"
 
 
-
-
-def _be_level_value(event: dict[str, Any]) -> int:
-    try:
-        return int(round(float(event.get("be_level_pct") or 0.0)))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _history_row_status_label(row: dict[str, Any]) -> str:
-    status_key = get_signal_status_key(row)
-    if status_key == "TP":
-        return "🟢 TP"
-    if status_key == "SL":
-        return "🔴 SL"
-    outcome = _normalize_signal_status(str(row.get("result") or row.get("status") or ""))
-    if outcome == "BE":
-        be_level = max(8, _be_level_value(row))
-        return f"🟢 +{be_level}%"
-    return "🟣 …"
-
-
 def _format_signal_list_row(
     *,
     side: Any,
-    status_label: str,
+    icon: str,
     score: Any,
     symbol: Any,
     created_at: Any,
@@ -1219,11 +1197,11 @@ def _format_signal_list_row(
 ) -> str:
     side_label = _signal_side_label(side)
     side_prefix = side_label.ljust(5)
-    status_value = str(status_label or "🟣 …").strip() or "🟣 …"
+    icon_value = str(icon or "🟣").strip() or "🟣"
     score_value = _safe_int(score, 0)
     symbol_value = _short_symbol(str(symbol or "—"))
     created_at_value = _safe_int(created_at, 0)
-    row_core = f"{side_prefix} {status_value} | Score {score_value} | {symbol_value} | {_format_event_time(created_at_value)}"
+    row_core = f"{side_prefix} {icon_value} | Score {score_value} | {symbol_value} | {_format_event_time(created_at_value)}"
     if access_level == "PREVIEW":
         return f"🔒 {row_core}"
     return row_core
@@ -1257,9 +1235,10 @@ def _get_history_page(
 
 def _format_history_item(row: dict[str, Any], lang: str, *, access_level: str = "FULL") -> str:
     del lang
+    icon = _history_row_icon(row)
     return _format_signal_list_row(
         side=row.get("side"),
-        status_label=_history_row_status_label(row),
+        icon=icon,
         score=row.get("score"),
         symbol=row.get("symbol"),
         created_at=row.get("created_at") or row.get("ts"),
@@ -1296,42 +1275,34 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
     metrics = history_summary.get("metrics", {}) if isinstance(history_summary, dict) else {}
     winrate_value = metrics.get("winrate") if isinstance(metrics, dict) else None
     winrate_text = f"{float(winrate_value):.1f}" if isinstance(winrate_value, (int, float)) else "—"
-    be_count_value = _safe_int(metrics.get("be_count"), 0) if isinstance(metrics, dict) else 0
-    be_avg_value = metrics.get("be_avg") if isinstance(metrics, dict) else None
-    be_avg_text = f"{float(be_avg_value):.1f}" if isinstance(be_avg_value, (int, float)) else "—"
 
     return "\n".join(
         [
-            line
-            for line in [
-                i18n.t(lang, "section_recommended_title"),
-                i18n.t(lang, "line_winrate", value=winrate_90),
-                i18n.t(lang, "line_avg_rr", value=avg_rr),
-                i18n.t(lang, "line_trades", value=closed_90),
-                i18n.t(lang, "line_status", value=i18n.t(lang, "status_main_focus")),
-                "",
-                i18n.t(lang, "section_higher_risk_title"),
-                i18n.t(lang, "line_winrate", value=winrate_80),
-                i18n.t(lang, "line_trades", value=closed_80),
-                i18n.t(lang, "line_status", value=i18n.t(lang, "status_use_selectively")),
-                "",
-                i18n.t(lang, "section_score_below_title"),
-                i18n.t(lang, "line_not_included"),
-                i18n.t(lang, "line_market_analysis_only"),
-                "",
-                i18n.t(lang, "totals_title"),
-                i18n.t(lang, "totals_tp", value=tp_total),
-                i18n.t(lang, "totals_be", value=be_total),
-                i18n.t(lang, "totals_be_avg", value=be_count_value, avg=be_avg_text) if be_count_value > 0 else "",
-                i18n.t(lang, "totals_sl", value=sl_total),
-                i18n.t(lang, "totals_expired_no_entry", value=expired_no_entry_total),
-                i18n.t(lang, "totals_no_confirmation", value=no_confirmation_total),
-                i18n.t(lang, "totals_in_progress", value=in_progress_total),
-                "",
-                i18n.t(lang, "line_winrate_strict", value=winrate_text),
-                i18n.t(lang, "history_expired_helper"),
-            ]
-            if line
+            i18n.t(lang, "section_recommended_title"),
+            i18n.t(lang, "line_winrate", value=winrate_90),
+            i18n.t(lang, "line_avg_rr", value=avg_rr),
+            i18n.t(lang, "line_trades", value=closed_90),
+            i18n.t(lang, "line_status", value=i18n.t(lang, "status_main_focus")),
+            "",
+            i18n.t(lang, "section_higher_risk_title"),
+            i18n.t(lang, "line_winrate", value=winrate_80),
+            i18n.t(lang, "line_trades", value=closed_80),
+            i18n.t(lang, "line_status", value=i18n.t(lang, "status_use_selectively")),
+            "",
+            i18n.t(lang, "section_score_below_title"),
+            i18n.t(lang, "line_not_included"),
+            i18n.t(lang, "line_market_analysis_only"),
+            "",
+            i18n.t(lang, "totals_title"),
+            i18n.t(lang, "totals_tp", value=tp_total),
+            i18n.t(lang, "totals_be", value=be_total),
+            i18n.t(lang, "totals_sl", value=sl_total),
+            i18n.t(lang, "totals_expired_no_entry", value=expired_no_entry_total),
+            i18n.t(lang, "totals_no_confirmation", value=no_confirmation_total),
+            i18n.t(lang, "totals_in_progress", value=in_progress_total),
+            "",
+            i18n.t(lang, "line_winrate_strict", value=winrate_text),
+            i18n.t(lang, "history_expired_helper"),
         ]
     )
 
@@ -1635,8 +1606,6 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP1_LINE", price=_format_price(tp1)))
         if tp2:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP2_LINE", price=_format_price(tp2)))
-        max_profit_pct = float(event.get("max_profit_pct") or 0.0)
-        body_lines.append(i18n.t(lang, "SIGNAL_RESULT_MAX_PNL_LINE", pnl=f"{max_profit_pct:.2f}"))
     elif status == "TP2":
         header = i18n.t(lang, "CLOSE_TP2_TITLE")
         detail_lines = [f"{symbol} {side}"]
@@ -1654,11 +1623,8 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP1_LINE", price=_format_price(tp1)))
         if tp2:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP2_LINE", price=_format_price(tp2)))
-        max_profit_pct = float(event.get("max_profit_pct") or 0.0)
-        body_lines.append(i18n.t(lang, "SIGNAL_RESULT_MAX_PNL_LINE", pnl=f"{max_profit_pct:.2f}"))
     elif status == "BE":
-        be_level_pct = max(8, _safe_int(event.get("be_level_pct"), 8))
-        header = i18n.t(lang, "SIGNAL_BE_FINALISED_HEADER", level=be_level_pct)
+        header = i18n.t(lang, "SIGNAL_BE_FINALISED_HEADER")
         detail_lines = [f"{symbol} {side}"]
         if entry_value:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=entry_value))
@@ -1671,6 +1637,11 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
             final_pnl_pct = ((exit_price - entry_price) / entry_price) * 100.0 * side_mult
         if final_pnl_pct is not None:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_PNL_LINE", pnl=f"{float(final_pnl_pct):.2f}"))
+        be_trigger_price = float(event.get("be_trigger_price") or 0.0)
+        if be_trigger_price > 0:
+            body_lines.append(
+                i18n.t(lang, "SIGNAL_BE_REACHED_LINE", price=_format_price(be_trigger_price))
+            )
         max_profit_pct = float(event.get("max_profit_pct") or 0.0)
         body_lines.append(i18n.t(lang, "SIGNAL_BE_MAX_PNL_LINE", pnl=f"{max_profit_pct:.2f}"))
         body_lines.append(i18n.t(lang, "SIGNAL_BE_CLOSED_BY_LINE"))
@@ -1704,8 +1675,6 @@ def _format_short_result_message(event: dict, lang: str) -> str | None:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP1_LINE", price=_format_price(tp1)))
         if tp2:
             body_lines.append(i18n.t(lang, "SIGNAL_RESULT_TP2_LINE", price=_format_price(tp2)))
-        max_profit_pct = float(event.get("max_profit_pct") or 0.0)
-        body_lines.append(i18n.t(lang, "SIGNAL_RESULT_MAX_PNL_LINE", pnl=f"{max_profit_pct:.2f}"))
     detail_lines.extend(body_lines)
     if status in {"TP1", "TP2", "SL"}:
         close_reason_key = {
@@ -1958,7 +1927,7 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
         return False
 
     normalized = _normalize_signal_status(str(event_type or "").upper())
-    if normalized not in {"BE_TRIGGERED"}:
+    if normalized not in {"TP1", "BE_TRIGGERED"}:
         return False
 
     module = str(signal.get("module", ""))
@@ -1990,16 +1959,13 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
                 max_profit_pct = float(signal.get("max_profit_pct") or 0.0)
                 entry_price = float(signal.get("entry_price") or 0.0)
                 title_key = "SIGNAL_BE_TRIGGERED_HEADER"
-                be_level_pct = max(8, _safe_int(signal.get("be_level_pct"), 8))
                 message_lines = [
-                    i18n.t(lang, title_key, level=be_level_pct),
+                    i18n.t(lang, title_key),
                     "",
-                    f"{ui_symbol(symbol)} | {side}",
+                    f"{ui_symbol(symbol)} {side}",
                     i18n.t(lang, "SIGNAL_RESULT_ENTRY_LINE", entry=_format_price(entry_price)) if entry_price > 0 else "",
-                    i18n.t(lang, "SIGNAL_CURRENT_PRICE_LINE", price=_format_price(be_trigger_price)) if be_trigger_price > 0 else "",
-                    i18n.t(lang, "SIGNAL_BE_LEVEL_PERCENT_LINE", level=be_level_pct),
+                    i18n.t(lang, "SIGNAL_BE_LEVEL_LINE", price=_format_price(be_trigger_price)) if be_trigger_price > 0 else "",
                     i18n.t(lang, "SIGNAL_BE_MAX_PNL_LINE", pnl=f"{max_profit_pct:.2f}"),
-                    "",
                     i18n.t(lang, "SIGNAL_RESULT_SCORE_LINE", score=int(signal.get("score", 0))),
                 ]
                 message_text = "\n".join([line for line in message_lines if line])
@@ -2057,8 +2023,7 @@ def _format_outcome_block(event: dict, lang: str) -> list[str]:
             header = "📌 Result: ✅ TP2 hit" if is_en else "📌 Итог: ✅ TP2 достигнут"
             comment = "price reached TP2, scenario completed" if is_en else "цена дошла до TP2, сценарий выполнен полностью"
         elif status == "BE":
-            be_level = max(8, _be_level_value(event))
-            header = (f"📌 Result: 🟢 BE (+{be_level}%)" if is_en else f"📌 Итог: 🟢 BE (+{be_level}%)")
+            header = "📌 Result: 🟢 BE (+8%) | 🛡 Profit protected" if is_en else "📌 Итог: 🟢 BE (+8%) | 🛡 Прибыль защищена"
             comment = (
                 "price gave at least +8% profit, then closed as BE"
                 if is_en
@@ -2423,8 +2388,11 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
     status_line = status_lines[0] if status_lines else ("📌 Result: —" if lang == "en" else "📌 Итог: —")
     status_raw = _normalize_signal_status(str(event.get("result") or event.get("status") or ""))
     if status_raw == "BE":
-        be_level = max(8, _be_level_value(event))
-        status_line = (f"📌 Result: 🟢 BE (+{be_level}%)" if lang == "en" else f"📌 Итог: 🟢 BE (+{be_level}%)")
+        status_line = (
+            "📌 Result: 🟢 BE (+8%) | 🛡 Profit protected"
+            if lang == "en"
+            else "📌 Итог: 🟢 BE (+8%) | 🛡 Прибыль защищена"
+        )
     ttl_hours = max(1, int(round(float(event.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60)))
 
     if access_level == "PREVIEW":
@@ -2466,9 +2434,6 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
         "",
         status_line,
     ]
-    if status_raw == "BE":
-        max_profit_pct = float(event.get("max_profit_pct") or 0.0)
-        lines.append(f"📈 Max PnL: +{max_profit_pct:.2f}%")
     if breakdown_lines:
         lines.extend(["", "🧠 Why this signal was chosen:", *breakdown_lines])
     return "\n".join(lines)
@@ -5469,28 +5434,24 @@ def _format_preview_signal_from_payload(signal: Dict[str, Any], lang: str) -> st
     result_line = "📌 Result: ⏰ In progress" if lang == "en" else "📌 Итог: ⏰ В процессе"
     return "\n".join(
         [
-            line
-            for line in [
-                "🔒 PREVIEW (Real-time)",
-                "",
-                f"📌 {symbol} {side} · Score {score}",
-                f"🕒 {_format_event_time(int(time.time()))}",
-                "",
-                f"⏱ TTL: {ttl_hours}h",
-                "",
-                "Levels are available with subscription:" if lang == "en" else "Уровни доступны по подписке:",
-                "",
-                "• POI: *** – ***",
-                "• SL: ***",
-                "• TP1: ***",
-                "• TP2: ***",
-                "",
-                result_line,
-                "",
-                "👉 Buy subscription — to unlock levels instantly" if lang == "en" else "👉 Buy subscription — чтобы видеть уровни сразу",
-                f"🔓 Full access unlocks in {remaining}" if lang == "en" else f"🔓 Полный доступ откроется через {remaining}",
-            ]
-            if line
+            "🔒 PREVIEW (Real-time)",
+            "",
+            f"📌 {symbol} {side} · Score {score}",
+            f"🕒 {_format_event_time(int(time.time()))}",
+            "",
+            f"⏱ TTL: {ttl_hours}h",
+            "",
+            "Levels are available with subscription:" if lang == "en" else "Уровни доступны по подписке:",
+            "",
+            "• POI: *** – ***",
+            "• SL: ***",
+            "• TP1: ***",
+            "• TP2: ***",
+            "",
+            result_line,
+            "",
+            "👉 Buy subscription — to unlock levels instantly" if lang == "en" else "👉 Buy subscription — чтобы видеть уровни сразу",
+            f"🔓 Full access unlocks in {remaining}" if lang == "en" else f"🔓 Полный доступ откроется через {remaining}",
         ]
     )
 
