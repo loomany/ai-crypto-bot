@@ -920,8 +920,8 @@ def get_history_winrate_summary(
 
     rr_sum_90_100 = 0.0
     rr_count_90_100 = 0
-    be_profit_sum = 0.0
-    be_profit_count = 0
+    be_level_sum = 0.0
+    be_level_count = 0
 
     for row in rows:
         score = int(row["score"] or 0)
@@ -929,9 +929,8 @@ def get_history_winrate_summary(
         totals = summary["totals"]
         if str(row["outcome"] or "").upper() == "BE":
             try:
-                max_profit = float(row["max_profit_pct"] or 0.0)
-                be_profit_sum += max_profit if max_profit > 0 else float(row["be_level_pct"] or 0.0)
-                be_profit_count += 1
+                be_level_sum += float(row["be_level_pct"] or 0.0)
+                be_level_count += 1
             except (TypeError, ValueError):
                 pass
 
@@ -1012,7 +1011,7 @@ def get_history_winrate_summary(
                 else None
             )
             metrics["trades"] = be_inclusive_denom
-            metrics["be_avg"] = round(safe_div(be_profit_sum, be_profit_count, 0.0), 1) if be_profit_count else 0.0
+            metrics["be_avg"] = round(safe_div(be_level_sum, be_level_count, 0.0), 1) if be_level_count else 0.0
 
     return summary
 

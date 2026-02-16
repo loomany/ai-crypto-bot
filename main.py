@@ -1328,6 +1328,10 @@ def _build_history_text(
         i18n.t(lang, "history_title", period=period_label),
         i18n.t(lang, "page_total", page=page, pages=pages, total=total),
     ]
+    if not include_legacy:
+        cutoff_label = _format_cutoff_note_date(lang)
+        if cutoff_label:
+            lines.extend([i18n.t(lang, "stats_since_date_note", date=cutoff_label), ""])
     lines.extend([
         "",
         _format_history_pro_block(lang, history_summary),
