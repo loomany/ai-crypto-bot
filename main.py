@@ -1230,10 +1230,16 @@ def _format_signal_list_row(
     score_value = _safe_int(score, 0)
     symbol_value = _short_symbol(str(symbol or "—"))
     created_at_value = _safe_int(created_at, 0)
+    if created_at_value > 0:
+        dt_local = datetime.fromtimestamp(created_at_value, tz=timezone.utc).astimezone(ALMATY_TZ)
+        time_prefix = dt_local.strftime("%H:%M/%d.%m")
+    else:
+        time_prefix = "--:--/--.--"
     row_core = f"{side_prefix} {icon_value} {status_label} | Score {score_value} | {symbol_value}"
+    row_text = f"{time_prefix} | {row_core}"
     if access_level == "PREVIEW":
-        return f"🔒 {row_core}"
-    return row_core
+        return f"🔒 {row_text}"
+    return row_text
 
 
 def _get_history_page(
