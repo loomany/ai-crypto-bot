@@ -169,7 +169,6 @@ from keyboards import (
     build_offer_inline_kb,
     build_payment_inline_kb,
     build_system_menu_kb,
-    build_about_bot_logic_back_kb,
     pumpdump_inline_kb,
     stats_inline_kb,
     stats_period_inline_kb,
@@ -4851,27 +4850,6 @@ async def show_system_menu(message: Message) -> None:
             inversion_enabled=get_inversion_enabled() if is_admin_user else False,
         ),
     )
-
-
-async def send_about_bot_logic(message: Message, lang: str) -> None:
-    await message.answer(
-        i18n.t(lang, "ABOUT_BOT_LOGIC_TEXT"),
-        reply_markup=build_about_bot_logic_back_kb(lang),
-    )
-
-
-@dp.message(F.text.in_(i18n.all_labels("BTN_BOT_HOW_IT_WORKS")))
-async def about_bot_logic_message(message: Message):
-    lang = get_user_lang(message.chat.id) or "ru"
-    await send_about_bot_logic(message, lang)
-
-
-@dp.callback_query(F.data == "about_bot_logic")
-async def about_bot_logic_callback(callback: CallbackQuery):
-    lang = _resolve_user_lang(callback.from_user.id if callback.from_user else None)
-    await callback.answer()
-    if callback.message:
-        await send_about_bot_logic(callback.message, lang)
 
 
 @dp.callback_query(F.data == "about_back")

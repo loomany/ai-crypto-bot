@@ -54,19 +54,10 @@ def build_system_menu_kb(
             [
                 KeyboardButton(text=i18n.t(lang, "SYS_DIAG")),
                 KeyboardButton(text=i18n.t(lang, "SYS_PAY")),
-                KeyboardButton(text=i18n.t(lang, "BTN_BOT_HOW_IT_WORKS")),
             ],
             [KeyboardButton(text=i18n.t(lang, "MENU_BACK"))],
         ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
-
-
-def build_about_bot_logic_back_kb(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data="about_back")],
-        ]
-    )
 
 
 def build_admin_diagnostics_kb(lang: str) -> ReplyKeyboardMarkup:
@@ -180,7 +171,6 @@ def build_about_inline_kb(
     keyboard = [
         [InlineKeyboardButton(text=i18n.t(lang, "SYS_PAY"), callback_data="sub_pay")],
         [InlineKeyboardButton(text=i18n.t(lang, "BTN_CONTACT_ADMIN"), callback_data="sub_contact")],
-        [InlineKeyboardButton(text=i18n.t(lang, "BTN_BOT_HOW_IT_WORKS"), callback_data="about_bot_logic")],
     ]
     if is_admin:
         keyboard.append(
