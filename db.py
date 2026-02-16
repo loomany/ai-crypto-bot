@@ -745,6 +745,7 @@ def get_signal_history(
     limit: int = 10,
     offset: int = 0,
     include_legacy: bool = False,
+    module: str | None = None,
 ) -> list[sqlite3.Row]:
     since_ts = _history_since_ts(time_window)
     conn = get_conn()
@@ -754,6 +755,9 @@ def get_signal_history(
         if user_id is not None:
             clauses.append("user_id = ?")
             params.append(int(user_id))
+        if module:
+            clauses.append("module = ?")
+            params.append(str(module))
         if since_ts is not None:
             clauses.append("ts >= ?")
             params.append(int(since_ts))
@@ -810,6 +814,7 @@ def count_signal_history(
     user_id: int | None = None,
     min_score: float | None = None,
     include_legacy: bool = False,
+    module: str | None = None,
 ) -> int:
     since_ts = _history_since_ts(time_window)
     conn = get_conn()
@@ -819,6 +824,9 @@ def count_signal_history(
         if user_id is not None:
             clauses.append("user_id = ?")
             params.append(int(user_id))
+        if module:
+            clauses.append("module = ?")
+            params.append(str(module))
         if since_ts is not None:
             clauses.append("ts >= ?")
             params.append(int(since_ts))
@@ -850,6 +858,7 @@ def get_history_winrate_summary(
     time_window: str,
     user_id: int | None = None,
     include_legacy: bool = False,
+    module: str | None = None,
 ) -> dict[str, object]:
     since_ts = _history_since_ts(time_window)
     conn = get_conn()
@@ -859,6 +868,9 @@ def get_history_winrate_summary(
         if user_id is not None:
             clauses.append("user_id = ?")
             params.append(int(user_id))
+        if module:
+            clauses.append("module = ?")
+            params.append(str(module))
         if since_ts is not None:
             clauses.append("ts >= ?")
             params.append(int(since_ts))
