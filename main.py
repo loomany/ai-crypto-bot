@@ -1342,6 +1342,7 @@ def _build_history_text(
         i18n.t(lang, "history_indicator_waiting"),
         i18n.t(lang, "history_indicator_poi_touched"),
         i18n.t(lang, "history_indicator_activated"),
+        i18n.t(lang, "explanation_line_exp"),
     ])
     if not rows:
         lines.append("")
