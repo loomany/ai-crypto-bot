@@ -167,6 +167,7 @@ from keyboards import (
     build_system_menu_kb,
     pumpdump_inline_kb,
     stats_inline_kb,
+    stats_period_inline_kb,
 )
 from settings import SIGNAL_TTL_SECONDS
 from signal_inversion import apply_inversion
@@ -1112,14 +1113,15 @@ def _set_history_context(
     time_window: str,
     page: int,
     winrate_summary: dict[str, Any] | None = None,
+    history_type: str = "ai",
 ) -> None:
-    payload: dict[str, Any] = {"window": time_window, "page": page}
+    payload: dict[str, Any] = {"window": time_window, "page": page, "type": history_type}
     if winrate_summary is not None:
         payload["winrate_summary"] = winrate_summary
     set_state(_history_state_key(user_id), json.dumps(payload))
 
 
-def _get_history_context(user_id: int) -> tuple[str, int, dict[str, Any] | None] | None:
+def _get_history_context(user_id: int) -> tuple[str, int, dict[str, Any] | None, str] | None:
     payload = get_state(_history_state_key(user_id))
     if not payload:
         return None
@@ -1136,12 +1138,16 @@ def _get_history_context(user_id: int) -> tuple[str, int, dict[str, Any] | None]
     except (TypeError, ValueError):
         return None
 
+    history_type = str(parsed.get("type") or "ai")
+    if history_type not in {"ai", "pd"}:
+        history_type = "ai"
+
     raw_summary = parsed.get("winrate_summary")
     winrate_summary: dict[str, Any] | None = None
     if isinstance(raw_summary, dict):
         winrate_summary = raw_summary
 
-    return time_window, max(1, page_value), winrate_summary
+    return time_window, max(1, page_value), winrate_summary, history_type
 
 
 def _normalize_history_status(raw_status: str | None) -> str:
@@ -1248,12 +1254,14 @@ def _get_history_page(
     page: int,
     page_size: int = 12,
     include_legacy: bool = False,
+    module: str = "ai_signals",
 ) -> tuple[int, int, int, list[dict]]:
     total = count_signal_history(
         time_window=time_window,
         user_id=None,
         min_score=None,
         include_legacy=include_legacy,
+        module=module,
     )
     pages = max(1, (total + page_size - 1) // page_size)
     page_value = max(1, min(page, pages))
@@ -1264,6 +1272,7 @@ def _get_history_page(
         limit=page_size,
         offset=offset,
         include_legacy=include_legacy,
+        module=module,
     )
     return page_value, pages, total, [dict(row) for row in rows]
 
@@ -1359,6 +1368,7 @@ def _history_nav_kb(
     pages: int,
     events: list[dict],
     viewer_user_id: int,
+    history_prefix: str = "history",
 ) -> InlineKeyboardMarkup:
     kb_rows: list[list[InlineKeyboardButton]] = []
     events = _dedupe_signals(events)
@@ -1384,14 +1394,14 @@ def _history_nav_kb(
         nav_row.append(
             InlineKeyboardButton(
                 text=i18n.t(lang, "nav_prev_page"),
-                callback_data=f"history:{time_window}:page={page - 1}",
+                callback_data=f"{history_prefix}:{time_window}:page={page - 1}",
             )
         )
     if page < pages:
         nav_row.append(
             InlineKeyboardButton(
                 text=i18n.t(lang, "nav_next_page"),
-                callback_data=f"history:{time_window}:page={page + 1}",
+                callback_data=f"{history_prefix}:{time_window}:page={page + 1}",
             )
         )
     if nav_row:
@@ -1409,15 +1419,17 @@ def _history_nav_kb(
     return InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
 
-async def _render_history(*, callback: CallbackQuery, time_window: str, page: int) -> None:
+async def _render_history(*, callback: CallbackQuery, time_window: str, page: int, history_type: str = "ai") -> None:
     if callback.message is None or callback.from_user is None:
         return
     lang = _resolve_user_lang(callback.from_user.id)
     include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
+    module = "ai_signals" if history_type == "ai" else "pumpdump"
     page_value, pages, total, rows = _get_history_page(
         time_window=time_window,
         page=page,
         include_legacy=include_legacy,
+        module=module,
     )
 
     rows = _dedupe_signals(rows)
@@ -1426,6 +1438,7 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         time_window=time_window,
         user_id=None,
         include_legacy=include_legacy,
+        module=module,
     )
 
     _set_history_context(
@@ -1433,6 +1446,7 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         time_window,
         page_value,
         winrate_summary=history_summary,
+        history_type=history_type,
     )
     text = _build_history_text(
         time_window=time_window,
@@ -1444,6 +1458,7 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         history_summary=history_summary,
         include_legacy=include_legacy,
     )
+    history_prefix = "history" if history_type == "ai" else "history_pd"
     markup = _history_nav_kb(
         lang=lang,
         time_window=time_window,
@@ -1451,6 +1466,7 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         pages=pages,
         events=rows,
         viewer_user_id=callback.from_user.id,
+        history_prefix=history_prefix,
     )
     await _edit_message_with_chunks(callback.message, text, reply_markup=markup)
 
@@ -2481,32 +2497,66 @@ def _format_archive_detail_view(event: dict, lang: str, *, expanded: bool, acces
 async def stats_menu(message: Message):
     lang = _resolve_user_lang(message.chat.id)
     await message.answer(
-        i18n.t(lang, "STATS_PICK_TEXT"),
+        i18n.t(lang, "STATS_ROOT_TEXT"),
         reply_markup=stats_inline_kb(lang),
     )
 
 
-@dp.callback_query(F.data.regexp(r"^history:(1d|7d|30d|all)(:page=\d+)?$"))
+@dp.callback_query(F.data == "stats_root")
+async def stats_root_callback(callback: CallbackQuery):
+    if callback.message is None or callback.from_user is None:
+        return
+    lang = _resolve_user_lang(callback.from_user.id)
+    with suppress(Exception):
+        await callback.answer()
+    await callback.message.edit_text(
+        i18n.t(lang, "STATS_ROOT_TEXT"),
+        reply_markup=stats_inline_kb(lang),
+    )
+
+
+@dp.callback_query(F.data.regexp(r"^stats_archive:(ai|pd)$"))
+async def stats_archive_callback(callback: CallbackQuery):
+    if callback.message is None or callback.from_user is None:
+        return
+    match = re.match(r"^stats_archive:(ai|pd)$", callback.data or "")
+    if not match:
+        return
+    archive_kind = match.group(1)
+    lang = _resolve_user_lang(callback.from_user.id)
+    text_key = "STATS_PICK_TEXT" if archive_kind == "ai" else "STATS_PICK_PD_TEXT"
+    with suppress(Exception):
+        await callback.answer()
+    await callback.message.edit_text(
+        i18n.t(lang, text_key),
+        reply_markup=stats_period_inline_kb(lang, archive_kind=archive_kind),
+    )
+
+
+@dp.callback_query(F.data.regexp(r"^(history|history_pd):(1d|7d|30d|all)(:page=\d+)?$"))
 async def history_callback(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
-    match = re.match(r"^history:(1d|7d|30d|all)(?::page=(\d+))?$", callback.data or "")
+    match = re.match(r"^(history|history_pd):(1d|7d|30d|all)(?::page=(\d+))?$", callback.data or "")
     if not match:
         lang = _resolve_user_lang(callback.from_user.id)
         await callback.answer(i18n.t(lang, "UNKNOWN_PERIOD"), show_alert=True)
         return
-    time_window = match.group(1)
-    page_value = max(1, int(match.group(2) or 1))
+    history_prefix = match.group(1)
+    time_window = match.group(2)
+    page_value = max(1, int(match.group(3) or 1))
+    history_type = "ai" if history_prefix == "history" else "pd"
     try:
         await callback.answer()
     except Exception:
         pass
     try:
-        await _render_history(callback=callback, time_window=time_window, page=page_value)
+        await _render_history(callback=callback, time_window=time_window, page=page_value, history_type=history_type)
     except Exception:
         user_id = callback.from_user.id if callback.from_user else None
         logger.exception(
-            "history_callback failed: window=%s page=%s user_id=%s",
+            "history_callback failed: prefix=%s window=%s page=%s user_id=%s",
+            history_prefix,
             time_window,
             page_value,
             user_id,
@@ -2516,7 +2566,7 @@ async def history_callback(callback: CallbackQuery):
             await callback.message.answer(i18n.t(lang, "HISTORY_LOAD_ERROR"))
 
 
-@dp.callback_query(F.data.regexp(r"^history:"))
+@dp.callback_query(F.data.regexp(r"^(history|history_pd):"))
 async def history_unknown_period(callback: CallbackQuery):
     if callback.message is None or callback.from_user is None:
         return
@@ -2665,8 +2715,9 @@ async def sig_open(callback: CallbackQuery):
         back_callback = "history:all:page=1"
         context = _get_history_context(callback.from_user.id)
         if context:
-            stored_window, page, _ = context
-            back_callback = f"history:{stored_window}:page={max(1, page)}"
+            stored_window, page, _, history_type = context
+            history_prefix = "history" if history_type == "ai" else "history_pd"
+            back_callback = f"{history_prefix}:{stored_window}:page={max(1, page)}"
         access_level = get_signal_access_level(callback.from_user.id, _event_created_at_utc(event))
         expanded = _get_signal_detail_expanded(user_id=callback.from_user.id, signal_id=event_id)
         detail_text = _format_archive_detail_view(event, lang, expanded=expanded, access_level=access_level)
@@ -2700,7 +2751,7 @@ async def archive_back(callback: CallbackQuery):
     lang = lang or "ru"
     await callback.answer()
     await callback.message.edit_text(
-        i18n.t(lang, "STATS_PICK_TEXT"),
+        i18n.t(lang, "STATS_ROOT_TEXT"),
         reply_markup=stats_inline_kb(lang),
     )
 
@@ -2736,8 +2787,9 @@ async def sig_toggle(callback: CallbackQuery):
     back_callback = "history:all:page=1"
     context = _get_history_context(callback.from_user.id)
     if context:
-        stored_window, page, _ = context
-        back_callback = f"history:{stored_window}:page={max(1, page)}"
+        stored_window, page, _, history_type = context
+        history_prefix = "history" if history_type == "ai" else "history_pd"
+        back_callback = f"{history_prefix}:{stored_window}:page={max(1, page)}"
 
     with suppress(Exception):
         await callback.answer()
@@ -2844,7 +2896,7 @@ async def sig_refresh(callback: CallbackQuery):
         if callback.message.text and callback.message.text.startswith("📊"):
             context = _get_history_context(callback.from_user.id)
             if context:
-                time_window, page, _ = context
+                time_window, page, _, history_type = context
                 page, pages, events, outcome_counts, score_bucket_counts, avg_rr_90_100 = _get_history_page(
                     time_window=time_window,
                     page=page,
@@ -2885,8 +2937,9 @@ async def sig_refresh(callback: CallbackQuery):
         back_callback = "hist_back"
         context = _get_history_context(callback.from_user.id)
         if context:
-            time_window, page, _ = context
-            back_callback = f"history:{time_window}:page={max(1, page + 1)}"
+            time_window, page, _, history_type = context
+            history_prefix = "history" if history_type == "ai" else "history_pd"
+            back_callback = f"{history_prefix}:{time_window}:page={max(1, page + 1)}"
         with suppress(Exception):
             event_data = dict(event)
             access_level = get_signal_access_level(callback.from_user.id, _event_created_at_utc(event_data))

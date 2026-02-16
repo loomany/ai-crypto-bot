@@ -114,23 +114,49 @@ def stats_inline_kb(lang: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
+                    text=i18n.t(lang, "BTN_ARCHIVE_AI"),
+                    callback_data="stats_archive:ai",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "BTN_ARCHIVE_PD"),
+                    callback_data="stats_archive:pd",
+                )
+            ],
+        ]
+    )
+
+
+def stats_period_inline_kb(lang: str, archive_kind: str = "ai") -> InlineKeyboardMarkup:
+    history_prefix = "history" if archive_kind == "ai" else "history_pd"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
                     text=i18n.t(lang, "PERIOD_1D"),
-                    callback_data="history:1d:page=1",
+                    callback_data=f"{history_prefix}:1d:page=1",
                 ),
                 InlineKeyboardButton(
                     text=i18n.t(lang, "PERIOD_7D"),
-                    callback_data="history:7d:page=1",
+                    callback_data=f"{history_prefix}:7d:page=1",
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text=i18n.t(lang, "PERIOD_30D"),
-                    callback_data="history:30d:page=1",
+                    callback_data=f"{history_prefix}:30d:page=1",
                 ),
                 InlineKeyboardButton(
                     text=i18n.t(lang, "PERIOD_ALL"),
-                    callback_data="history:all:page=1",
+                    callback_data=f"{history_prefix}:all:page=1",
                 ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "MENU_BACK"),
+                    callback_data="stats_root",
+                )
             ],
         ]
     )
