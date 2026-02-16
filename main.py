@@ -4408,10 +4408,8 @@ def _format_user_bot_status(chat_id: int) -> str:
             i18n.t(lang, "SYSTEM_STATUS_MARKET_ACTIVITY_LINE", activity=activity)
         )
 
-    if market_lines:
-        lines.append(i18n.t(lang, "SYSTEM_STATUS_SECTION_MARKET"))
-        lines.extend(market_lines)
-        lines.append("")
+    # По запросу: скрываем блок "Контекст рынка" в сообщении статуса,
+    # не изменяя внутреннюю логику расчёта market_lines.
 
     analysis_lines: list[str] = []
     market_symbols_total = _int_value(extra.get("universe")) if extra else None
@@ -4442,9 +4440,8 @@ def _format_user_bot_status(chat_id: int) -> str:
                 if safe_enabled
                 else i18n.t(lang, "SYSTEM_STATUS_SAFE_MODE_OFF")
             )
-            analysis_lines.append(
-                i18n.t(lang, "SYSTEM_STATUS_SAFE_MODE_LINE", mode=safe_mode_label)
-            )
+            # По запросу: скрываем строку "режим защиты" из вывода,
+            # оставляя вычисление safe_mode_label без изменения.
     if analysis_lines:
         lines.append(i18n.t(lang, "SYSTEM_STATUS_SECTION_AI"))
         lines.extend(analysis_lines)
