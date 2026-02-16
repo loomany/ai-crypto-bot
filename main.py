@@ -4897,18 +4897,64 @@ async def subscription_contact_callback(callback: CallbackQuery):
         await callback.message.answer(text)
 
 
+def _build_sys_how_bot_works_payload(lang: str, expanded: bool) -> tuple[str, InlineKeyboardMarkup | None]:
+    full_text = i18n.t(lang, "SYS_HOW_BOT_WORKS_TEXT")
+    marker = i18n.t(lang, "SYS_HOW_BOT_WORKS_CUTOFF_MARKER").strip()
+    if not marker:
+        return full_text, None
+
+    marker_pos = full_text.find(marker)
+    if marker_pos < 0:
+        return full_text, None
+
+    cutoff_pos = marker_pos + len(marker)
+    visible_text = full_text[:cutoff_pos].rstrip()
+    hidden_text = full_text[cutoff_pos:].lstrip("\n")
+    if not hidden_text:
+        return full_text, None
+
+    if expanded:
+        text = f"{visible_text}\n\n{hidden_text}"
+        button_label = i18n.t(lang, "SYS_HOW_BOT_WORKS_BTN_HIDE")
+        callback_data = "about_collapse"
+    else:
+        text = visible_text
+        button_label = i18n.t(lang, "SYS_HOW_BOT_WORKS_BTN_EXPAND")
+        callback_data = "about_expand"
+
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=button_label, callback_data=callback_data)]],
+    )
+    return text, markup
+
+
 @dp.message(F.text.in_(i18n.all_labels("SYS_HOW_BOT_WORKS")))
 async def system_how_bot_works(message: Message):
     lang = get_user_lang(message.chat.id) or "ru"
-    is_admin_user = is_admin(message.from_user.id) if message.from_user else False
-    await message.answer(
-        i18n.t(lang, "SYS_HOW_BOT_WORKS_TEXT"),
-        reply_markup=build_system_menu_kb(
-            lang,
-            is_admin=is_admin_user,
-            inversion_enabled=get_inversion_enabled() if is_admin_user else False,
-        ),
-    )
+    text, inline_markup = _build_sys_how_bot_works_payload(lang, expanded=False)
+    await message.answer(text, reply_markup=inline_markup)
+
+
+@dp.callback_query(F.data == "about_expand")
+async def about_expand_callback(callback: CallbackQuery) -> None:
+    await callback.answer()
+    if not callback.message:
+        return
+    lang = _resolve_user_lang(callback.from_user.id if callback.from_user else None)
+    text, inline_markup = _build_sys_how_bot_works_payload(lang, expanded=True)
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text(text, reply_markup=inline_markup)
+
+
+@dp.callback_query(F.data == "about_collapse")
+async def about_collapse_callback(callback: CallbackQuery) -> None:
+    await callback.answer()
+    if not callback.message:
+        return
+    lang = _resolve_user_lang(callback.from_user.id if callback.from_user else None)
+    text, inline_markup = _build_sys_how_bot_works_payload(lang, expanded=False)
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text(text, reply_markup=inline_markup)
 
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_PAY")))
