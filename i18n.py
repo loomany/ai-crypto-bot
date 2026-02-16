@@ -71,6 +71,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SYS_TEST_PD": "🧪 Тест Pump/Dump (всем)",
         "SYS_USERS": "👥 Пользователи",
         "SYS_PAY": "💳 Оплатить подписку",
+        "BTN_BOT_HOW_IT_WORKS": "🧠 Как работает бот",
         "INVERSION_TOGGLE_BUTTON": "🔁 Инверсия: {state}",
         "INVERSION_STATE_ON": "ВКЛ",
         "INVERSION_STATE_OFF": "ВЫКЛ",
@@ -242,6 +243,67 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "STATS_PRO_RISK_NOTE": "⚠️ Рекомендуемый риск: 0.5–1% депозита на сделку",
         "STATS_PRO_LEVERAGE_NOTE": "ℹ️ Плечо выбирается трейдером",
         "SYSTEM_SECTION_TEXT": "ℹ️ Раздел: О системе",
+        "ABOUT_BOT_LOGIC_TEXT": (
+            "🧠 Как работает Krypton AI\n\n"
+            "Бот анализирует рынок по нескольким слоям:\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "📊 1) Рыночный контекст (BTC)\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Определяется режим рынка:\n"
+            "• TREND — трендовый рынок\n"
+            "• CHOP — пила / боковик\n"
+            "• SQUEEZE — импульс\n"
+            "• RISK-OFF — повышенная волатильность\n\n"
+            "В зависимости от режима бот может блокировать LONG или SHORT.\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "📈 2) Структура и тренд\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Анализ:\n"
+            "• EMA 21 / 50\n"
+            "• Наклон (slope)\n"
+            "• Pullback к EMA\n"
+            "• Реакция на POI\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "📍 3) Зона интереса (POI)\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Бот ищет реакцию на ключевую зону/ликвидность.\n"
+            "Вход НЕ мгновенный — требуется подтверждение на 5–15m.\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "🎯 4) Risk / Reward\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Минимальный RR: ≥ 1:2\n"
+            "SL рассчитывается динамически через ATR (стоп не фиксированный).\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "⚙ 5) Score (0–100)\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Баллы начисляются за:\n"
+            "• Глобальный тренд\n"
+            "• Локальный тренд\n"
+            "• POI реакцию\n"
+            "• Ликвидность\n"
+            "• Объём\n"
+            "• RSI\n"
+            "• ATR\n"
+            "• EMA-согласование\n"
+            "• Рыночный режим\n\n"
+            "Score ≥ 90 — основной фокус\n"
+            "Score 80–89 — повышенный риск\n"
+            "Score < 80 — только анализ рынка\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "⚡ 6) Плечо (логика x10)\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Модель рассчитана под умеренное плечо ~x10.\n"
+            "Важно: бот НЕ знает ваше фактическое плечо — риск зависит от вашего риск-менеджмента.\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "⏳ 7) TTL (время жизни)\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Если вход не подтверждён — сценарий закрывается без сделки (это не SL).\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "📌 Важно\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Бот ищет вероятностные сценарии и не гарантирует прибыль.\n"
+            "Результат зависит от дисциплины и риск-менеджмента."
+        ),
         "BACK_TO_MAIN_TEXT": "Возвращаемся в главное меню.",
         "ALREADY_ON": "Уже включено.",
         "ALREADY_OFF": "Уже выключено.",
@@ -886,6 +948,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SYS_TEST_PD": "🧪 Test Pump/Dump (all)",
         "SYS_USERS": "👥 Users",
         "SYS_PAY": "💳 Buy subscription",
+        "BTN_BOT_HOW_IT_WORKS": "🧠 How the bot works",
         "INVERSION_TOGGLE_BUTTON": "🔁 Inversion: {state}",
         "INVERSION_STATE_ON": "ON",
         "INVERSION_STATE_OFF": "OFF",
@@ -1063,6 +1126,56 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "STATS_PRO_RISK_NOTE": "⚠️ Recommended risk: 0.5–1% of equity per trade",
         "STATS_PRO_LEVERAGE_NOTE": "ℹ️ Leverage is chosen by the trader",
         "SYSTEM_SECTION_TEXT": "ℹ️ Section: System",
+        "ABOUT_BOT_LOGIC_TEXT": (
+            "🧠 How Krypton AI works\n\n"
+            "The bot analyzes the market in layers:\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "📊 1) BTC market context\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Market regimes:\n"
+            "• TREND — trending market\n"
+            "• CHOP — range / chop\n"
+            "• SQUEEZE — impulse move\n"
+            "• RISK-OFF — high volatility\n\n"
+            "Depending on the regime, the bot may block LONG or SHORT.\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "📈 2) Structure & trend\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "• EMA 21 / 50\n"
+            "• Slope\n"
+            "• Pullback to EMA\n"
+            "• Reaction to POI\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "📍 3) POI (key zone)\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Entry is NOT instant — it requires 5–15m confirmation.\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "🎯 4) Risk / Reward\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Minimum RR: ≥ 1:2\n"
+            "SL is dynamic via ATR (not fixed).\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "⚙ 5) Score (0–100)\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Score is built from:\n"
+            "global/local trend, POI reaction, liquidity sweep, volume, RSI, ATR, EMA alignment, market regime.\n\n"
+            "Score ≥ 90 — main focus\n"
+            "Score 80–89 — higher risk\n"
+            "Score < 80 — market analysis only\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "⚡ 6) Leverage (x10 logic)\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "The model is designed around moderate leverage ~x10.\n"
+            "The bot does NOT know your actual leverage — risk depends on your risk management.\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "⏳ 7) TTL (lifetime)\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "If entry is not confirmed — scenario expires (not a loss).\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "📌 Note\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "The bot finds probabilistic setups and does not guarantee profit."
+        ),
         "BACK_TO_MAIN_TEXT": "Returning to the main menu.",
         "ALREADY_ON": "Already enabled.",
         "ALREADY_OFF": "Already disabled.",
