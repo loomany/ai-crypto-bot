@@ -2403,14 +2403,20 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
 
     if access_level == "PREVIEW":
         lines = [
-            "🔒 PREVIEW (Real-time)",
+            i18n.t(lang, "ARCHIVE_DETAIL_PREVIEW_TITLE"),
             "",
-            f"📌 {event.get('symbol')} {event.get('side')} · Score {score}",
+            i18n.t(
+                lang,
+                "ARCHIVE_DETAIL_HEADER_LINE",
+                symbol=event.get("symbol"),
+                side=event.get("side"),
+                score=score,
+            ),
             f"🕒 {_format_event_time(int(event.get('ts', 0)))}",
             "",
             f"⏱ TTL: {ttl_hours}h",
             "",
-            "Levels are available with subscription:" if lang == "en" else "Уровни доступны по подписке:",
+            i18n.t(lang, "ARCHIVE_DETAIL_SUBSCRIPTION_LEVELS"),
             "",
             "• POI: *** – ***",
             "• SL: ***",
@@ -2419,16 +2425,20 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
             "",
             status_line,
             "",
-            "👉 Buy subscription — to unlock levels instantly" if lang == "en" else "👉 Buy subscription — чтобы видеть уровни сразу",
-            f"🔓 Full access unlocks in {_remaining_delay_text(event, lang)}"
-            if lang == "en"
-            else f"🔓 Полный доступ откроется через {_remaining_delay_text(event, lang)}",
+            i18n.t(lang, "ARCHIVE_DETAIL_BUY_SUB_PROMPT"),
+            i18n.t(lang, "ARCHIVE_DETAIL_UNLOCK_DELAY", delay=_remaining_delay_text(event, lang)),
         ]
         return "\n".join(lines)
 
     breakdown_lines = _signal_breakdown_lines(event, lang)
     lines = [
-        f"📌 {event.get('symbol')} {event.get('side')} · Score {score}",
+        i18n.t(
+            lang,
+            "ARCHIVE_DETAIL_HEADER_LINE",
+            symbol=event.get("symbol"),
+            side=event.get("side"),
+            score=score,
+        ),
         f"🕒 {_format_event_time(int(event.get('ts', 0)))}",
         "",
         f"POI: {float(event.get('poi_low')):.4f} – {float(event.get('poi_high')):.4f}",
@@ -2436,7 +2446,7 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
         f"TP1: {float(event.get('tp1')):.4f}",
         f"TP2: {float(event.get('tp2')):.4f}",
         "",
-        f"⏱ Scenario lifetime: {ttl_hours}h",
+        i18n.t(lang, "ARCHIVE_DETAIL_LIFETIME", hours=ttl_hours),
         "",
         status_line,
     ]
@@ -2444,7 +2454,7 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
     if status_raw in {"TP1", "TP2", "TP", "BE", "SL"} and max_profit_pct > 0:
         lines.append(f"📈 Max PnL: +{max_profit_pct:.1f}%")
     if breakdown_lines:
-        lines.extend(["", "🧠 Why this signal was chosen:", *breakdown_lines])
+        lines.extend(["", i18n.t(lang, "ARCHIVE_DETAIL_REASON_HEADER", score=score), *breakdown_lines])
     return "\n".join(lines)
 
 
@@ -5445,14 +5455,14 @@ def _format_preview_signal_from_payload(signal: Dict[str, Any], lang: str) -> st
     result_line = "📌 Result: ⏰ In progress" if lang == "en" else "📌 Итог: ⏰ В процессе"
     return "\n".join(
         [
-            "🔒 PREVIEW (Real-time)",
+            i18n.t(lang, "ARCHIVE_DETAIL_PREVIEW_TITLE"),
             "",
-            f"📌 {symbol} {side} · Score {score}",
+            i18n.t(lang, "ARCHIVE_DETAIL_HEADER_LINE", symbol=symbol, side=side, score=score),
             f"🕒 {_format_event_time(int(time.time()))}",
             "",
             f"⏱ TTL: {ttl_hours}h",
             "",
-            "Levels are available with subscription:" if lang == "en" else "Уровни доступны по подписке:",
+            i18n.t(lang, "ARCHIVE_DETAIL_SUBSCRIPTION_LEVELS"),
             "",
             "• POI: *** – ***",
             "• SL: ***",
@@ -5461,8 +5471,8 @@ def _format_preview_signal_from_payload(signal: Dict[str, Any], lang: str) -> st
             "",
             result_line,
             "",
-            "👉 Buy subscription — to unlock levels instantly" if lang == "en" else "👉 Buy subscription — чтобы видеть уровни сразу",
-            f"🔓 Full access unlocks in {remaining}" if lang == "en" else f"🔓 Полный доступ откроется через {remaining}",
+            i18n.t(lang, "ARCHIVE_DETAIL_BUY_SUB_PROMPT"),
+            i18n.t(lang, "ARCHIVE_DETAIL_UNLOCK_DELAY", delay=remaining),
         ]
     )
 
