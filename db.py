@@ -929,7 +929,10 @@ def get_history_winrate_summary(
         totals = summary["totals"]
         if str(row["outcome"] or "").upper() == "BE":
             try:
-                be_level_sum += float(row["be_level_pct"] or 0.0)
+                raw_be_level = float(row["be_level_pct"] or 0.0)
+                # Older rows may have 0 in this field because the column default is 0.
+                # Treat such values as the baseline BE threshold used in the bot.
+                be_level_sum += raw_be_level if raw_be_level > 0 else 8.0
                 be_level_count += 1
             except (TypeError, ValueError):
                 pass
