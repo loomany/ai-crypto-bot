@@ -1361,7 +1361,6 @@ def _pd_locked_detail_payload(*, user_id: int, lang: str, row: dict[str, Any]) -
     detail_kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=i18n.t(lang, "btn_upgrade"), callback_data="sub_paywall:pump")],
-            [InlineKeyboardButton(text="🔄 Update", callback_data=f"history_pd_locked:{int(row.get('id') or 0)}")],
             [InlineKeyboardButton(text=i18n.t(lang, "btn_back"), callback_data=_pd_history_back_callback(user_id))],
         ]
     )
