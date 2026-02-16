@@ -164,6 +164,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Нажимая «✅ Принять», вы подтверждаете согласие с условиями."
         ),
         "PAYMENT_TEXT_TRX": (
+            "9$ - 5 дней\n"
+            "30$ - 30 дней\n"
+            "99$ - 90 дней\n"
+            "299$ - 365 дней\n\n"
             "Отправь TRX (TRON) на адрес:\n"
             "{wallet}\n\n"
             "Твой ID (укажи в комментарии / чеке):\n"
@@ -919,6 +923,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "By clicking «✅ Accept», you confirm agreement with the terms."
         ),
         "PAYMENT_TEXT_TRX": (
+            "$9 - 5 days\n"
+            "$30 - 30 days\n"
+            "$99 - 90 days\n"
+            "$299 - 365 days\n\n"
             "Send TRX (TRON) to the address:\n"
             "{wallet}\n\n"
             "Your ID (include in comment / receipt):\n"
