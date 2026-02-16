@@ -151,7 +151,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PERIOD_30D": "30 дней",
         "PERIOD_ALL": "Все время",
         "OFFER_TEXT": (
-            "🧾 Оферта на подписку (30 дней)\n\n"
+            "🧾 Оферта на подписку (5/30/90/365 дней)\n\n"
             "1) Подписка предоставляет доступ к функционалу бота и сигналам сроком на 30 (тридцать) дней с момента активации.\n"
             "2) Сигналы и аналитика не гарантируют прибыль и могут приводить к убыткам.\n"
             "3) Бот не является финансовым консультантом и не дает персональных рекомендаций “войти/выйти”. "
@@ -906,14 +906,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PERIOD_30D": "30 days",
         "PERIOD_ALL": "All time",
         "OFFER_TEXT": (
-            "🧾 Subscription offer (30 days)\n\n"
-            "1) The subscription grants access to the bot functionality and signals for 30 days from activation.\n"
+            "🧾 Subscription offer (5/30/90/365 days)\n\n"
+            "1) The subscription grants access to bot functionality and signals for 30 (thirty) days from activation.\n"
             "2) Signals and analytics do not guarantee profit and may result in losses.\n"
-            "3) The bot is not a financial advisor and does not provide personalized recommendations to enter/exit. "
+            "3) The bot is not a financial advisor and does not provide personalized enter/exit recommendations. "
             "Materials are for informational purposes only.\n"
-            "4) Scenarios are generated using AI analytics that automatically scan the market using technical analysis "
-            "(candles/volume/volatility/quality filters) similar to a professional trader’s approach.\n"
-            "5) All responsibility for trading decisions and risks lies with the user.\n"
+            "4) Scenarios are generated using AI analytics that automatically scans the market by technical analysis "
+            "algorithms (candles/volume/volatility/quality filters), close to a professional trader approach.\n"
+            "5) Full responsibility for trading decisions and risks lies entirely with the user.\n"
             "6) Subscription payment means acceptance of the offer terms.\n"
             "7) Payments are accepted only in TRX (TRON network).\n\n"
             "By clicking «✅ Accept», you confirm agreement with the terms."
