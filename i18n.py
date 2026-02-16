@@ -152,7 +152,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PERIOD_ALL": "Все время",
         "OFFER_TEXT": (
             "🧾 Оферта на подписку (5/30/90/365 дней)\n\n"
-            "1) Подписка предоставляет доступ к функционалу бота и сигналам сроком на 30 (тридцать) дней с момента активации.\n"
+            "1) Подписка предоставляет доступ к функционалу бота и сигналам с момента активации выбранного периода.\n"
             "2) Сигналы и аналитика не гарантируют прибыль и могут приводить к убыткам.\n"
             "3) Бот не является финансовым консультантом и не дает персональных рекомендаций “войти/выйти”. "
             "Материалы носят информационный характер.\n"
@@ -911,7 +911,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PERIOD_ALL": "All time",
         "OFFER_TEXT": (
             "🧾 Subscription offer (5/30/90/365 days)\n\n"
-            "1) The subscription grants access to bot functionality and signals for 30 (thirty) days from activation.\n"
+            "1) The subscription grants access to bot functionality and signals from the moment the selected period is activated.\n"
             "2) Signals and analytics do not guarantee profit and may result in losses.\n"
             "3) The bot is not a financial advisor and does not provide personalized enter/exit recommendations. "
             "Materials are for informational purposes only.\n"
