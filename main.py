@@ -118,6 +118,10 @@ from db import (
     get_signal_event,
     get_signal_event_by_message,
     get_signal_by_id,
+    insert_pumpdump_event,
+    get_pumpdump_history,
+    count_pumpdump_history,
+    get_pumpdump_event_by_id,
     update_signal_event_refresh,
     update_signal_event_expanded,
     update_signal_event_status_by_id,
@@ -1291,6 +1295,22 @@ def _format_history_item(row: dict[str, Any], lang: str, *, access_level: str = 
     )
 
 
+def _format_pd_list_row(row: dict[str, Any]) -> str:
+    ts_value = _safe_int(row.get("ts") or row.get("created_at"), 0)
+    if ts_value > 0:
+        dt_local = datetime.fromtimestamp(ts_value, tz=timezone.utc).astimezone(ALMATY_TZ)
+        time_prefix = dt_local.strftime("%H:%M/%d.%m")
+    else:
+        time_prefix = "--:--/--.--"
+    side_raw = str(row.get("side") or "").upper()
+    is_pump = side_raw == "PUMP"
+    icon = "🚀" if is_pump else "🔻"
+    delta_5m = float(row.get("delta_5m") or 0.0)
+    vol_mult = float(row.get("vol_mult") or 0.0)
+    symbol_text = _short_symbol(str(row.get("symbol") or "—"))
+    return f"{time_prefix} | {icon} | Δ{delta_5m:+.1f}% | x{vol_mult:.1f} | {symbol_text}"
+
+
 def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str:
     totals = history_summary.get("totals", {}) if isinstance(history_summary, dict) else {}
     metrics = history_summary.get("metrics", {}) if isinstance(history_summary, dict) else {}
@@ -1331,8 +1351,29 @@ def _build_history_text(
     lang: str,
     history_summary: dict[str, Any],
     include_legacy: bool,
+    history_type: str = "ai",
 ) -> str:
+    del include_legacy
     period_label = _period_label(time_window, lang)
+    if history_type == "pd":
+        lines = [
+            i18n.t(lang, "PD_HISTORY_TITLE", period=period_label),
+            i18n.t(lang, "page_total", page=page, pages=pages, total=total),
+            "",
+            "━━━━━━━━━━━━━━━━",
+            i18n.t(lang, "PD_EXPLAIN_TITLE"),
+            "━━━━━━━━━━━━━━━━",
+            i18n.t(lang, "PD_EXPLAIN_LINE_1"),
+            i18n.t(lang, "PD_EXPLAIN_LINE_2"),
+            i18n.t(lang, "PD_EXPLAIN_LINE_3"),
+        ]
+        line_4 = i18n.t(lang, "PD_EXPLAIN_LINE_4")
+        if line_4:
+            lines.append(line_4)
+        if not rows:
+            lines.extend(["", i18n.t(lang, "HISTORY_EMPTY_PERIOD")])
+        return "\n".join(lines)
+
     lines = [
         i18n.t(lang, "history_title", period=period_label),
         i18n.t(lang, "page_total", page=page, pages=pages, total=total),
@@ -1376,18 +1417,17 @@ def _history_nav_kb(
         event_id = _safe_int(event.get("id"), 0)
         if event_id <= 0:
             continue
-        kb_rows.append(
-            [
-                InlineKeyboardButton(
-                    text=_format_history_item(
-                        event,
-                        lang,
-                        access_level=get_signal_access_level(viewer_user_id, _event_created_at_utc(event)),
-                    ),
-                    callback_data=f"history_open:{event_id}",
-                )
-            ]
+        item_text = (
+            _format_history_item(
+                event,
+                lang,
+                access_level=get_signal_access_level(viewer_user_id, _event_created_at_utc(event)),
+            )
+            if history_prefix == "history"
+            else _format_pd_list_row(event)
         )
+        callback_data = f"history_open:{event_id}" if history_prefix == "history" else f"history_pd_open:{event_id}"
+        kb_rows.append([InlineKeyboardButton(text=item_text, callback_data=callback_data)])
 
     nav_row: list[InlineKeyboardButton] = []
     if page > 1:
@@ -1424,22 +1464,29 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         return
     lang = _resolve_user_lang(callback.from_user.id)
     include_legacy = allow_legacy_for_user(is_admin_user=is_admin(callback.from_user.id))
-    module = "ai_signals" if history_type == "ai" else "pumpdump"
-    page_value, pages, total, rows = _get_history_page(
-        time_window=time_window,
-        page=page,
-        include_legacy=include_legacy,
-        module=module,
-    )
-
-    rows = _dedupe_signals(rows)
-
-    history_summary = get_history_winrate_summary(
-        time_window=time_window,
-        user_id=None,
-        include_legacy=include_legacy,
-        module=module,
-    )
+    history_summary: dict[str, Any] = {}
+    if history_type == "ai":
+        module = "ai_signals"
+        page_value, pages, total, rows = _get_history_page(
+            time_window=time_window,
+            page=page,
+            include_legacy=include_legacy,
+            module=module,
+        )
+        rows = _dedupe_signals(rows)
+        history_summary = get_history_winrate_summary(
+            time_window=time_window,
+            user_id=None,
+            include_legacy=include_legacy,
+            module=module,
+        )
+    else:
+        page_size = 12
+        total = count_pumpdump_history(time_window=time_window)
+        pages = max(1, (total + page_size - 1) // page_size)
+        page_value = max(1, min(page, pages))
+        offset = (page_value - 1) * page_size
+        rows = [dict(row) for row in get_pumpdump_history(time_window=time_window, limit=page_size, offset=offset)]
 
     _set_history_context(
         callback.from_user.id,
@@ -1457,6 +1504,7 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         lang=lang,
         history_summary=history_summary,
         include_legacy=include_legacy,
+        history_type=history_type,
     )
     history_prefix = "history" if history_type == "ai" else "history_pd"
     markup = _history_nav_kb(
@@ -2741,6 +2789,62 @@ async def sig_open(callback: CallbackQuery):
                 f"Ошибка открытия: {type(exc).__name__}",
                 show_alert=True,
             )
+
+
+@dp.callback_query(F.data.regexp(r"^history_pd_open:\d+$"))
+async def history_pd_open(callback: CallbackQuery):
+    if callback.message is None or callback.from_user is None:
+        return
+    with suppress(Exception):
+        await callback.answer()
+    lang = get_user_lang(callback.from_user.id) or "ru"
+    try:
+        event_id = int((callback.data or "").split(":", 1)[1])
+    except (ValueError, IndexError):
+        return
+
+    row = get_pumpdump_event_by_id(event_id)
+    if row is None:
+        with suppress(Exception):
+            await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+        return
+    event = dict(row)
+    ts_value = _safe_int(event.get("ts") or event.get("created_at"), 0)
+    dt_text = "—"
+    if ts_value > 0:
+        dt_text = datetime.fromtimestamp(ts_value, tz=timezone.utc).astimezone(ALMATY_TZ).strftime("%d.%m %H:%M")
+    symbol_text = str(event.get("symbol") or "").upper()
+    side_raw = str(event.get("side") or "").upper()
+    is_pump = side_raw == "PUMP"
+    side_icon = "🚀" if is_pump else "🔻"
+    side_text = i18n.t(lang, "PD_SIDE_PUMP" if is_pump else "PD_SIDE_DUMP")
+
+    details = [
+        i18n.t(lang, "PD_EVENT_TITLE"),
+        i18n.t(lang, "PD_EVENT_SYMBOL", symbol=symbol_text),
+        i18n.t(lang, "PD_EVENT_TYPE", icon=side_icon, side=side_text),
+        i18n.t(lang, "PD_EVENT_TIME", time=dt_text),
+        "",
+        i18n.t(lang, "PD_EVENT_DELTA_1M", value=f"{float(event.get('delta_1m') or 0.0):+.1f}"),
+        i18n.t(lang, "PD_EVENT_DELTA_5M", value=f"{float(event.get('delta_5m') or 0.0):+.1f}"),
+        i18n.t(lang, "PD_EVENT_VOLUME", value=f"{float(event.get('volume_5m_usdt') or 0.0):,.0f}".replace(",", " ")),
+        i18n.t(lang, "PD_EVENT_VOL_MULT", value=f"{float(event.get('vol_mult') or 0.0):.1f}"),
+    ]
+
+    back_callback = "history_pd:all:page=1"
+    context = _get_history_context(callback.from_user.id)
+    if context:
+        stored_window, page, _, history_type = context
+        if history_type == "pd":
+            back_callback = f"history_pd:{stored_window}:page={max(1, page)}"
+
+    detail_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [build_binance_futures_button(lang, symbol_text)],
+            [InlineKeyboardButton(text=i18n.t(lang, "PD_BACK_TO_LIST"), callback_data=back_callback)],
+        ]
+    )
+    await callback.message.edit_text("\n".join(details), reply_markup=detail_kb)
 
 
 @dp.callback_query(F.data == "hist_back")
@@ -5334,6 +5438,18 @@ def build_binance_button(lang: str, symbol: str) -> InlineKeyboardButton:
     )
 
 
+def _binance_futures_url(symbol: str) -> str:
+    normalized = str(symbol or "").upper().replace("/", "").strip()
+    return f"https://www.binance.com/en/futures/{normalized}"
+
+
+def build_binance_futures_button(lang: str, symbol: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(
+        text=i18n.t(lang, "btn_binance"),
+        url=_binance_futures_url(symbol),
+    )
+
+
 def _signal_inline_kb(
     *,
     lang: str,
@@ -6177,6 +6293,20 @@ async def _deliver_pumpdump_signal_stats(
     paywall_count = 0
     error_count = 0
     date_key = _get_pumpdump_date_key()
+    ts_value = int(float(signal.get("detected_at") or time.time()))
+    side_value = "PUMP" if str(signal.get("type") or "").lower() == "pump" else "DUMP"
+    try:
+        insert_pumpdump_event(
+            ts=ts_value,
+            symbol=symbol,
+            side=side_value,
+            delta_1m=float(signal.get("change_1m") or 0.0),
+            delta_5m=float(signal.get("change_5m") or 0.0),
+            volume_5m_usdt=float(signal.get("volume_5m_usdt") or 0.0),
+            vol_mult=float(signal.get("volume_mul") or 0.0),
+        )
+    except Exception as exc:
+        _log_throttled("pd_event_insert", "insert_pumpdump_event failed: %s", exc)
 
     for chat_id in subscribers:
         try:

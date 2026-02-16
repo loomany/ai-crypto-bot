@@ -145,6 +145,35 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signal_events ADD COLUMN final_notified INTEGER NOT NULL DEFAULT 0")
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS pumpdump_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                delta_1m REAL NOT NULL,
+                delta_5m REAL NOT NULL,
+                volume_5m_usdt REAL NOT NULL,
+                vol_mult REAL NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pumpdump_events_ts ON pumpdump_events(ts DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pumpdump_events_symbol_ts ON pumpdump_events(symbol, ts DESC)"
+        )
+        cur = conn.execute("PRAGMA table_info(pumpdump_events)")
+        pd_cols = {row["name"] for row in cur.fetchall()}
+        if "created_at" not in pd_cols:
+            conn.execute("ALTER TABLE pumpdump_events ADD COLUMN created_at INTEGER")
+            conn.execute(
+                "UPDATE pumpdump_events SET created_at = COALESCE(ts, CAST(strftime('%s','now') AS INTEGER))"
+            )
+
+        conn.execute(
+            """
             UPDATE signal_events
             SET state = 'WAITING_ENTRY'
             WHERE COALESCE(state, '') = '' AND status IN ('OPEN', 'ACTIVE')
@@ -1195,6 +1224,132 @@ def count_signal_events(
     finally:
         conn.close()
 
+
+
+
+def insert_pumpdump_event(
+    *,
+    ts: int,
+    symbol: str,
+    side: str,
+    delta_1m: float,
+    delta_5m: float,
+    volume_5m_usdt: float,
+    vol_mult: float,
+) -> int:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO pumpdump_events (
+                ts, symbol, side, delta_1m, delta_5m, volume_5m_usdt, vol_mult, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(ts),
+                str(symbol or "").upper(),
+                str(side or "").upper(),
+                float(delta_1m),
+                float(delta_5m),
+                float(volume_5m_usdt),
+                float(vol_mult),
+                now,
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    finally:
+        conn.close()
+
+
+def get_pumpdump_history(
+    *,
+    time_window: str,
+    limit: int = 10,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    since_ts = _history_since_ts(time_window)
+    conn = get_conn()
+    try:
+        clauses: list[str] = []
+        params: list[object] = []
+        if since_ts is not None:
+            clauses.append("ts >= ?")
+            params.append(int(since_ts))
+        _append_blocked_symbols_filter(clauses, params)
+        where_clause = "WHERE " + " AND ".join(clauses) if clauses else ""
+        params.extend([int(limit), int(offset)])
+        cur = conn.execute(
+            f"""
+            SELECT
+                id,
+                ts,
+                symbol,
+                side,
+                delta_1m,
+                delta_5m,
+                volume_5m_usdt,
+                vol_mult,
+                created_at
+            FROM pumpdump_events
+            {where_clause}
+            ORDER BY ts DESC
+            LIMIT ? OFFSET ?
+            """,
+            params,
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def count_pumpdump_history(*, time_window: str) -> int:
+    since_ts = _history_since_ts(time_window)
+    conn = get_conn()
+    try:
+        clauses: list[str] = []
+        params: list[object] = []
+        if since_ts is not None:
+            clauses.append("ts >= ?")
+            params.append(int(since_ts))
+        _append_blocked_symbols_filter(clauses, params)
+        where_clause = "WHERE " + " AND ".join(clauses) if clauses else ""
+        cur = conn.execute(
+            f"SELECT COUNT(*) AS cnt FROM pumpdump_events {where_clause}",
+            params,
+        )
+        row = cur.fetchone()
+        return int(row["cnt"]) if row is not None else 0
+    finally:
+        conn.close()
+
+
+def get_pumpdump_event_by_id(event_id: int) -> sqlite3.Row | None:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT
+                id,
+                ts,
+                symbol,
+                side,
+                delta_1m,
+                delta_5m,
+                volume_5m_usdt,
+                vol_mult,
+                created_at
+            FROM pumpdump_events
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (int(event_id),),
+        )
+        return cur.fetchone()
+    finally:
+        conn.close()
 
 def get_last_signal_event_by_module(module: str) -> Optional[sqlite3.Row]:
     conn = get_conn()
