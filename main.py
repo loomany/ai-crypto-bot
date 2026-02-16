@@ -4897,6 +4897,20 @@ async def subscription_contact_callback(callback: CallbackQuery):
         await callback.message.answer(text)
 
 
+@dp.message(F.text.in_(i18n.all_labels("SYS_HOW_BOT_WORKS")))
+async def system_how_bot_works(message: Message):
+    lang = get_user_lang(message.chat.id) or "ru"
+    is_admin_user = is_admin(message.from_user.id) if message.from_user else False
+    await message.answer(
+        i18n.t(lang, "SYS_HOW_BOT_WORKS_TEXT"),
+        reply_markup=build_system_menu_kb(
+            lang,
+            is_admin=is_admin_user,
+            inversion_enabled=get_inversion_enabled() if is_admin_user else False,
+        ),
+    )
+
+
 @dp.message(F.text.in_(i18n.all_labels("SYS_PAY")))
 async def subscription_offer_message(message: Message):
     if message.from_user is None:
