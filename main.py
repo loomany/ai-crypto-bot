@@ -2537,7 +2537,9 @@ def _format_archive_detail_view(event: dict, lang: str, *, expanded: bool, acces
     full_text = _format_archive_detail(event, lang, access_level=access_level)
     if expanded or access_level == "PREVIEW":
         return full_text
-    compact_lines = full_text.split("\n")[:6]
+    # Keep TP levels visible in compact mode so users can see targets
+    # without opening the full archive card.
+    compact_lines = full_text.split("\n")[:8]
     return "\n".join(compact_lines)
 
 
