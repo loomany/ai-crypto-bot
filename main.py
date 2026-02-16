@@ -1235,7 +1235,7 @@ def _format_signal_list_row(
         time_prefix = dt_local.strftime("%H:%M/%d.%m")
     else:
         time_prefix = "--:--/--.--"
-    row_core = f"{side_prefix} {icon_value} {status_label} | Score {score_value} | {symbol_value}"
+    row_core = f"{side_prefix} {icon_value} | Score {score_value} | {symbol_value}"
     row_text = f"{time_prefix} | {row_core}"
     if access_level == "PREVIEW":
         return f"🔒 {row_text}"
