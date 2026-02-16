@@ -169,6 +169,7 @@ from keyboards import (
     build_offer_inline_kb,
     build_payment_inline_kb,
     build_system_menu_kb,
+    build_how_bot_works_inline_kb,
     pumpdump_inline_kb,
     stats_inline_kb,
     stats_period_inline_kb,
@@ -178,6 +179,36 @@ from signal_inversion import apply_inversion
 
 logger = logging.getLogger(__name__)
 DEFAULT_LANG = "ru"
+
+
+def _how_bot_works_expand_state_key(user_id: int) -> str:
+    return f"sys_how_expand:{int(user_id)}"
+
+
+def _get_how_bot_works_expanded(user_id: int) -> bool:
+    raw = get_state(_how_bot_works_expand_state_key(user_id), "0")
+    return str(raw).strip() == "1"
+
+
+def _set_how_bot_works_expanded(user_id: int, expanded: bool) -> None:
+    set_state(_how_bot_works_expand_state_key(user_id), "1" if expanded else "0")
+
+
+def _split_how_bot_works_text(full_text: str, lang: str) -> tuple[str, str]:
+    marker = "контекст." if str(lang).lower() == "ru" else "context."
+    idx = full_text.find(marker)
+    if idx < 0:
+        return full_text, full_text
+    cut = idx + len(marker)
+    collapsed = full_text[:cut].rstrip()
+    expanded = full_text
+    return collapsed, expanded
+
+
+def _render_how_bot_works_text(*, lang: str, expanded: bool) -> str:
+    full_text = i18n.t(lang, "SYS_HOW_BOT_WORKS_TEXT")
+    collapsed, expanded_text = _split_how_bot_works_text(full_text, lang)
+    return expanded_text if expanded else collapsed
 _LOG_THROTTLE_SEC = 30.0
 _LAST_LOG_TS: Dict[str, float] = {}
 
@@ -4900,14 +4931,29 @@ async def subscription_contact_callback(callback: CallbackQuery):
 @dp.message(F.text.in_(i18n.all_labels("SYS_HOW_BOT_WORKS")))
 async def system_how_bot_works(message: Message):
     lang = get_user_lang(message.chat.id) or "ru"
-    is_admin_user = is_admin(message.from_user.id) if message.from_user else False
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    expanded = _get_how_bot_works_expanded(user_id)
     await message.answer(
-        i18n.t(lang, "SYS_HOW_BOT_WORKS_TEXT"),
-        reply_markup=build_system_menu_kb(
-            lang,
-            is_admin=is_admin_user,
-            inversion_enabled=get_inversion_enabled() if is_admin_user else False,
-        ),
+        _render_how_bot_works_text(lang=lang, expanded=expanded),
+        reply_markup=build_how_bot_works_inline_kb(lang, expanded=expanded),
+    )
+
+
+@dp.callback_query(F.data.regexp(r"^sys_how_toggle:(expand|collapse)$"))
+async def system_how_bot_works_toggle(callback: CallbackQuery):
+    if callback.from_user is None or callback.message is None:
+        await callback.answer()
+        return
+
+    lang = get_user_lang(callback.from_user.id) or "ru"
+    action = (callback.data or "").split(":")[-1]
+    expanded = action == "expand"
+    _set_how_bot_works_expanded(callback.from_user.id, expanded)
+
+    await callback.answer()
+    await callback.message.edit_text(
+        _render_how_bot_works_text(lang=lang, expanded=expanded),
+        reply_markup=build_how_bot_works_inline_kb(lang, expanded=expanded),
     )
 
 

@@ -191,6 +191,22 @@ def build_about_inline_kb(
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
+def build_how_bot_works_inline_kb(lang: str, *, expanded: bool) -> InlineKeyboardMarkup:
+    toggle_key = "BTN_COLLAPSE" if expanded else "BTN_EXPAND"
+    toggle_action = "collapse" if expanded else "expand"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, toggle_key),
+                    callback_data=f"sys_how_toggle:{toggle_action}",
+                )
+            ],
+            [InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data="about_back")],
+        ]
+    )
+
+
 def build_offer_inline_kb(lang: str, back_callback: str = "system_back") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
