@@ -2391,28 +2391,34 @@ def _remaining_delay_text(event: dict, lang: str) -> str:
 
 def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
     score = int(event.get("score", 0))
-    status_lines = _format_outcome_block(event, lang)
-    status_line = status_lines[0] if status_lines else ("📌 Result: —" if lang == "en" else "📌 Итог: —")
+    symbol_raw = str(event.get("symbol") or "").upper().replace(" ", "")
+    if symbol_raw.endswith("USDT"):
+        symbol_pair = f"{symbol_raw[:-4]}/USDT"
+    elif "/" in symbol_raw:
+        base, quote = symbol_raw.split("/", 1)
+        symbol_pair = f"{base}/USDT" if quote == "USDT" else symbol_raw
+    else:
+        symbol_pair = symbol_raw
+
+    side = _signal_side_label(event.get("side"))
+    status_key = _normalize_history_status(str(event.get("result") or event.get("status") or ""))
+    status_line = _history_status_label(status_key, lang)
+    status_with_side_line = f"{status_line} | {side}"
+
     status_raw = _normalize_signal_status(str(event.get("result") or event.get("status") or ""))
     if status_raw == "BE":
         status_line = (
-            f"📌 Result: 🟢 BE (+{float(event.get('be_level_pct') or 8.0):.0f}%)"
-            if lang == "en"
-            else f"📌 Итог: 🟢 BE (+{float(event.get('be_level_pct') or 8.0):.0f}%)"
+            f"🟢 BE (+{float(event.get('be_level_pct') or 8.0):.0f}%)"
         )
+        status_with_side_line = f"{status_line} | {side}"
     ttl_hours = max(1, int(round(float(event.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60)))
 
     if access_level == "PREVIEW":
         lines = [
             i18n.t(lang, "ARCHIVE_DETAIL_PREVIEW_TITLE"),
             "",
-            i18n.t(
-                lang,
-                "ARCHIVE_DETAIL_HEADER_LINE",
-                symbol=event.get("symbol"),
-                side=event.get("side"),
-                score=score,
-            ),
+            f"📌 {symbol_pair} | Score {score}",
+            status_with_side_line,
             f"🕒 {_format_event_time(int(event.get('ts', 0)))}",
             "",
             f"⏱ TTL: {ttl_hours}h",
@@ -2424,8 +2430,6 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
             "• TP1: ***",
             "• TP2: ***",
             "",
-            status_line,
-            "",
             i18n.t(lang, "ARCHIVE_DETAIL_BUY_SUB_PROMPT"),
             i18n.t(lang, "ARCHIVE_DETAIL_UNLOCK_DELAY", delay=_remaining_delay_text(event, lang)),
         ]
@@ -2433,13 +2437,8 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
 
     breakdown_lines = _signal_breakdown_lines(event, lang)
     lines = [
-        i18n.t(
-            lang,
-            "ARCHIVE_DETAIL_HEADER_LINE",
-            symbol=event.get("symbol"),
-            side=event.get("side"),
-            score=score,
-        ),
+        f"📌 {symbol_pair} | Score {score}",
+        status_with_side_line,
         f"🕒 {_format_event_time(int(event.get('ts', 0)))}",
         "",
         f"POI: {float(event.get('poi_low')):.4f} – {float(event.get('poi_high')):.4f}",
@@ -2448,8 +2447,6 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
         f"TP2: {float(event.get('tp2')):.4f}",
         "",
         i18n.t(lang, "ARCHIVE_DETAIL_LIFETIME", hours=ttl_hours),
-        "",
-        status_line,
     ]
     max_profit_pct = float(event.get('max_profit_pct') or 0.0)
     if status_raw in {"TP1", "TP2", "TP", "BE", "SL"} and max_profit_pct > 0:
@@ -5450,15 +5447,18 @@ def _with_admin_inversion_line(
 def _format_preview_signal_from_payload(signal: Dict[str, Any], lang: str) -> str:
     score = int(signal.get("score", 0) or 0)
     side = "LONG" if str(signal.get("direction") or "").lower() == "long" else "SHORT"
-    symbol = _signal_symbol_text(str(signal.get("symbol") or ""))
+    symbol_raw = str(signal.get("symbol") or "").upper().replace(" ", "")
+    symbol_pair = f"{symbol_raw[:-4]}/USDT" if symbol_raw.endswith("USDT") else symbol_raw
     ttl_hours = max(1, int(round(float(signal.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60)))
     remaining = _format_duration(max(0, SIGNAL_DELAY_NON_SUB_HOURS * 3600), lang=lang)
-    result_line = "📌 Result: ⏰ In progress" if lang == "en" else "📌 Итог: ⏰ В процессе"
+    result_line = "🟣 In progress"
+    status_with_side_line = f"{result_line} | {side}"
     return "\n".join(
         [
             i18n.t(lang, "ARCHIVE_DETAIL_PREVIEW_TITLE"),
             "",
-            i18n.t(lang, "ARCHIVE_DETAIL_HEADER_LINE", symbol=symbol, side=side, score=score),
+            f"📌 {symbol_pair} | Score {score}",
+            status_with_side_line,
             f"🕒 {_format_event_time(int(time.time()))}",
             "",
             f"⏱ TTL: {ttl_hours}h",
@@ -5469,8 +5469,6 @@ def _format_preview_signal_from_payload(signal: Dict[str, Any], lang: str) -> st
             "• SL: ***",
             "• TP1: ***",
             "• TP2: ***",
-            "",
-            result_line,
             "",
             i18n.t(lang, "ARCHIVE_DETAIL_BUY_SUB_PROMPT"),
             i18n.t(lang, "ARCHIVE_DETAIL_UNLOCK_DELAY", delay=remaining),
