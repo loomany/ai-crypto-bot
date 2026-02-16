@@ -2851,14 +2851,22 @@ async def history_pd_open(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "hist_back")
 async def archive_back(callback: CallbackQuery):
-    if callback.message is None:
+    if callback.message is None or callback.from_user is None:
         return
-    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    lang = get_user_lang(callback.from_user.id)
     lang = lang or "ru"
     await callback.answer()
+
+    context = _get_history_context(callback.from_user.id)
+    archive_kind = "ai"
+    if context:
+        _, _, _, history_type = context
+        archive_kind = "pd" if history_type == "pd" else "ai"
+    text_key = "STATS_PICK_TEXT" if archive_kind == "ai" else "STATS_PICK_PD_TEXT"
+
     await callback.message.edit_text(
-        i18n.t(lang, "STATS_ROOT_TEXT"),
-        reply_markup=stats_inline_kb(lang),
+        i18n.t(lang, text_key),
+        reply_markup=stats_period_inline_kb(lang, archive_kind=archive_kind),
     )
 
 
