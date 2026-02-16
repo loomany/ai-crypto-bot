@@ -245,6 +245,7 @@ SUB_SOURCE_SYSTEM = 1
 SUB_SOURCE_AI = 2
 SUB_SOURCE_PUMP = 3
 SIGNAL_DELAY_NON_SUB_HOURS = int(os.getenv("SIGNAL_DELAY_NON_SUB_HOURS", "12"))
+PD_ARCHIVE_UNLOCK_DELAY_SEC = 60 * 60
 
 
 def _env_bool(name: str, default: str = "0") -> bool:
@@ -1311,6 +1312,62 @@ def _format_pd_list_row(row: dict[str, Any]) -> str:
     return f"{time_prefix} | {icon} | Δ{delta_5m:+.1f}% | x{vol_mult:.1f} | {symbol_text}"
 
 
+def should_mask_pd_item(user_id: int, event_ts: int, now_ts: int | None = None) -> tuple[bool, int]:
+    if is_subscribed(user_id):
+        return False, 0
+    if event_ts <= 0:
+        return True, PD_ARCHIVE_UNLOCK_DELAY_SEC
+    now_value = now_ts or int(time.time())
+    remaining_sec = max(0, PD_ARCHIVE_UNLOCK_DELAY_SEC - (now_value - event_ts))
+    return remaining_sec > 0, remaining_sec
+
+
+def render_pd_list_item(user_id: int, row: dict[str, Any]) -> str:
+    ts_value = _safe_int(row.get("ts") or row.get("created_at"), 0)
+    if ts_value > 0:
+        dt_local = datetime.fromtimestamp(ts_value, tz=timezone.utc).astimezone(ALMATY_TZ)
+        time_prefix = dt_local.strftime("%H:%M/%d.%m")
+    else:
+        time_prefix = "--:--/--.--"
+    masked, _ = should_mask_pd_item(user_id, ts_value)
+    if masked:
+        return f"🔒 {time_prefix}"
+    return _format_pd_list_row(row)
+
+
+def _pd_history_back_callback(user_id: int) -> str:
+    back_callback = "history_pd:all:page=1"
+    context = _get_history_context(user_id)
+    if context:
+        stored_window, page, _, history_type = context
+        if history_type == "pd":
+            back_callback = f"history_pd:{stored_window}:page={max(1, page)}"
+    return back_callback
+
+
+def _pd_locked_detail_payload(*, user_id: int, lang: str, row: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
+    ts_value = _safe_int(row.get("ts") or row.get("created_at"), 0)
+    masked, remaining_sec = should_mask_pd_item(user_id, ts_value)
+    if not masked:
+        return "", InlineKeyboardMarkup(inline_keyboard=[])
+
+    time_left = i18n.t(lang, "time_left_fmt", mm=f"{remaining_sec // 60:02d}", ss=f"{remaining_sec % 60:02d}")
+    text = "\n".join(
+        [
+            i18n.t(lang, "pd_locked_title"),
+            i18n.t(lang, "pd_locked_text", time_left=time_left),
+        ]
+    )
+    detail_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=i18n.t(lang, "btn_upgrade"), callback_data="sub_paywall:pump")],
+            [InlineKeyboardButton(text="🔄 Update", callback_data=f"history_pd_locked:{int(row.get('id') or 0)}")],
+            [InlineKeyboardButton(text=i18n.t(lang, "btn_back"), callback_data=_pd_history_back_callback(user_id))],
+        ]
+    )
+    return text, detail_kb
+
+
 def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str:
     totals = history_summary.get("totals", {}) if isinstance(history_summary, dict) else {}
     metrics = history_summary.get("metrics", {}) if isinstance(history_summary, dict) else {}
@@ -1424,7 +1481,7 @@ def _history_nav_kb(
                 access_level=get_signal_access_level(viewer_user_id, _event_created_at_utc(event)),
             )
             if history_prefix == "history"
-            else _format_pd_list_row(event)
+            else render_pd_list_item(viewer_user_id, event)
         )
         callback_data = f"history_open:{event_id}" if history_prefix == "history" else f"history_pd_open:{event_id}"
         kb_rows.append([InlineKeyboardButton(text=item_text, callback_data=callback_data)])
@@ -2810,7 +2867,13 @@ async def history_pd_open(callback: CallbackQuery):
         with suppress(Exception):
             await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
         return
+
     event = dict(row)
+    locked_text, locked_kb = _pd_locked_detail_payload(user_id=callback.from_user.id, lang=lang, row=event)
+    if locked_text:
+        await callback.message.edit_text(locked_text, reply_markup=locked_kb)
+        return
+
     ts_value = _safe_int(event.get("ts") or event.get("created_at"), 0)
     dt_text = "—"
     if ts_value > 0:
@@ -2833,12 +2896,66 @@ async def history_pd_open(callback: CallbackQuery):
         i18n.t(lang, "PD_EVENT_VOL_MULT", value=f"{float(event.get('vol_mult') or 0.0):.1f}"),
     ]
 
-    back_callback = "history_pd:all:page=1"
-    context = _get_history_context(callback.from_user.id)
-    if context:
-        stored_window, page, _, history_type = context
-        if history_type == "pd":
-            back_callback = f"history_pd:{stored_window}:page={max(1, page)}"
+    back_callback = _pd_history_back_callback(callback.from_user.id)
+
+    detail_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [build_binance_futures_button(lang, symbol_text)],
+            [InlineKeyboardButton(text=i18n.t(lang, "PD_BACK_TO_LIST"), callback_data=back_callback)],
+        ]
+    )
+    await callback.message.edit_text("\n".join(details), reply_markup=detail_kb)
+
+
+@dp.callback_query(F.data.regexp(r"^history_pd_locked:\d+$"))
+async def history_pd_locked_refresh(callback: CallbackQuery):
+    if callback.message is None or callback.from_user is None:
+        return
+    lang = get_user_lang(callback.from_user.id) or "ru"
+    try:
+        event_id = int((callback.data or "").split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer()
+        return
+
+    row = get_pumpdump_event_by_id(event_id)
+    if row is None:
+        with suppress(Exception):
+            await callback.answer(i18n.t(lang, "SIGNAL_NOT_FOUND"), show_alert=True)
+        return
+
+    event = dict(row)
+    locked_text, locked_kb = _pd_locked_detail_payload(user_id=callback.from_user.id, lang=lang, row=event)
+    if locked_text:
+        await callback.answer(i18n.t(lang, "PD_LOCKED_UPDATE_TOAST"))
+        with suppress(TelegramBadRequest):
+            await callback.message.edit_text(locked_text, reply_markup=locked_kb)
+        return
+
+    await callback.answer()
+    ts_value = _safe_int(event.get("ts") or event.get("created_at"), 0)
+    dt_text = "—"
+    if ts_value > 0:
+        dt_text = datetime.fromtimestamp(ts_value, tz=timezone.utc).astimezone(ALMATY_TZ).strftime("%d.%m %H:%M")
+    symbol_text = str(event.get("symbol") or "").upper()
+    side_raw = str(event.get("side") or "").upper()
+    is_pump = side_raw == "PUMP"
+    side_icon = "🚀" if is_pump else "🔻"
+    side_text = i18n.t(lang, "PD_SIDE_PUMP" if is_pump else "PD_SIDE_DUMP")
+
+    details = [
+        i18n.t(lang, "PD_EVENT_TITLE"),
+        i18n.t(lang, "PD_EVENT_SYMBOL", symbol=symbol_text),
+        i18n.t(lang, "PD_EVENT_TYPE", icon=side_icon, side=side_text),
+        i18n.t(lang, "PD_EVENT_TIME", time=dt_text),
+        "",
+        i18n.t(lang, "PD_EVENT_DELTA_1M", value=f"{float(event.get('delta_1m') or 0.0):+.1f}"),
+        i18n.t(lang, "PD_EVENT_DELTA_5M", value=f"{float(event.get('delta_5m') or 0.0):+.1f}"),
+        i18n.t(lang, "PD_EVENT_VOLUME", value=f"{float(event.get('volume_5m_usdt') or 0.0):,.0f}".replace(",", " ")),
+        i18n.t(lang, "PD_EVENT_VOL_MULT", value=f"{float(event.get('vol_mult') or 0.0):.1f}"),
+    ]
+
+    back_callback = _pd_history_back_callback(callback.from_user.id)
 
     detail_kb = InlineKeyboardMarkup(
         inline_keyboard=[

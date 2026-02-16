@@ -408,6 +408,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PD_EXPLAIN_LINE_2": "🔻 DUMP — резкое падение за 1–5 минут",
         "PD_EXPLAIN_LINE_3": "📌 Это НЕ вход в сделку, а сигнал волатильности.",
         "PD_EXPLAIN_LINE_4": "Используется как алерт для проверки графика.",
+        "pd_locked_title": "🔒 Pump/Dump архив",
+        "pd_locked_text": "Данные будут доступны через {time_left} (60 минут после события).\nДля мгновенного доступа оформите подписку.",
+        "btn_upgrade": "🔐 Оформить подписку",
+        "btn_back": "⬅️ Назад",
+        "time_left_fmt": "{mm}:{ss}",
+        "PD_LOCKED_UPDATE_TOAST": "🔄 Таймер обновлён",
         "explanation_block": (
             "━━━━━━━━━━━━━━━━\n"
             "ℹ️ Пояснение\n"
@@ -1043,6 +1049,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "STATS_PRO_NEUTRAL_TOTAL": "⚪ No entry: {neutral_total}",
         "STATS_PRO_IN_PROGRESS_TOTAL": "🕒 In progress: {in_progress_total}",
         "STATS_PRO_NEUTRAL_NOTE": "ℹ️ Neutral — scenario reached neither TP nor SL",
+        "pd_locked_title": "🔒 Pump/Dump archive",
+        "pd_locked_text": "This record will be available in {time_left} (60 minutes after event).\nUpgrade for instant access.",
+        "btn_upgrade": "🔐 Upgrade",
+        "btn_back": "⬅️ Back",
+        "time_left_fmt": "{mm}:{ss}",
+        "PD_LOCKED_UPDATE_TOAST": "🔄 Timer updated",
         "STATS_PRO_NEUTRAL_NOTE_2": "(range, time-based cancel, or manual close).",
         "STATS_PRO_USAGE_HEADER": "🧠 How to use signals",
         "STATS_PRO_USAGE_PRIMARY": "• Primary focus: Score 90–100",
