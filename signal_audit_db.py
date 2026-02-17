@@ -50,7 +50,6 @@ def init_signal_audit_tables() -> None:
                 be_armed INTEGER NOT NULL DEFAULT 0,
                 max_profit_pct REAL NOT NULL DEFAULT 0,
                 be_triggered INTEGER NOT NULL DEFAULT 0,
-                be_activated_at INTEGER,
                 be_trigger_price REAL,
                 be_level_pct REAL NOT NULL DEFAULT 0,
                 be_finalised INTEGER NOT NULL DEFAULT 0,
@@ -65,7 +64,6 @@ def init_signal_audit_tables() -> None:
                 final_notified INTEGER NOT NULL DEFAULT 0,
                 exp_notified INTEGER NOT NULL DEFAULT 0,
                 nf_notified INTEGER NOT NULL DEFAULT 0,
-                audit_note TEXT,
                 confirm_strict INTEGER NOT NULL DEFAULT 0,
                 confirm_count INTEGER NOT NULL DEFAULT 0
             )
@@ -98,8 +96,6 @@ def init_signal_audit_tables() -> None:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN max_profit_pct REAL NOT NULL DEFAULT 0")
         if "be_triggered" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN be_triggered INTEGER NOT NULL DEFAULT 0")
-        if "be_activated_at" not in cols:
-            conn.execute("ALTER TABLE signal_audit ADD COLUMN be_activated_at INTEGER")
         if "be_trigger_price" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN be_trigger_price REAL")
         if "be_level_pct" not in cols:
@@ -128,8 +124,6 @@ def init_signal_audit_tables() -> None:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN exp_notified INTEGER NOT NULL DEFAULT 0")
         if "nf_notified" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN nf_notified INTEGER NOT NULL DEFAULT 0")
-        if "audit_note" not in cols:
-            conn.execute("ALTER TABLE signal_audit ADD COLUMN audit_note TEXT")
         if "confirm_strict" not in cols:
             conn.execute("ALTER TABLE signal_audit ADD COLUMN confirm_strict INTEGER NOT NULL DEFAULT 0")
         if "confirm_count" not in cols:
@@ -582,7 +576,7 @@ def get_public_stats(days: int = 30, *, include_legacy: bool = False) -> dict:
         closed_rows = cur.fetchall()
         closed = len(closed_rows)
 
-        excluded_outcomes = {"NO_FILL", "EXPIRED_NO_ENTRY", "AMBIGUOUS"}
+        excluded_outcomes = {"NO_FILL", "AMBIGUOUS"}
         filled_rows = [row for row in closed_rows if row["outcome"] not in excluded_outcomes]
         filled_closed = len(filled_rows)
 
