@@ -389,7 +389,7 @@ def claim_signal_notification(signal_id: str, *, event_type: str) -> bool:
         "SL": "sl_notified",
         "BE": "be_notified",
         "BE_TRIGGERED": "be_trigger_notified",
-        "BE_ACTIVATED": "be_notified",
+        "BE_ACTIVATED": "be_trigger_notified",
         "BE_FINALISED": "be_finalised_notified",
         "FINAL": "final_notified",
         "EXP": "exp_notified",
