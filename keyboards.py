@@ -68,7 +68,6 @@ def build_admin_diagnostics_kb(lang: str) -> ReplyKeyboardMarkup:
             KeyboardButton(text=i18n.t(lang, "SYS_TEST_AI")),
             KeyboardButton(text=i18n.t(lang, "SYS_TEST_PD")),
         ],
-        [KeyboardButton(text=i18n.t(lang, "SYS_BACKFILL_FINALS"))],
         [KeyboardButton(text=i18n.t(lang, "MENU_BACK"))],
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
