@@ -756,6 +756,10 @@ async def cmd_start(message: Message):
             set_user_pref(message.chat.id, "trial_ai_left", TRIAL_AI_LIMIT)
             set_user_pref(message.chat.id, "trial_pump_left", TRIAL_PUMP_LIMIT)
             set_user_pref(message.chat.id, "user_locked", 0)
+            set_user_pref(message.chat.id, "ai_signals_enabled", 1)
+            set_user_pref(message.chat.id, "pumpdump_enabled", 1)
+            set_user_pref(message.chat.id, "notif_regular_enabled", 1)
+            set_user_pref(message.chat.id, "notif_elite_enabled", 1)
     if not lang:
         await message.answer(
             i18n.t("ru", "LANG_PICK_TEXT"),
@@ -6226,10 +6230,28 @@ async def send_signal_to_all(
             if is_admin_user or is_sub_active(chat_id):
                 access_level = "FULL"
             else:
-                access_level = "PREVIEW"
-                message_text = _format_preview_signal_from_payload(signal_dict, lang)
-                collapsed_text = message_text
-                expanded_text = message_text
+                ensure_trial_defaults(chat_id)
+                allowed, left = try_consume_trial(chat_id, "trial_ai_left", 1)
+                if not allowed:
+                    if _should_send_paywall(chat_id, "ai"):
+                        kind = "paywall"
+                        should_log = False
+                        message_text = i18n.t(lang, "PAYWALL_AI")
+                    else:
+                        stats["skipped_notifications_off"] += 1
+                        continue
+                else:
+                    access_level = "PREVIEW"
+                    message_text = _format_preview_signal_from_payload(signal_dict, lang)
+                    trial_suffix = i18n.t(
+                        lang,
+                        "TRIAL_SUFFIX_AI",
+                        left=left,
+                        limit=TRIAL_AI_LIMIT,
+                    )
+                    collapsed_text = message_text + trial_suffix
+                    expanded_text = message_text + trial_suffix
+                    message_text = collapsed_text
 
         if kind == "paywall":
             stats["paywall"] += 1
