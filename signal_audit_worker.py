@@ -358,46 +358,9 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
                 "be_level_pct": be_level_pct,
             }
 
-    age_sec = int(time.time()) - sent_at
-    if age_sec < ttl_sec:
-        return None
-
-    last_close = candles[-1]["close"] if candles else None
-    pnl_r = None
-    notes = None
-    if last_close is not None:
-        if zero_risk:
-            pnl_r = 0.0
-            notes = "fail_rr_zero_risk_audit"
-        elif direction == "long":
-            pnl_r = safe_div((last_close - entry_ref), r_value, 0.0) * 0.5
-        else:
-            pnl_r = safe_div((entry_ref - last_close), r_value, 0.0) * 0.5
-
-    if be_triggered and not tp1_hit:
-        return {
-            "outcome": "BE",
-            "pnl_r": 0.0,
-            "filled_at": filled_at,
-            "notes": "be_finalised_exp",
-            "max_profit_pct": max_profit_pct,
-            "be_triggered": be_triggered,
-            "be_trigger_price": be_trigger_price,
-            "be_trigger_event": False,
-            "be_level_pct": be_level_label(max_profit_pct),
-        }
-
-    return {
-        "outcome": "EXPIRED",
-        "pnl_r": pnl_r,
-        "filled_at": filled_at,
-        "notes": notes,
-        "max_profit_pct": max_profit_pct,
-        "be_triggered": be_triggered,
-        "be_trigger_price": be_trigger_price,
-        "be_trigger_event": False,
-        "be_level_pct": be_level_label(max_profit_pct),
-    }
+    # TTL applies only while waiting for confirmation/activation.
+    # Once active, the position must be tracked until TP/SL/BE and can never become EXPIRED.
+    return None
 
 
 async def evaluate_open_signals(
@@ -442,7 +405,14 @@ async def evaluate_open_signals(
             ttl_minutes = int(signal.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60)
             ttl_sec = max(60, ttl_minutes * 60)
             now_ts = int(time.time())
-            if now_ts > sent_at + ttl_sec and state != "ACTIVE_CONFIRMED" and not is_activated:
+            waiting_states = {"WAIT_CONFIRM", "WAITING_ENTRY", "POI_TOUCHED"}
+            entry_price = float(signal.get("entry_price") or 0.0)
+            if (
+                now_ts > sent_at + ttl_sec
+                and state in waiting_states
+                and not is_activated
+                and entry_price <= 0.0
+            ):
                 mark_signal_closed(
                     signal_id=signal["signal_id"],
                     outcome="NO_FILL",
