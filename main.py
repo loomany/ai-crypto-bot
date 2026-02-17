@@ -1592,15 +1592,18 @@ def enforce_signal_ttl() -> int:
         state = str(event.get("state") or "").upper()
         status_raw = str(event.get("status") or "").upper()
         result_raw = str(event.get("result") or "").upper()
+        entry_price = float(event.get("entry_price") or 0.0)
+        waiting_states = {"WAIT_CONFIRM", "WAITING_ENTRY", "POI_TOUCHED"}
         is_activated = (
             bool(event.get("activated_at"))
             or bool(event.get("is_activated"))
             or bool(event.get("entry_touched"))
-            or state in {"ACTIVE_CONFIRMED", "ACTIVATED", "ENTRY_CONFIRMED"}
+            or entry_price > 0.0
+            or state in {"ACTIVE_CONFIRMED", "ACTIVATED", "ENTRY_CONFIRMED", "ACTIVE"}
             or status_raw == "ACTIVE"
             or result_raw == "ACTIVE"
         )
-        if is_activated:
+        if is_activated or state not in waiting_states:
             continue
         tp2_hit = bool(event.get("tp2_hit"))
         tp1_hit = bool(event.get("tp1_hit"))
