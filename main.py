@@ -175,6 +175,7 @@ from keyboards import (
 )
 from settings import SIGNAL_TTL_SECONDS
 from signal_inversion import apply_inversion
+from signal_backfill import run_backfill_finals
 
 logger = logging.getLogger(__name__)
 DEFAULT_LANG = "ru"
@@ -4457,6 +4458,24 @@ async def test_ai_signal_all(message: Message):
 
     await message.answer("\n".join(report_lines))
 
+
+
+@dp.message(F.text.in_(i18n.all_labels("SYS_BACKFILL_FINALS")))
+async def admin_backfill_finals(message: Message):
+    lang = get_user_lang(message.chat.id) or "ru"
+    if message.from_user is None or not is_admin(message.from_user.id):
+        await message.answer(i18n.t(lang, "NO_ACCESS"))
+        return
+
+    dry_stats = await run_backfill_finals(dry_run=True)
+    await message.answer(
+        "Dry-run backfill: updated={updated} (TP1={TP1} TP2={TP2} SL={SL} BE={BE} EXPIRED_NO_ENTRY={EXPIRED_NO_ENTRY})".format(**dry_stats)
+    )
+
+    real_stats = await run_backfill_finals(dry_run=False)
+    await message.answer(
+        "Backfill done: updated={updated} (TP1={TP1} TP2={TP2} SL={SL} BE={BE} EXPIRED_NO_ENTRY={EXPIRED_NO_ENTRY})".format(**real_stats)
+    )
 
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_TEST_PD")))
