@@ -451,7 +451,9 @@ def _ai_public_ready() -> bool:
     return AI_PUBLIC_ENABLED and TELEGRAM_CHANNEL_ID != 0
 
 
-AI_PUBLIC_FREE_SIGNAL_URL = str(os.getenv("AI_PUBLIC_FREE_SIGNAL_URL", "")).strip()
+AI_PUBLIC_FREE_SIGNAL_URL = str(
+    os.getenv("AI_PUBLIC_FREE_SIGNAL_URL", "https://t.me/Kryptoon_ai_bot")
+).strip()
 
 
 async def publish_to_channel(
@@ -485,20 +487,20 @@ def _ai_public_signal_class(score: int) -> str:
 
 def _ai_public_entry_kb(symbol: str) -> InlineKeyboardMarkup:
     normalized = str(symbol or "").upper().replace("/", "").strip()
-    row = [
+    rows = [[
         InlineKeyboardButton(
             text="📊 Binance",
             url=f"https://www.binance.com/ru/futures/{normalized}",
         )
-    ]
+    ]]
     if AI_PUBLIC_FREE_SIGNAL_URL:
-        row.append(
+        rows.append([
             InlineKeyboardButton(
                 text="🤖 Забрать сигнал бесплатно",
                 url=AI_PUBLIC_FREE_SIGNAL_URL,
             )
-        )
-    return InlineKeyboardMarkup(inline_keyboard=[row])
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _ai_public_send_channel_message(
