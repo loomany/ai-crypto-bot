@@ -47,6 +47,7 @@ def build_system_menu_kb(
                     )
                 )
             ],
+            [KeyboardButton(text=i18n.t(lang, "SYS_CHANNEL_PANEL"))],
             [KeyboardButton(text=i18n.t(lang, "SYS_HOW_BOT_WORKS"))],
             [KeyboardButton(text=i18n.t(lang, "MENU_BACK"))],
         ]
@@ -71,6 +72,20 @@ def build_admin_diagnostics_kb(lang: str) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=i18n.t(lang, "MENU_BACK"))],
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+def build_admin_channel_panel_kb(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_ENTRY"), callback_data="admin:channel:test_entry")],
+            [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_BE"), callback_data="admin:channel:test_be")],
+            [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_EXIT_TP"), callback_data="admin:channel:test_exit_tp")],
+            [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_EXIT_SL"), callback_data="admin:channel:test_exit_sl")],
+            [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_EXIT_BE"), callback_data="admin:channel:test_exit_be")],
+            [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_STATUS"), callback_data="admin:channel:test_status")],
+            [InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data="admin:back")],
+        ]
+    )
 
 
 def ai_signals_inline_kb(lang: str) -> InlineKeyboardMarkup:
@@ -184,6 +199,14 @@ def build_about_inline_kb(
                         state=i18n.t(lang, "INVERSION_STATE_ON" if inversion_enabled else "INVERSION_STATE_OFF"),
                     ),
                     callback_data="admin_toggle_inversion",
+                )
+            ]
+        )
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "SYS_CHANNEL_PANEL"),
+                    callback_data="admin:channel",
                 )
             ]
         )
