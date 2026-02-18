@@ -966,6 +966,11 @@ def get_history_winrate_summary(
 
     for row in rows:
         score = int(row["score"] or 0)
+        if score < 80:
+            # Score < 80 signals are shown in history for market context only
+            # and must not affect trading statistics.
+            continue
+
         outcome_type = get_signal_status_key(dict(row))
         totals = summary["totals"]
         if str(row["outcome"] or "").upper() == "BE":
