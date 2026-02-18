@@ -117,6 +117,7 @@ AI_CONFIRM_RETRY_ENABLED = os.getenv("AI_CONFIRM_RETRY_ENABLED", "1").lower() in
 AI_CONFIRM_RETRY_MAX_ATTEMPTS = int(os.getenv("AI_CONFIRM_RETRY_MAX_ATTEMPTS", "3"))
 AI_CONFIRM_RETRY_TF = os.getenv("AI_CONFIRM_RETRY_TF", "5m")
 AI_CONFIRM_RETRY_TTL_SEC = int(os.getenv("AI_CONFIRM_RETRY_TTL_SEC", "1800"))
+AI_SIGNAL_PRICE_ROUND_DIGITS = int(os.getenv("AI_SIGNAL_PRICE_ROUND_DIGITS", "6"))
 ELITE_REQUIRE_CONFIRM = os.getenv("ELITE_REQUIRE_CONFIRM", "0").lower() in (
     "1",
     "true",
@@ -150,6 +151,10 @@ DIVISION_EPS = 1e-12
 _BLUECHIP_SET = {item.strip().upper() for item in AI_BLUECHIPS.split(",") if item.strip()}
 _CONFIRM_RETRY_STATE_KEY = "ai_confirm_retry_state_v1"
 _CONFIRM_RETRY_LOCK = asyncio.Lock()
+
+
+def _round_signal_price(value: float) -> float:
+    return round(float(value), AI_SIGNAL_PRICE_ROUND_DIGITS)
 
 
 def _getenv_float(key: str, default: float) -> float:
@@ -1608,11 +1613,11 @@ async def _prepare_signal(
                 )
                 if not await _is_setup_sent(setup_id):
                     setup_snapshot = {
-                        "entry": (round(entry_from, 4), round(entry_to, 4)),
-                        "sl": round(sl, 4),
-                        "tp1": round(tp1, 4),
-                        "tp2": round(tp2, 4),
-                        "poi": round(level_touched or 0.0, 4),
+                        "entry": (_round_signal_price(entry_from), _round_signal_price(entry_to)),
+                        "sl": _round_signal_price(sl),
+                        "tp1": _round_signal_price(tp1),
+                        "tp2": _round_signal_price(tp2),
+                        "poi": _round_signal_price(level_touched or 0.0),
                         "score": 0,
                         "atr_pct": round(atr_dynamic_atr_pct, 4) if atr_dynamic_atr_pct is not None else None,
                         "sl_pct": round(atr_dynamic_sl_pct, 4) if atr_dynamic_sl_pct is not None else None,
@@ -1649,10 +1654,10 @@ async def _prepare_signal(
                     signal_base = {
                         "symbol": symbol,
                         "direction": "long" if candidate_side == "LONG" else "short",
-                        "entry_zone": (round(entry_from, 4), round(entry_to, 4)),
-                        "sl": round(sl, 4),
-                        "tp1": round(tp1, 4),
-                        "tp2": round(tp2, 4),
+                        "entry_zone": (_round_signal_price(entry_from), _round_signal_price(entry_to)),
+                        "sl": _round_signal_price(sl),
+                        "tp1": _round_signal_price(tp1),
+                        "tp2": _round_signal_price(tp2),
                         "score": 0,
                         "score_raw": 0,
                         "setup_type": setup_type,
@@ -1955,11 +1960,11 @@ async def _prepare_signal(
                 _store_final_sample(False, "fail_volume")
                 return None
             setup_snapshot = {
-                "entry": (round(entry_from, 4), round(entry_to, 4)),
-                "sl": round(sl, 4),
-                "tp1": round(tp1, 4),
-                "tp2": round(tp2, 4),
-                "poi": round(level_touched or 0.0, 4),
+                "entry": (_round_signal_price(entry_from), _round_signal_price(entry_to)),
+                "sl": _round_signal_price(sl),
+                "tp1": _round_signal_price(tp1),
+                "tp2": _round_signal_price(tp2),
+                "poi": _round_signal_price(level_touched or 0.0),
                 "score": min(100, abs(raw_score)),
                 "setup_type": setup_type,
                 "atr_pct": round(atr_dynamic_atr_pct, 4) if atr_dynamic_atr_pct is not None else None,
@@ -1970,10 +1975,10 @@ async def _prepare_signal(
             signal_base = {
                 "symbol": symbol,
                 "direction": "long" if side == "LONG" else "short",
-                "entry_zone": (round(entry_from, 4), round(entry_to, 4)),
-                "sl": round(sl, 4),
-                "tp1": round(tp1, 4),
-                "tp2": round(tp2, 4),
+                "entry_zone": (_round_signal_price(entry_from), _round_signal_price(entry_to)),
+                "sl": _round_signal_price(sl),
+                "tp1": _round_signal_price(tp1),
+                "tp2": _round_signal_price(tp2),
                 "score": min(100, abs(raw_score)),
                 "score_raw": int(round(raw_score)),
                 "setup_type": setup_type,
@@ -2074,11 +2079,11 @@ async def _prepare_signal(
             if AI_CONFIRM_RETRY_ENABLED and not await _is_setup_sent(setup_id):
                 now_ts = int(time.time())
                 setup_snapshot = {
-                    "entry": (round(entry_from, 4), round(entry_to, 4)),
-                    "sl": round(sl, 4),
-                    "tp1": round(tp1, 4),
-                    "tp2": round(tp2, 4),
-                    "poi": round(level_touched or 0.0, 4),
+                    "entry": (_round_signal_price(entry_from), _round_signal_price(entry_to)),
+                    "sl": _round_signal_price(sl),
+                    "tp1": _round_signal_price(tp1),
+                    "tp2": _round_signal_price(tp2),
+                    "poi": _round_signal_price(level_touched or 0.0),
                     "score": min(100, abs(raw_score)),
                     "setup_type": setup_type,
                     "atr_pct": round(atr_dynamic_atr_pct, 4) if atr_dynamic_atr_pct is not None else None,
@@ -2089,10 +2094,10 @@ async def _prepare_signal(
                 signal_base = {
                     "symbol": symbol,
                     "direction": "long" if side == "LONG" else "short",
-                    "entry_zone": (round(entry_from, 4), round(entry_to, 4)),
-                    "sl": round(sl, 4),
-                    "tp1": round(tp1, 4),
-                    "tp2": round(tp2, 4),
+                    "entry_zone": (_round_signal_price(entry_from), _round_signal_price(entry_to)),
+                    "sl": _round_signal_price(sl),
+                    "tp1": _round_signal_price(tp1),
+                    "tp2": _round_signal_price(tp2),
                     "score": min(100, abs(raw_score)),
                     "score_raw": int(round(raw_score)),
                     "setup_type": setup_type,
@@ -2202,10 +2207,10 @@ async def _prepare_signal(
     return {
         "symbol": symbol,
         "direction": "long" if side == "LONG" else "short",
-        "entry_zone": (round(entry_from, 4), round(entry_to, 4)),
-        "sl": round(sl, 4),
-        "tp1": round(tp1, 4),
-        "tp2": round(tp2, 4),
+        "entry_zone": (_round_signal_price(entry_from), _round_signal_price(entry_to)),
+        "sl": _round_signal_price(sl),
+        "tp1": _round_signal_price(tp1),
+        "tp2": _round_signal_price(tp2),
         "score": min(100, abs(raw_score)),
         "score_raw": int(round(raw_score)),
         "setup_type": setup_type,
