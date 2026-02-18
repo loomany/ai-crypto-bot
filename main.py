@@ -492,7 +492,7 @@ async def _ai_public_on_activation(signal: dict) -> None:
     text = (
         f"⚡ AI ВХОД | x{int(AI_PUBLIC_LEVERAGE)}\n"
         f"{symbol} — {side}\n"
-        f"Баланс: ${balance:.2f}\n"
+        f"Баланс: ${_format_usd(balance)}\n"
         "Статус: АКТИВЕН"
     )
     await _ai_public_send_channel_message(text)
@@ -537,7 +537,7 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> None:
         f"{closed['symbol']} — {final_status}\n"
         f"Доходность: {closed['roi_pct']:+.2f}%\n"
         f"PnL: ${closed['pnl_usd']:+.2f}\n"
-        f"Баланс: ${closed['balance_after']:.2f}"
+        f"Баланс: ${_format_usd(float(closed['balance_after']))}"
     )
     await _ai_public_send_channel_message(text)
 
@@ -1769,6 +1769,13 @@ def _format_price(value: float) -> str:
     return f"{value:.6f}"
 
 
+def _format_usd(value: float) -> str:
+    formatted = f"{value:,.2f}"
+    if formatted.endswith(".00"):
+        return formatted[:-3]
+    return formatted
+
+
 def _format_duration(seconds: int, *, lang: str = "ru") -> str:
     seconds = max(0, int(seconds))
     hours = seconds // 3600
@@ -2278,7 +2285,7 @@ def _channel_test_message(kind: str) -> str:
             [
                 "⚡ AI ВХОД | x10",
                 "TESTCOIN — LONG",
-                "Баланс: $1,000.00",
+                "Баланс: $1,000",
                 "Статус: АКТИВЕН",
             ]
         )
@@ -2297,7 +2304,7 @@ def _channel_test_message(kind: str) -> str:
                 "TESTCOIN — TP",
                 "Доходность: +3.00%",
                 "PnL: +$30.00",
-                "Баланс: $1,030.00",
+                "Баланс: $1,030",
             ]
         )
     if kind == "exit_sl":
@@ -2307,7 +2314,7 @@ def _channel_test_message(kind: str) -> str:
                 "TESTCOIN — SL",
                 "Доходность: -1.00%",
                 "PnL: -$10.00",
-                "Баланс: $990.00",
+                "Баланс: $990",
             ]
         )
     if kind == "exit_be":
@@ -2317,7 +2324,7 @@ def _channel_test_message(kind: str) -> str:
                 "TESTCOIN — BE",
                 "Доходность: +0.00%",
                 "PnL: +$0.00",
-                "Баланс: $1,000.00",
+                "Баланс: $1,000",
             ]
         )
     return "\n".join(
