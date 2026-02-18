@@ -133,6 +133,10 @@ from db import (
     list_pending_result_notifications,
     set_last_pumpdump_signal,
     purge_test_signals,
+    ensure_ai_public_state,
+    get_ai_public_state,
+    insert_ai_public_trade_open,
+    close_ai_public_trade,
 )
 from db_path import ensure_db_writable, get_db_path
 from history_status import get_signal_badge, get_signal_status_key
@@ -155,6 +159,7 @@ from signal_audit_db import (
 from signal_audit_worker import (
     signal_audit_worker_loop,
     set_signal_activation_notifier,
+    set_signal_finalizer_notifier,
     set_signal_poi_touched_notifier,
     set_signal_progress_notifier,
     set_signal_result_notifier,
@@ -164,6 +169,7 @@ from utils_symbols import ui_symbol
 from keyboards import (
     ai_signals_inline_kb,
     build_admin_diagnostics_kb,
+    build_admin_channel_panel_kb,
     build_lang_select_kb,
     build_main_menu_kb,
     build_offer_inline_kb,
@@ -232,6 +238,11 @@ def load_settings() -> str:
 
 
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
+TELEGRAM_CHANNEL_ID = int(os.getenv("TELEGRAM_CHANNEL_ID", "0"))
+AI_PUBLIC_ENABLED = os.getenv("AI_PUBLIC_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
+AI_PUBLIC_START_BALANCE = float(os.getenv("AI_PUBLIC_START_BALANCE", "1000") or 1000)
+AI_PUBLIC_RISK_PCT = float(os.getenv("AI_PUBLIC_RISK_PCT", "1.0") or 1.0)
+AI_PUBLIC_LEVERAGE = float(os.getenv("AI_PUBLIC_LEVERAGE", "10") or 10)
 PUMP_COOLDOWN_SYMBOL_SEC = int(os.getenv("PUMP_COOLDOWN_SYMBOL_SEC", "86400"))  # 24h
 PUMP_COOLDOWN_GLOBAL_SEC = int(os.getenv("PUMP_COOLDOWN_GLOBAL_SEC", "3600"))  # 1h
 PUMP_DAILY_LIMIT = int(os.getenv("PUMP_DAILY_LIMIT", "6"))
@@ -253,7 +264,11 @@ def _env_bool(name: str, default: str = "0") -> bool:
 
 
 def is_admin(user_id: int) -> bool:
-    return ADMIN_USER_ID != 0 and user_id == ADMIN_USER_ID
+    if user_id <= 0:
+        return False
+    if ADMIN_USER_ID != 0 and user_id == ADMIN_USER_ID:
+        return True
+    return ADMIN_CHAT_ID != 0 and user_id == ADMIN_CHAT_ID
 
 
 def is_subscribed(user_id: int) -> bool:
@@ -344,6 +359,12 @@ def init_app_db():
     init_storage_db()
     load_module_statuses()
     init_signal_audit_tables()
+    if AI_PUBLIC_ENABLED:
+        ensure_ai_public_state(
+            start_balance_usd=AI_PUBLIC_START_BALANCE,
+            risk_pct=AI_PUBLIC_RISK_PCT,
+            leverage=AI_PUBLIC_LEVERAGE,
+        )
     blocked_symbols = sorted(get_blocked_symbols())
     if blocked_symbols:
         totals = {"events_deleted": 0, "signal_audit_deleted": 0}
@@ -421,6 +442,104 @@ def _get_pumpdump_date_key(now: datetime | None = None) -> str:
     if now is None:
         now = datetime.now(timezone.utc)
     return now.date().isoformat()
+
+
+def _ai_public_ready() -> bool:
+    return AI_PUBLIC_ENABLED and TELEGRAM_CHANNEL_ID != 0
+
+
+async def publish_to_channel(bot_instance: Bot | None, text: str) -> tuple[bool, str]:
+    if os.getenv("AI_PUBLIC_ENABLED", "0").strip().lower() not in ("1", "true", "yes", "on"):
+        return False, "disabled"
+    channel_id = int(os.getenv("TELEGRAM_CHANNEL_ID", "0") or 0)
+    if channel_id == 0:
+        return False, "no_channel_id"
+    if bot_instance is None:
+        return False, "bot_not_ready"
+    try:
+        await bot_instance.send_message(channel_id, text)
+        return True, "ok"
+    except Exception as exc:
+        logger.exception("channel_send_failed")
+        return False, str(exc)
+
+
+async def _ai_public_send_channel_message(text: str) -> bool:
+    ok, reason = await publish_to_channel(bot, text)
+    if not ok:
+        logger.warning("[ai_public] channel send skipped/failed: %s", reason)
+    return ok
+
+
+async def _ai_public_on_activation(signal: dict) -> None:
+    if not _ai_public_ready():
+        return
+    signal_id = str(signal.get("signal_id") or "")
+    symbol = str(signal.get("symbol") or "")
+    side = str(signal.get("direction") or "").upper()
+    if not signal_id or not symbol:
+        return
+    inserted = insert_ai_public_trade_open(
+        signal_id=signal_id,
+        symbol=symbol,
+        side=side,
+        opened_at=datetime.now(timezone.utc).isoformat(),
+    )
+    if inserted <= 0:
+        return
+    state = get_ai_public_state() or {}
+    balance = float(state.get("balance_usd") or AI_PUBLIC_START_BALANCE)
+    text = (
+        f"⚡ AI ENTRY | x{int(AI_PUBLIC_LEVERAGE)}\n"
+        f"{symbol} — {side}\n"
+        f"Balance: ${balance:.2f}\n"
+        "Status: ACTIVE"
+    )
+    await _ai_public_send_channel_message(text)
+
+
+async def _ai_public_on_be_triggered(signal: dict) -> None:
+    if not _ai_public_ready():
+        return
+    symbol = str(signal.get("symbol") or "")
+    side = str(signal.get("direction") or "").upper()
+    if not symbol:
+        return
+    text = (
+        f"🟢 BE TRIGGERED | x{int(AI_PUBLIC_LEVERAGE)}\n"
+        f"{symbol} — {side}\n"
+        "Status: STOP → ENTRY"
+    )
+    await _ai_public_send_channel_message(text)
+
+
+async def _ai_public_on_final_close(signal: dict, result: dict) -> None:
+    if not _ai_public_ready():
+        return
+    signal_id = str(signal.get("signal_id") or "")
+    outcome = str(result.get("outcome") or "").upper()
+    pnl_r = result.get("pnl_r")
+    if not signal_id or pnl_r is None:
+        return
+    final_status = "TP" if outcome in {"TP1", "TP2"} else outcome
+    if final_status not in {"TP", "SL", "BE"}:
+        return
+    closed = close_ai_public_trade(
+        signal_id=signal_id,
+        final_status=final_status,
+        pnl_r=float(pnl_r),
+    )
+    if closed is None:
+        return
+    emoji = {"TP": "🎯", "SL": "🛑", "BE": "🟦"}.get(final_status, "ℹ️")
+    text = (
+        f"{emoji} AI EXIT | x{int(AI_PUBLIC_LEVERAGE)}\n"
+        f"{closed['symbol']} — {final_status}\n"
+        f"Return: {closed['roi_pct']:+.2f}%\n"
+        f"PnL: ${closed['pnl_usd']:+.2f}\n"
+        f"Balance: ${closed['balance_after']:.2f}"
+    )
+    await _ai_public_send_channel_message(text)
 
 
 def get_pumpdump_daily_count(chat_id: int, date_key: str) -> int:
@@ -1940,6 +2059,8 @@ async def notify_signal_activation(signal: dict) -> bool:
     if updated_rows <= 0:
         return False
 
+    await _ai_public_on_activation(signal)
+
     events = list_signal_events_by_identity(module=module, symbol=symbol, ts=ts_value)
     if not events:
         return False
@@ -2064,6 +2185,9 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
     if normalized not in {"BE_ACTIVATED"}:
         return False
 
+    if normalized == "BE_ACTIVATED":
+        await _ai_public_on_be_triggered(signal)
+
     module = str(signal.get("module", ""))
     symbol = str(signal.get("symbol", ""))
     ts_value = int(signal.get("sent_at", 0))
@@ -2129,6 +2253,81 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
                 exc,
             )
     return sent
+
+
+async def notify_signal_finalized(signal: dict, result: dict) -> None:
+    await _ai_public_on_final_close(signal, result)
+
+
+def _channel_panel_text(lang: str) -> str:
+    channel_text = str(TELEGRAM_CHANNEL_ID) if TELEGRAM_CHANNEL_ID != 0 else "NOT SET"
+    enabled_text = "1" if AI_PUBLIC_ENABLED else "0"
+    return "\n".join(
+        [
+            i18n.t(lang, "CHANNEL_PANEL_TITLE"),
+            i18n.t(lang, "CHANNEL_PANEL_ID_LINE", channel_id=channel_text),
+            i18n.t(lang, "CHANNEL_PANEL_ENABLED_LINE", enabled=enabled_text),
+            i18n.t(lang, "CHANNEL_PANEL_NOTE"),
+        ]
+    )
+
+
+def _channel_test_message(kind: str) -> str:
+    if kind == "entry":
+        return "\n".join(
+            [
+                "⚡ AI ENTRY | x10",
+                "TESTCOIN — LONG",
+                "Balance: $1,000.00",
+                "Status: ACTIVE",
+            ]
+        )
+    if kind == "be":
+        return "\n".join(
+            [
+                "🟢 BE TRIGGERED | x10",
+                "TESTCOIN — LONG",
+                "Status: STOP → ENTRY",
+            ]
+        )
+    if kind == "exit_tp":
+        return "\n".join(
+            [
+                "🎯 AI EXIT | x10",
+                "TESTCOIN — TP",
+                "Return: +3.00%",
+                "PnL: +$30.00",
+                "Balance: $1,030.00",
+            ]
+        )
+    if kind == "exit_sl":
+        return "\n".join(
+            [
+                "🛑 AI EXIT | x10",
+                "TESTCOIN — SL",
+                "Return: -1.00%",
+                "PnL: -$10.00",
+                "Balance: $990.00",
+            ]
+        )
+    if kind == "exit_be":
+        return "\n".join(
+            [
+                "🟦 AI EXIT | x10",
+                "TESTCOIN — BE",
+                "Return: +0.00%",
+                "PnL: +$0.00",
+                "Balance: $1,000.00",
+            ]
+        )
+    return "\n".join(
+        [
+            "🧠 AI MARKET STATUS",
+            "BTC Regime: CHOP",
+            "Signal Density: LOW",
+            "Mode: STANDBY",
+        ]
+    )
 
 
 def _format_outcome_block(event: dict, lang: str) -> list[str]:
@@ -4421,6 +4620,18 @@ async def test_admin_button(message: Message):
     await test_admin(message)
 
 
+@dp.message(F.text.in_(i18n.all_labels("SYS_CHANNEL_PANEL")))
+async def admin_channel_panel_entry(message: Message):
+    lang = get_user_lang(message.chat.id) or "ru"
+    if message.from_user is None or not is_admin(message.from_user.id):
+        await message.answer(i18n.t(lang, "ADMIN_ONLY"))
+        return
+    await message.answer(
+        _channel_panel_text(lang),
+        reply_markup=build_admin_channel_panel_kb(lang),
+    )
+
+
 @dp.message(F.text.in_(i18n.all_labels("SYS_TEST_AI")))
 async def test_ai_signal_all(message: Message):
     lang = get_user_lang(message.chat.id) or "ru"
@@ -5215,9 +5426,53 @@ def _build_user_card(user_id: int, lang: str) -> tuple[str, InlineKeyboardMarkup
 async def _ensure_admin_callback(callback: CallbackQuery) -> bool:
     if callback.from_user is None or not is_admin(callback.from_user.id):
         lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-        await callback.answer(i18n.t(lang or "ru", "NO_ACCESS"))
+        await callback.answer(i18n.t(lang or "ru", "ADMIN_ONLY"), show_alert=True)
         return False
     return True
+
+
+@dp.callback_query(F.data == "admin:channel")
+async def admin_channel_panel_callback(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
+        return
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    text = _channel_panel_text(lang or "ru")
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=build_admin_channel_panel_kb(lang or "ru"))
+
+
+@dp.callback_query(F.data == "admin:back")
+async def admin_channel_back_callback(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
+        return
+    await callback.answer()
+    if callback.message:
+        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+        await callback.message.edit_text(i18n.t(lang or "ru", "BACK_TO_MAIN_TEXT"))
+
+
+@dp.callback_query(F.data.regexp(r"^admin:channel:test_(entry|be|exit_tp|exit_sl|exit_be|status)$"))
+async def admin_channel_test_callback(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
+        return
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    lang = lang or "ru"
+    kind = callback.data.split("test_", 1)[1]
+    text = _channel_test_message(kind)
+    ok, reason = await publish_to_channel(bot, text)
+    if ok:
+        await callback.answer(i18n.t(lang, "CHANNEL_TEST_OK"), show_alert=True)
+        return
+    if reason == "disabled":
+        await callback.answer(i18n.t(lang, "CHANNEL_TEST_DISABLED"), show_alert=True)
+        return
+    if reason == "no_channel_id":
+        await callback.answer(i18n.t(lang, "CHANNEL_TEST_NO_ID"), show_alert=True)
+        return
+    short_reason = (reason or "unknown")
+    short_reason = short_reason.replace("\n", " ")[:120]
+    await callback.answer(f"❌ Ошибка отправки: {short_reason}", show_alert=True)
 
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_USERS")))
@@ -7299,6 +7554,7 @@ async def main():
     set_signal_activation_notifier(notify_signal_activation)
     set_signal_poi_touched_notifier(notify_signal_poi_touched)
     set_signal_progress_notifier(notify_signal_progress)
+    set_signal_finalizer_notifier(notify_signal_finalized)
     print("Бот запущен!")
     init_app_db()
 

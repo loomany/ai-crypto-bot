@@ -36,6 +36,7 @@ _signal_result_notifier = None
 _signal_activation_notifier = None
 _signal_poi_touched_notifier = None
 _signal_progress_notifier = None
+_signal_finalizer_notifier = None
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,11 @@ def set_signal_poi_touched_notifier(handler) -> None:
 def set_signal_progress_notifier(handler) -> None:
     global _signal_progress_notifier
     _signal_progress_notifier = handler
+
+
+def set_signal_finalizer_notifier(handler) -> None:
+    global _signal_finalizer_notifier
+    _signal_finalizer_notifier = handler
 
 
 def _parse_kline(kline: list[Any]) -> Optional[Dict[str, float]]:
@@ -551,6 +557,8 @@ async def evaluate_open_signals(
                 notes=result["notes"],
                 close_state=close_state_map.get(str(result["outcome"])),
             )
+            if _signal_finalizer_notifier is not None:
+                await _signal_finalizer_notifier(signal, result)
             logger.info(
                 "[close_notify] db updated signal_id=%s outcome=%s",
                 signal.get("signal_id"),

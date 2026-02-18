@@ -159,6 +159,36 @@ def init_db() -> None:
             """
         )
         conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_public_state (
+                id INTEGER PRIMARY KEY,
+                balance_usd REAL NOT NULL,
+                start_balance_usd REAL NOT NULL,
+                risk_pct REAL NOT NULL,
+                leverage REAL NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_public_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signal_id TEXT NOT NULL UNIQUE,
+                symbol TEXT,
+                side TEXT,
+                opened_at TEXT,
+                closed_at TEXT,
+                final_status TEXT,
+                pnl_r REAL,
+                balance_before REAL,
+                pnl_usd REAL,
+                roi_pct REAL,
+                balance_after REAL
+            )
+            """
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pumpdump_events_ts ON pumpdump_events(ts DESC)"
         )
         conn.execute(
@@ -180,6 +210,129 @@ def init_db() -> None:
             """
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def ensure_ai_public_state(*, start_balance_usd: float, risk_pct: float, leverage: float) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO ai_public_state (
+                id, balance_usd, start_balance_usd, risk_pct, leverage, updated_at
+            ) VALUES (1, ?, ?, ?, ?, datetime('now'))
+            """,
+            (
+                float(start_balance_usd),
+                float(start_balance_usd),
+                float(risk_pct),
+                float(leverage),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_ai_public_state() -> dict | None:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT * FROM ai_public_state WHERE id = 1")
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def insert_ai_public_trade_open(*, signal_id: str, symbol: str, side: str, opened_at: str) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO ai_public_trades (
+                signal_id, symbol, side, opened_at, final_status
+            ) VALUES (?, ?, ?, ?, 'OPEN')
+            """,
+            (str(signal_id), str(symbol), str(side), str(opened_at)),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
+def close_ai_public_trade(*, signal_id: str, final_status: str, pnl_r: float) -> dict | None:
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        state_row = conn.execute("SELECT * FROM ai_public_state WHERE id = 1").fetchone()
+        if state_row is None:
+            conn.rollback()
+            return None
+        trade_row = conn.execute(
+            "SELECT * FROM ai_public_trades WHERE signal_id = ?",
+            (str(signal_id),),
+        ).fetchone()
+        if trade_row is None:
+            conn.rollback()
+            return None
+        if trade_row["closed_at"] is not None:
+            conn.rollback()
+            return None
+
+        balance_before = float(state_row["balance_usd"] or 0.0)
+        risk_pct = float(state_row["risk_pct"] or 0.0)
+        risk_usd = balance_before * (risk_pct / 100.0)
+        pnl_usd = risk_usd * float(pnl_r)
+        balance_after = balance_before + pnl_usd
+        roi_pct = (pnl_usd / balance_before) * 100.0 if balance_before != 0 else 0.0
+
+        conn.execute(
+            """
+            UPDATE ai_public_state
+            SET balance_usd = ?, updated_at = datetime('now')
+            WHERE id = 1
+            """,
+            (float(balance_after),),
+        )
+        updated = conn.execute(
+            """
+            UPDATE ai_public_trades
+            SET closed_at = datetime('now'),
+                final_status = ?,
+                pnl_r = ?,
+                balance_before = ?,
+                pnl_usd = ?,
+                roi_pct = ?,
+                balance_after = ?
+            WHERE signal_id = ? AND closed_at IS NULL
+            """,
+            (
+                str(final_status),
+                float(pnl_r),
+                float(balance_before),
+                float(pnl_usd),
+                float(roi_pct),
+                float(balance_after),
+                str(signal_id),
+            ),
+        )
+        if int(updated.rowcount or 0) <= 0:
+            conn.rollback()
+            return None
+        conn.commit()
+        return {
+            "signal_id": str(signal_id),
+            "symbol": str(trade_row["symbol"] or ""),
+            "side": str(trade_row["side"] or ""),
+            "final_status": str(final_status),
+            "pnl_r": float(pnl_r),
+            "balance_before": float(balance_before),
+            "pnl_usd": float(pnl_usd),
+            "roi_pct": float(roi_pct),
+            "balance_after": float(balance_after),
+        }
     finally:
         conn.close()
 
