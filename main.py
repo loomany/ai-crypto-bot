@@ -138,6 +138,8 @@ from db import (
     insert_ai_public_trade_open,
     close_ai_public_trade,
     apply_ai_public_partial_fix,
+    reset_ai_public_test_trade,
+    reset_ai_public_balance_to_start,
 )
 from db_path import ensure_db_writable, get_db_path
 from history_status import get_signal_badge, get_signal_status_key
@@ -465,21 +467,21 @@ async def publish_to_channel(bot_instance: Bot | None, text: str) -> tuple[bool,
         return False, str(exc)
 
 
-async def _ai_public_send_channel_message(text: str) -> bool:
+async def _ai_public_send_channel_message(text: str) -> tuple[bool, str]:
     ok, reason = await publish_to_channel(bot, text)
     if not ok:
         logger.warning("[ai_public] channel send skipped/failed: %s", reason)
-    return ok
+    return ok, reason
 
 
-async def _ai_public_on_activation(signal: dict) -> None:
+async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
     if not _ai_public_ready():
-        return
+        return False, "disabled" if not AI_PUBLIC_ENABLED else "no_channel_id"
     signal_id = str(signal.get("signal_id") or "")
     symbol = str(signal.get("symbol") or "")
     side = str(signal.get("direction") or "").upper()
     if not signal_id or not symbol:
-        return
+        return False, "invalid_signal"
     inserted = insert_ai_public_trade_open(
         signal_id=signal_id,
         symbol=symbol,
@@ -487,7 +489,7 @@ async def _ai_public_on_activation(signal: dict) -> None:
         opened_at=datetime.now(timezone.utc).isoformat(),
     )
     if inserted <= 0:
-        return
+        return False, "already_exists"
     state = get_ai_public_state() or {}
     balance = float(state.get("balance_usd") or AI_PUBLIC_START_BALANCE)
     risk_pct = float(state.get("risk_pct") or AI_PUBLIC_RISK_PCT)
@@ -500,18 +502,18 @@ async def _ai_public_on_activation(signal: dict) -> None:
         f"Баланс: ${_format_usd(balance)}\n"
         "Статус: АКТИВЕН"
     )
-    await _ai_public_send_channel_message(text)
+    return await _ai_public_send_channel_message(text)
 
 
-async def _ai_public_on_be_triggered(signal: dict) -> None:
+async def _ai_public_on_be_triggered(signal: dict) -> tuple[bool, str]:
     if not _ai_public_ready():
-        return
+        return False, "disabled" if not AI_PUBLIC_ENABLED else "no_channel_id"
     signal_id = str(signal.get("signal_id") or "")
     symbol = str(signal.get("symbol") or "")
     side = str(signal.get("direction") or "").upper()
     be_level_pct = float(signal.get("be_level_pct") or 0.0)
     if not symbol or not signal_id:
-        return
+        return False, "invalid_signal"
 
     fix_events = apply_ai_public_partial_fix(
         signal_id=signal_id,
@@ -532,25 +534,29 @@ async def _ai_public_on_be_triggered(signal: dict) -> None:
             f"Баланс: ${_format_usd(balance_preview)}\n"
             f"Осталось {remaining_pct:.0f}%"
         )
-        await _ai_public_send_channel_message(text)
+        ok, reason = await _ai_public_send_channel_message(text)
+        if not ok:
+            return ok, reason
+
+    return True, "ok" if fix_events else "no_events"
 
 
-async def _ai_public_on_final_close(signal: dict, result: dict) -> None:
+async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, str]:
     if not _ai_public_ready():
-        return
+        return False, "disabled" if not AI_PUBLIC_ENABLED else "no_channel_id"
     signal_id = str(signal.get("signal_id") or "")
     outcome = str(result.get("outcome") or "").upper()
     if not signal_id:
-        return
+        return False, "invalid_signal"
     final_status = "TP" if outcome in {"TP1", "TP2"} else outcome
     if final_status not in {"TP", "SL", "BE"}:
-        return
+        return False, "invalid_final_status"
     closed = close_ai_public_trade(
         signal_id=signal_id,
         final_status=final_status,
     )
     if closed is None:
-        return
+        return False, "trade_not_found"
     emoji = {"TP": "🎯", "SL": "🛑", "BE": "🟦"}.get(final_status, "ℹ️")
     pnl_rest = float(closed.get("pnl_rest") or 0.0)
     pnl_total = float(closed.get("pnl_usd") or 0.0)
@@ -564,7 +570,7 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> None:
     lines.append(f"Итого PnL: ${pnl_total:+.2f}")
     lines.append(f"Баланс: ${_format_usd(float(closed['balance_after']))}")
     text = "\n".join(lines)
-    await _ai_public_send_channel_message(text)
+    return await _ai_public_send_channel_message(text)
 
 
 def get_pumpdump_daily_count(chat_id: int, date_key: str) -> int:
@@ -2091,7 +2097,7 @@ async def notify_signal_activation(signal: dict) -> bool:
     if updated_rows <= 0:
         return False
 
-    await _ai_public_on_activation(signal)
+    _ = await _ai_public_on_activation(signal)
 
     events = list_signal_events_by_identity(module=module, symbol=symbol, ts=ts_value)
     if not events:
@@ -2218,7 +2224,7 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
         return False
 
     if normalized == "BE_ACTIVATED":
-        await _ai_public_on_be_triggered(signal)
+        _ = await _ai_public_on_be_triggered(signal)
 
     module = str(signal.get("module", ""))
     symbol = str(signal.get("symbol", ""))
@@ -2288,7 +2294,7 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
 
 
 async def notify_signal_finalized(signal: dict, result: dict) -> None:
-    await _ai_public_on_final_close(signal, result)
+    _ = await _ai_public_on_final_close(signal, result)
 
 
 def _channel_panel_text(lang: str) -> str:
@@ -2304,55 +2310,16 @@ def _channel_panel_text(lang: str) -> str:
     )
 
 
-def _channel_test_message(kind: str) -> str:
-    if kind == "entry":
-        return "\n".join(
-            [
-                "⚡ AI ВХОД | x10",
-                "TESTCOIN — LONG",
-                "Баланс: $1,000",
-                "Статус: АКТИВЕН",
-            ]
-        )
-    if kind == "be":
-        return "\n".join(
-            [
-                "🟢 BE СРАБОТАЛ | x10",
-                "TESTCOIN — LONG",
-                "Статус: СТОП → ВХОД",
-            ]
-        )
-    if kind == "exit_tp":
-        return "\n".join(
-            [
-                "🎯 AI ВЫХОД | x10",
-                "TESTCOIN — TP",
-                "Доходность: +3.00%",
-                "PnL: +$30.00",
-                "Баланс: $1,030",
-            ]
-        )
-    if kind == "exit_sl":
-        return "\n".join(
-            [
-                "🛑 AI ВЫХОД | x10",
-                "TESTCOIN — SL",
-                "Доходность: -1.00%",
-                "PnL: -$10.00",
-                "Баланс: $990",
-            ]
-        )
-    if kind == "exit_be":
-        return "\n".join(
-            [
-                "🟦 AI ВЫХОД | x10",
-                "TESTCOIN — BE",
-                "Доходность: +0.00%",
-                "PnL: +$0.00",
-                "Баланс: $1,000",
-            ]
-        )
-    return "\n".join(
+def _ai_public_test_signal(admin_user_id: int) -> dict:
+    return {
+        "signal_id": f"test:{admin_user_id}",
+        "symbol": "TESTCOINUSDT",
+        "direction": "LONG",
+    }
+
+
+async def _send_channel_status_test() -> tuple[bool, str]:
+    text = "\n".join(
         [
             "🧠 СТАТУС AI РЫНКА",
             "Режим BTC: ФЛЭТ",
@@ -2360,6 +2327,7 @@ def _channel_test_message(kind: str) -> str:
             "Режим: ОЖИДАНИЕ",
         ]
     )
+    return await publish_to_channel(bot, text)
 
 
 def _format_outcome_block(event: dict, lang: str) -> list[str]:
@@ -5484,15 +5452,42 @@ async def admin_channel_back_callback(callback: CallbackQuery):
         await callback.message.edit_text(i18n.t(lang or "ru", "BACK_TO_MAIN_TEXT"))
 
 
-@dp.callback_query(F.data.regexp(r"^admin:channel:test_(entry|be|exit_tp|exit_sl|exit_be|status)$"))
+@dp.callback_query(F.data.regexp(r"^admin:channel:test_(entry|fix8|fix10|exit_tp|exit_sl|exit_be|status|reset_balance)$"))
 async def admin_channel_test_callback(callback: CallbackQuery):
     if not await _ensure_admin_callback(callback):
         return
-    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-    lang = lang or "ru"
+    if callback.from_user is None:
+        return
+    lang = get_user_lang(callback.from_user.id) or "ru"
     kind = callback.data.split("test_", 1)[1]
-    text = _channel_test_message(kind)
-    ok, reason = await publish_to_channel(bot, text)
+    signal = _ai_public_test_signal(callback.from_user.id)
+    signal_id = str(signal["signal_id"])
+
+    ok = False
+    reason = "unknown"
+    try:
+        if kind == "entry":
+            reset_ai_public_test_trade(signal_id=signal_id)
+            ok, reason = await _ai_public_on_activation(signal)
+        elif kind == "fix8":
+            signal["be_level_pct"] = 8.0
+            ok, reason = await _ai_public_on_be_triggered(signal)
+        elif kind == "fix10":
+            signal["be_level_pct"] = 10.0
+            ok, reason = await _ai_public_on_be_triggered(signal)
+        elif kind in {"exit_tp", "exit_sl", "exit_be"}:
+            outcome = {"exit_tp": "TP", "exit_sl": "SL", "exit_be": "BE"}[kind]
+            ok, reason = await _ai_public_on_final_close(signal, {"outcome": outcome})
+        elif kind == "status":
+            ok, reason = await _send_channel_status_test()
+        elif kind == "reset_balance":
+            reset_ai_public_test_trade(signal_id=signal_id)
+            reset_ai_public_balance_to_start()
+            await callback.answer("✅ TEST balance reset", show_alert=True)
+            return
+    except Exception as exc:
+        ok, reason = False, str(exc)
+
     if ok:
         await callback.answer(i18n.t(lang, "CHANNEL_TEST_OK"), show_alert=True)
         return
@@ -5502,8 +5497,7 @@ async def admin_channel_test_callback(callback: CallbackQuery):
     if reason == "no_channel_id":
         await callback.answer(i18n.t(lang, "CHANNEL_TEST_NO_ID"), show_alert=True)
         return
-    short_reason = (reason or "unknown")
-    short_reason = short_reason.replace("\n", " ")[:120]
+    short_reason = (reason or "unknown").replace("\n", " ")[:120]
     await callback.answer(f"❌ Ошибка отправки: {short_reason}", show_alert=True)
 
 
