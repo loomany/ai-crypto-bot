@@ -244,6 +244,22 @@ def ensure_ai_public_state(*, start_balance_usd: float, risk_pct: float, leverag
                 float(leverage),
             ),
         )
+        conn.execute(
+            """
+            UPDATE ai_public_state
+            SET
+                start_balance_usd = ?,
+                risk_pct = ?,
+                leverage = ?,
+                updated_at = datetime('now')
+            WHERE id = 1
+            """,
+            (
+                float(start_balance_usd),
+                float(risk_pct),
+                float(leverage),
+            ),
+        )
         conn.commit()
     finally:
         conn.close()
