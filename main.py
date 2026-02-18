@@ -485,6 +485,11 @@ def _ai_public_signal_class(score: int) -> str:
     return "Требует подтверждения (&lt;80)"
 
 
+def _ai_public_header(signal_no: int) -> str:
+    safe_no = max(1, int(signal_no or 1))
+    return f"🧠 Модель AI Public Account | #{safe_no}"
+
+
 def _ai_public_entry_kb(symbol: str) -> InlineKeyboardMarkup:
     normalized = str(symbol or "").upper().replace("/", "").strip()
     rows = [[
@@ -523,13 +528,13 @@ async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
     score = max(0, min(100, int(signal.get("score") or 0)))
     if not signal_id or not symbol:
         return False, "invalid_signal"
-    inserted = insert_ai_public_trade_open(
+    trade_id = insert_ai_public_trade_open(
         signal_id=signal_id,
         symbol=symbol,
         side=side,
         opened_at=datetime.now(timezone.utc).isoformat(),
     )
-    if inserted <= 0:
+    if trade_id <= 0:
         return False, "already_exists"
     state = get_ai_public_state() or {}
     balance = float(state.get("balance_usd") or AI_PUBLIC_START_BALANCE)
@@ -537,8 +542,8 @@ async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
     risk_usd = balance * (risk_pct / 100.0)
     class_label = _ai_public_signal_class(score)
     text = (
-        "🧠 Модель AI Public Account\n\n"
-        f"⚡️ AI ВХОД #{inserted}\n"
+        f"{_ai_public_header(trade_id)}\n\n"
+        f"⚡️ AI ВХОД\n"
         f"{symbol} — {side}\n\n"
         f"📊 Оценка сигнала: {score} / 100\n"
         f"⚠️ Класс: {class_label}\n\n"
@@ -571,7 +576,9 @@ async def _ai_public_on_be_triggered(signal: dict) -> tuple[bool, str]:
         remaining_pct = float(event.get("remaining_pct") or 0.0)
         balance_preview = float(event.get("balance_preview") or 0.0)
         level_text = f"{int(level)}" if level.is_integer() else f"{level:.1f}"
+        trade_id = int(event.get("trade_id") or 0)
         text = (
+            f"{_ai_public_header(trade_id)}\n\n"
             f"🟢 ФИКСАЦИЯ +{level_text}% | x{int(AI_PUBLIC_LEVERAGE)}\n"
             f"{symbol} — {side}\n"
             f"Закрыто {'ещё ' if level >= 10.0 else ''}{closed_pct:.0f}% позиции\n"
@@ -579,7 +586,7 @@ async def _ai_public_on_be_triggered(signal: dict) -> tuple[bool, str]:
             f"Баланс: ${_format_usd(balance_preview)}\n"
             f"Осталось {remaining_pct:.0f}%"
         )
-        ok, reason = await _ai_public_send_channel_message(text)
+        ok, reason = await _ai_public_send_channel_message(text, reply_markup=_ai_public_entry_kb(symbol))
         if not ok:
             return ok, reason
 
@@ -605,7 +612,10 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
     emoji = {"TP": "🎯", "SL": "🛑", "BE": "🟦"}.get(final_status, "ℹ️")
     pnl_rest = float(closed.get("pnl_rest") or 0.0)
     pnl_total = float(closed.get("pnl_usd") or 0.0)
+    trade_id = int(closed.get("id") or 0)
     lines = [
+        _ai_public_header(trade_id),
+        "",
         f"{emoji} AI ВЫХОД | x{int(AI_PUBLIC_LEVERAGE)}",
         f"{closed['symbol']} — {final_status}",
         f"Доходность: {closed['roi_pct']:+.2f}%",
@@ -615,7 +625,7 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
     lines.append(f"Итого PnL: ${pnl_total:+.2f}")
     lines.append(f"Баланс: ${_format_usd(float(closed['balance_after']))}")
     text = "\n".join(lines)
-    return await _ai_public_send_channel_message(text)
+    return await _ai_public_send_channel_message(text, reply_markup=_ai_public_entry_kb(str(closed.get("symbol") or "")))
 
 
 def get_pumpdump_daily_count(chat_id: int, date_key: str) -> int:
