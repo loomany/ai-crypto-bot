@@ -6524,16 +6524,15 @@ async def send_signal_to_all(
                         stats["skipped_notifications_off"] += 1
                         continue
                 else:
-                    access_level = "PREVIEW"
-                    message_text = _format_preview_signal_from_payload(signal_dict, lang)
+                    access_level = "FULL"
                     trial_suffix = i18n.t(
                         lang,
                         "TRIAL_SUFFIX_AI",
                         left=left,
                         limit=TRIAL_AI_LIMIT,
                     )
-                    collapsed_text = message_text + trial_suffix
-                    expanded_text = message_text + trial_suffix
+                    collapsed_text = collapsed_text + trial_suffix
+                    expanded_text = expanded_text + trial_suffix
                     message_text = collapsed_text
 
         if kind == "paywall":
