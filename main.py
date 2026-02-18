@@ -137,6 +137,7 @@ from db import (
     get_ai_public_state,
     insert_ai_public_trade_open,
     close_ai_public_trade,
+    apply_ai_public_partial_fix,
 )
 from db_path import ensure_db_writable, get_db_path
 from history_status import get_signal_badge, get_signal_status_key
@@ -489,9 +490,13 @@ async def _ai_public_on_activation(signal: dict) -> None:
         return
     state = get_ai_public_state() or {}
     balance = float(state.get("balance_usd") or AI_PUBLIC_START_BALANCE)
+    risk_pct = float(state.get("risk_pct") or AI_PUBLIC_RISK_PCT)
+    risk_usd = balance * (risk_pct / 100.0)
     text = (
-        f"⚡ AI ВХОД | x{int(AI_PUBLIC_LEVERAGE)}\n"
+        "⚡ AI ВХОД\n"
         f"{symbol} — {side}\n"
+        f"Вход: {risk_pct:.1f}% риска (${_format_usd(risk_usd)})\n"
+        f"Плечо: x{int(AI_PUBLIC_LEVERAGE)}\n"
         f"Баланс: ${_format_usd(balance)}\n"
         "Статус: АКТИВЕН"
     )
@@ -501,16 +506,33 @@ async def _ai_public_on_activation(signal: dict) -> None:
 async def _ai_public_on_be_triggered(signal: dict) -> None:
     if not _ai_public_ready():
         return
+    signal_id = str(signal.get("signal_id") or "")
     symbol = str(signal.get("symbol") or "")
     side = str(signal.get("direction") or "").upper()
-    if not symbol:
+    be_level_pct = float(signal.get("be_level_pct") or 0.0)
+    if not symbol or not signal_id:
         return
-    text = (
-        f"🟢 BE СРАБОТАЛ | x{int(AI_PUBLIC_LEVERAGE)}\n"
-        f"{symbol} — {side}\n"
-        "Статус: СТОП → ВХОД"
+
+    fix_events = apply_ai_public_partial_fix(
+        signal_id=signal_id,
+        be_level_pct=be_level_pct,
     )
-    await _ai_public_send_channel_message(text)
+    for event in fix_events:
+        level = float(event.get("level") or 0.0)
+        closed_pct = float(event.get("closed_pct") or 0.0)
+        delta_usd = float(event.get("delta_usd") or 0.0)
+        remaining_pct = float(event.get("remaining_pct") or 0.0)
+        balance_preview = float(event.get("balance_preview") or 0.0)
+        level_text = f"{int(level)}" if level.is_integer() else f"{level:.1f}"
+        text = (
+            f"🟢 ФИКСАЦИЯ +{level_text}% | x{int(AI_PUBLIC_LEVERAGE)}\n"
+            f"{symbol} — {side}\n"
+            f"Закрыто {'ещё ' if level >= 10.0 else ''}{closed_pct:.0f}% позиции\n"
+            f"PnL: +${_format_usd(delta_usd)}\n"
+            f"Баланс: ${_format_usd(balance_preview)}\n"
+            f"Осталось {remaining_pct:.0f}%"
+        )
+        await _ai_public_send_channel_message(text)
 
 
 async def _ai_public_on_final_close(signal: dict, result: dict) -> None:
@@ -518,8 +540,7 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> None:
         return
     signal_id = str(signal.get("signal_id") or "")
     outcome = str(result.get("outcome") or "").upper()
-    pnl_r = result.get("pnl_r")
-    if not signal_id or pnl_r is None:
+    if not signal_id:
         return
     final_status = "TP" if outcome in {"TP1", "TP2"} else outcome
     if final_status not in {"TP", "SL", "BE"}:
@@ -527,18 +548,22 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> None:
     closed = close_ai_public_trade(
         signal_id=signal_id,
         final_status=final_status,
-        pnl_r=float(pnl_r),
     )
     if closed is None:
         return
     emoji = {"TP": "🎯", "SL": "🛑", "BE": "🟦"}.get(final_status, "ℹ️")
-    text = (
-        f"{emoji} AI ВЫХОД | x{int(AI_PUBLIC_LEVERAGE)}\n"
-        f"{closed['symbol']} — {final_status}\n"
-        f"Доходность: {closed['roi_pct']:+.2f}%\n"
-        f"PnL: ${closed['pnl_usd']:+.2f}\n"
-        f"Баланс: ${_format_usd(float(closed['balance_after']))}"
-    )
+    pnl_rest = float(closed.get("pnl_rest") or 0.0)
+    pnl_total = float(closed.get("pnl_usd") or 0.0)
+    lines = [
+        f"{emoji} AI ВЫХОД | x{int(AI_PUBLIC_LEVERAGE)}",
+        f"{closed['symbol']} — {final_status}",
+        f"Доходность: {closed['roi_pct']:+.2f}%",
+    ]
+    if final_status == "TP":
+        lines.append(f"PnL остатка (TP1=3R): ${pnl_rest:+.2f}")
+    lines.append(f"Итого PnL: ${pnl_total:+.2f}")
+    lines.append(f"Баланс: ${_format_usd(float(closed['balance_after']))}")
+    text = "\n".join(lines)
     await _ai_public_send_channel_message(text)
 
 
