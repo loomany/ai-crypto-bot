@@ -288,8 +288,15 @@ def insert_ai_public_trade_open(*, signal_id: str, symbol: str, side: str, opene
             """,
             (str(signal_id), str(symbol), str(side), str(opened_at), float(balance_before)),
         )
+        trade_id = int(cur.lastrowid or 0)
+        if trade_id <= 0:
+            existing = conn.execute(
+                "SELECT id FROM ai_public_trades WHERE signal_id = ?",
+                (str(signal_id),),
+            ).fetchone()
+            trade_id = int(existing["id"]) if existing is not None else 0
         conn.commit()
-        return int(cur.rowcount or 0)
+        return trade_id
     finally:
         conn.close()
 
@@ -328,6 +335,7 @@ def apply_ai_public_partial_fix(*, signal_id: str, be_level_pct: float) -> list[
             p1_done = 1
             events.append(
                 {
+                    "trade_id": int(trade_row["id"] or 0),
                     "level": 8.0,
                     "closed_pct": 30.0,
                     "delta_usd": float(delta),
@@ -344,6 +352,7 @@ def apply_ai_public_partial_fix(*, signal_id: str, be_level_pct: float) -> list[
             p2_done = 1
             events.append(
                 {
+                    "trade_id": int(trade_row["id"] or 0),
                     "level": 10.0,
                     "closed_pct": 30.0,
                     "delta_usd": float(delta),
@@ -449,6 +458,7 @@ def close_ai_public_trade(*, signal_id: str, final_status: str) -> dict | None:
             return None
         conn.commit()
         return {
+            "id": int(trade_row["id"] or 0),
             "signal_id": str(signal_id),
             "symbol": str(trade_row["symbol"] or ""),
             "side": str(trade_row["side"] or ""),
