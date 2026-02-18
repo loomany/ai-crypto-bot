@@ -184,10 +184,24 @@ def init_db() -> None:
                 balance_before REAL,
                 pnl_usd REAL,
                 roi_pct REAL,
-                balance_after REAL
+                balance_after REAL,
+                p1_done INTEGER NOT NULL DEFAULT 0,
+                p2_done INTEGER NOT NULL DEFAULT 0,
+                realized_usd REAL NOT NULL DEFAULT 0,
+                remaining_pct REAL NOT NULL DEFAULT 100
             )
             """
         )
+        cur = conn.execute("PRAGMA table_info(ai_public_trades)")
+        ai_public_trade_cols = {row["name"] for row in cur.fetchall()}
+        if "p1_done" not in ai_public_trade_cols:
+            conn.execute("ALTER TABLE ai_public_trades ADD COLUMN p1_done INTEGER NOT NULL DEFAULT 0")
+        if "p2_done" not in ai_public_trade_cols:
+            conn.execute("ALTER TABLE ai_public_trades ADD COLUMN p2_done INTEGER NOT NULL DEFAULT 0")
+        if "realized_usd" not in ai_public_trade_cols:
+            conn.execute("ALTER TABLE ai_public_trades ADD COLUMN realized_usd REAL NOT NULL DEFAULT 0")
+        if "remaining_pct" not in ai_public_trade_cols:
+            conn.execute("ALTER TABLE ai_public_trades ADD COLUMN remaining_pct REAL NOT NULL DEFAULT 100")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pumpdump_events_ts ON pumpdump_events(ts DESC)"
         )
@@ -245,16 +259,45 @@ def get_ai_public_state() -> dict | None:
         conn.close()
 
 
+def reset_ai_public_trade_by_signal_id(*, signal_id: str) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.execute("DELETE FROM ai_public_trades WHERE signal_id = ?", (str(signal_id),))
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
+def reset_ai_public_balance_to_start() -> bool:
+    conn = get_conn()
+    try:
+        updated = conn.execute(
+            """
+            UPDATE ai_public_state
+            SET balance_usd = start_balance_usd,
+                updated_at = datetime('now')
+            WHERE id = 1
+            """
+        )
+        conn.commit()
+        return int(updated.rowcount or 0) > 0
+    finally:
+        conn.close()
+
+
 def insert_ai_public_trade_open(*, signal_id: str, symbol: str, side: str, opened_at: str) -> int:
     conn = get_conn()
     try:
+        state_row = conn.execute("SELECT * FROM ai_public_state WHERE id = 1").fetchone()
+        balance_before = float(state_row["balance_usd"] or 0.0) if state_row is not None else 0.0
         cur = conn.execute(
             """
             INSERT OR IGNORE INTO ai_public_trades (
-                signal_id, symbol, side, opened_at, final_status
-            ) VALUES (?, ?, ?, ?, 'OPEN')
+                signal_id, symbol, side, opened_at, final_status, balance_before
+            ) VALUES (?, ?, ?, ?, 'OPEN', ?)
             """,
-            (str(signal_id), str(symbol), str(side), str(opened_at)),
+            (str(signal_id), str(symbol), str(side), str(opened_at), float(balance_before)),
         )
         conn.commit()
         return int(cur.rowcount or 0)
@@ -262,7 +305,87 @@ def insert_ai_public_trade_open(*, signal_id: str, symbol: str, side: str, opene
         conn.close()
 
 
-def close_ai_public_trade(*, signal_id: str, final_status: str, pnl_r: float) -> dict | None:
+def apply_ai_public_partial_fix(*, signal_id: str, be_level_pct: float) -> list[dict]:
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        state_row = conn.execute("SELECT * FROM ai_public_state WHERE id = 1").fetchone()
+        if state_row is None:
+            conn.rollback()
+            return []
+        trade_row = conn.execute(
+            "SELECT * FROM ai_public_trades WHERE signal_id = ?",
+            (str(signal_id),),
+        ).fetchone()
+        if trade_row is None or trade_row["closed_at"] is not None:
+            conn.rollback()
+            return []
+
+        trade_balance_before = float(trade_row["balance_before"] or 0.0)
+        if trade_balance_before <= 0.0:
+            trade_balance_before = float(state_row["balance_usd"] or 0.0)
+        risk_pct = float(state_row["risk_pct"] or 0.0)
+        risk_usd = trade_balance_before * (risk_pct / 100.0)
+        realized = float(trade_row["realized_usd"] or 0.0)
+        remaining_pct = float(trade_row["remaining_pct"] or 100.0)
+        p1_done = int(trade_row["p1_done"] or 0)
+        p2_done = int(trade_row["p2_done"] or 0)
+        events: list[dict] = []
+
+        if float(be_level_pct) >= 8.0 and p1_done == 0:
+            delta = risk_usd * 0.30
+            realized += delta
+            remaining_pct = 70.0
+            p1_done = 1
+            events.append(
+                {
+                    "level": 8.0,
+                    "closed_pct": 30.0,
+                    "delta_usd": float(delta),
+                    "realized_usd": float(realized),
+                    "remaining_pct": float(remaining_pct),
+                    "balance_preview": float(trade_balance_before + realized),
+                }
+            )
+
+        if float(be_level_pct) >= 10.0 and p2_done == 0:
+            delta = risk_usd * 0.30
+            realized += delta
+            remaining_pct = 40.0
+            p2_done = 1
+            events.append(
+                {
+                    "level": 10.0,
+                    "closed_pct": 30.0,
+                    "delta_usd": float(delta),
+                    "realized_usd": float(realized),
+                    "remaining_pct": float(remaining_pct),
+                    "balance_preview": float(trade_balance_before + realized),
+                }
+            )
+
+        if events:
+            conn.execute(
+                """
+                UPDATE ai_public_trades
+                SET p1_done = ?,
+                    p2_done = ?,
+                    realized_usd = ?,
+                    remaining_pct = ?
+                WHERE signal_id = ? AND closed_at IS NULL
+                """,
+                (int(p1_done), int(p2_done), float(realized), float(remaining_pct), str(signal_id)),
+            )
+            conn.commit()
+            return events
+
+        conn.rollback()
+        return []
+    finally:
+        conn.close()
+
+
+def close_ai_public_trade(*, signal_id: str, final_status: str) -> dict | None:
     conn = get_conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -281,10 +404,24 @@ def close_ai_public_trade(*, signal_id: str, final_status: str, pnl_r: float) ->
             conn.rollback()
             return None
 
-        balance_before = float(state_row["balance_usd"] or 0.0)
+        balance_before = float(trade_row["balance_before"] or 0.0)
+        if balance_before <= 0.0:
+            balance_before = float(state_row["balance_usd"] or 0.0)
         risk_pct = float(state_row["risk_pct"] or 0.0)
         risk_usd = balance_before * (risk_pct / 100.0)
-        pnl_usd = risk_usd * float(pnl_r)
+        remaining_pct = float(trade_row["remaining_pct"] or 100.0)
+        realized_usd = float(trade_row["realized_usd"] or 0.0)
+        pnl_rest = 0.0
+        if final_status == "SL":
+            pnl_total = realized_usd - (risk_usd * (remaining_pct / 100.0))
+        elif final_status == "BE":
+            pnl_total = realized_usd
+        else:
+            pnl_rest = risk_usd * 3.0 * (remaining_pct / 100.0)
+            pnl_total = realized_usd + pnl_rest
+
+        pnl_r = (pnl_total / risk_usd) if risk_usd != 0 else 0.0
+        pnl_usd = pnl_total
         balance_after = balance_before + pnl_usd
         roi_pct = (pnl_usd / balance_before) * 100.0 if balance_before != 0 else 0.0
 
@@ -328,6 +465,10 @@ def close_ai_public_trade(*, signal_id: str, final_status: str, pnl_r: float) ->
             "side": str(trade_row["side"] or ""),
             "final_status": str(final_status),
             "pnl_r": float(pnl_r),
+            "pnl_rest": float(pnl_rest),
+            "realized_usd": float(realized_usd),
+            "remaining_pct": float(remaining_pct),
+            "risk_usd": float(risk_usd),
             "balance_before": float(balance_before),
             "pnl_usd": float(pnl_usd),
             "roi_pct": float(roi_pct),

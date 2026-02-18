@@ -78,11 +78,13 @@ def build_admin_channel_panel_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_ENTRY"), callback_data="admin:channel:test_entry")],
-            [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_BE"), callback_data="admin:channel:test_be")],
+            [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_FIX8"), callback_data="admin:channel:test_fix8")],
+            [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_FIX10"), callback_data="admin:channel:test_fix10")],
             [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_EXIT_TP"), callback_data="admin:channel:test_exit_tp")],
             [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_EXIT_SL"), callback_data="admin:channel:test_exit_sl")],
             [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_EXIT_BE"), callback_data="admin:channel:test_exit_be")],
             [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_STATUS"), callback_data="admin:channel:test_status")],
+            [InlineKeyboardButton(text=i18n.t(lang, "CHANNEL_TEST_RESET"), callback_data="admin:channel:test_reset")],
             [InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data="admin:back")],
         ]
     )

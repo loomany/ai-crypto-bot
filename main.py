@@ -137,6 +137,9 @@ from db import (
     get_ai_public_state,
     insert_ai_public_trade_open,
     close_ai_public_trade,
+    apply_ai_public_partial_fix,
+    reset_ai_public_trade_by_signal_id,
+    reset_ai_public_balance_to_start,
 )
 from db_path import ensure_db_writable, get_db_path
 from history_status import get_signal_badge, get_signal_status_key
@@ -464,21 +467,77 @@ async def publish_to_channel(bot_instance: Bot | None, text: str) -> tuple[bool,
         return False, str(exc)
 
 
-async def _ai_public_send_channel_message(text: str) -> bool:
+async def _ai_public_send_channel_message(text: str) -> tuple[bool, str]:
     ok, reason = await publish_to_channel(bot, text)
     if not ok:
         logger.warning("[ai_public] channel send skipped/failed: %s", reason)
-    return ok
+    return ok, reason
 
 
-async def _ai_public_on_activation(signal: dict) -> None:
-    if not _ai_public_ready():
-        return
+def _ai_public_activation_message(signal: dict) -> str | None:
     signal_id = str(signal.get("signal_id") or "")
     symbol = str(signal.get("symbol") or "")
     side = str(signal.get("direction") or "").upper()
     if not signal_id or not symbol:
-        return
+        return None
+    state = get_ai_public_state() or {}
+    balance = float(state.get("balance_usd") or AI_PUBLIC_START_BALANCE)
+    risk_pct = float(state.get("risk_pct") or AI_PUBLIC_RISK_PCT)
+    risk_usd = balance * (risk_pct / 100.0)
+    return "\n".join(
+        [
+            "⚡ AI ВХОД",
+            f"{symbol} — {side}",
+            f"Вход: {risk_pct:.1f}% риска (${_format_usd(risk_usd)})",
+            f"Плечо: x{int(AI_PUBLIC_LEVERAGE)}",
+            f"Баланс: ${_format_usd(balance)}",
+            "Статус: АКТИВЕН",
+        ]
+    )
+
+
+def _ai_public_fix_message(*, signal: dict, event: dict) -> str:
+    symbol = str(signal.get("symbol") or "")
+    side = str(signal.get("direction") or "").upper()
+    level = float(event.get("level") or 0.0)
+    closed_pct = float(event.get("closed_pct") or 0.0)
+    delta_usd = float(event.get("delta_usd") or 0.0)
+    remaining_pct = float(event.get("remaining_pct") or 0.0)
+    balance_preview = float(event.get("balance_preview") or 0.0)
+    level_text = f"{int(level)}" if level.is_integer() else f"{level:.1f}"
+    return "\n".join(
+        [
+            f"🟢 ФИКСАЦИЯ +{level_text}% | x{int(AI_PUBLIC_LEVERAGE)}",
+            f"{symbol} — {side}",
+            f"Закрыто {'ещё ' if level >= 10.0 else ''}{closed_pct:.0f}% позиции",
+            f"PnL: +${_format_usd(delta_usd)}",
+            f"Баланс: ${_format_usd(balance_preview)}",
+            f"Осталось {remaining_pct:.0f}%",
+        ]
+    )
+
+def _ai_public_final_message(*, final_status: str, closed: dict) -> str:
+    emoji = {"TP": "🎯", "SL": "🛑", "BE": "🟦"}.get(final_status, "ℹ️")
+    pnl_rest = float(closed.get("pnl_rest") or 0.0)
+    pnl_total = float(closed.get("pnl_usd") or 0.0)
+    lines = [
+        f"{emoji} AI ВЫХОД | x{int(AI_PUBLIC_LEVERAGE)}",
+        f"{closed['symbol']} — {final_status}",
+        f"Доходность: {closed['roi_pct']:+.2f}%",
+    ]
+    if final_status == "TP":
+        lines.append(f"PnL остатка (TP1=3R): ${pnl_rest:+.2f}")
+    lines.append(f"Итого PnL: ${pnl_total:+.2f}")
+    lines.append(f"Баланс: ${_format_usd(float(closed['balance_after']))}")
+    return "\n".join(lines)
+
+
+async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
+    signal_id = str(signal.get("signal_id") or "")
+    symbol = str(signal.get("symbol") or "")
+    side = str(signal.get("direction") or "").upper()
+    if not signal_id or not symbol:
+        return False, "invalid_signal"
     inserted = insert_ai_public_trade_open(
         signal_id=signal_id,
         symbol=symbol,
@@ -486,61 +545,53 @@ async def _ai_public_on_activation(signal: dict) -> None:
         opened_at=datetime.now(timezone.utc).isoformat(),
     )
     if inserted <= 0:
-        return
-    state = get_ai_public_state() or {}
-    balance = float(state.get("balance_usd") or AI_PUBLIC_START_BALANCE)
-    text = (
-        f"⚡ AI ВХОД | x{int(AI_PUBLIC_LEVERAGE)}\n"
-        f"{symbol} — {side}\n"
-        f"Баланс: ${_format_usd(balance)}\n"
-        "Статус: АКТИВЕН"
-    )
-    await _ai_public_send_channel_message(text)
+        return False, "trade_exists"
+    text = _ai_public_activation_message(signal)
+    if not text:
+        return False, "invalid_signal"
+    return await _ai_public_send_channel_message(text)
 
 
-async def _ai_public_on_be_triggered(signal: dict) -> None:
-    if not _ai_public_ready():
-        return
+async def _ai_public_on_be_triggered(signal: dict) -> tuple[bool, str]:
+    signal_id = str(signal.get("signal_id") or "")
     symbol = str(signal.get("symbol") or "")
-    side = str(signal.get("direction") or "").upper()
-    if not symbol:
-        return
-    text = (
-        f"🟢 BE СРАБОТАЛ | x{int(AI_PUBLIC_LEVERAGE)}\n"
-        f"{symbol} — {side}\n"
-        "Статус: СТОП → ВХОД"
+    be_level_pct = float(signal.get("be_level_pct") or 0.0)
+    if not symbol or not signal_id:
+        return False, "invalid_signal"
+
+    fix_events = apply_ai_public_partial_fix(
+        signal_id=signal_id,
+        be_level_pct=be_level_pct,
     )
-    await _ai_public_send_channel_message(text)
+    if not fix_events:
+        return False, "no_partial"
+
+    last_reason = "ok"
+    sent_any = False
+    for event in fix_events:
+        text = _ai_public_fix_message(signal=signal, event=event)
+        ok, reason = await _ai_public_send_channel_message(text)
+        last_reason = reason
+        sent_any = sent_any or ok
+    return sent_any, last_reason
 
 
-async def _ai_public_on_final_close(signal: dict, result: dict) -> None:
-    if not _ai_public_ready():
-        return
+async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, str]:
     signal_id = str(signal.get("signal_id") or "")
     outcome = str(result.get("outcome") or "").upper()
-    pnl_r = result.get("pnl_r")
-    if not signal_id or pnl_r is None:
-        return
+    if not signal_id:
+        return False, "invalid_signal"
     final_status = "TP" if outcome in {"TP1", "TP2"} else outcome
     if final_status not in {"TP", "SL", "BE"}:
-        return
+        return False, "invalid_status"
     closed = close_ai_public_trade(
         signal_id=signal_id,
         final_status=final_status,
-        pnl_r=float(pnl_r),
     )
     if closed is None:
-        return
-    emoji = {"TP": "🎯", "SL": "🛑", "BE": "🟦"}.get(final_status, "ℹ️")
-    text = (
-        f"{emoji} AI ВЫХОД | x{int(AI_PUBLIC_LEVERAGE)}\n"
-        f"{closed['symbol']} — {final_status}\n"
-        f"Доходность: {closed['roi_pct']:+.2f}%\n"
-        f"PnL: ${closed['pnl_usd']:+.2f}\n"
-        f"Баланс: ${_format_usd(float(closed['balance_after']))}"
-    )
-    await _ai_public_send_channel_message(text)
-
+        return False, "trade_not_open"
+    text = _ai_public_final_message(final_status=final_status, closed=closed)
+    return await _ai_public_send_channel_message(text)
 
 def get_pumpdump_daily_count(chat_id: int, date_key: str) -> int:
     conn = sqlite3.connect(get_db_path())
@@ -2279,62 +2330,25 @@ def _channel_panel_text(lang: str) -> str:
     )
 
 
-def _channel_test_message(kind: str) -> str:
-    if kind == "entry":
-        return "\n".join(
-            [
-                "⚡ AI ВХОД | x10",
-                "TESTCOIN — LONG",
-                "Баланс: $1,000",
-                "Статус: АКТИВЕН",
-            ]
-        )
-    if kind == "be":
-        return "\n".join(
-            [
-                "🟢 BE СРАБОТАЛ | x10",
-                "TESTCOIN — LONG",
-                "Статус: СТОП → ВХОД",
-            ]
-        )
-    if kind == "exit_tp":
-        return "\n".join(
-            [
-                "🎯 AI ВЫХОД | x10",
-                "TESTCOIN — TP",
-                "Доходность: +3.00%",
-                "PnL: +$30.00",
-                "Баланс: $1,030",
-            ]
-        )
-    if kind == "exit_sl":
-        return "\n".join(
-            [
-                "🛑 AI ВЫХОД | x10",
-                "TESTCOIN — SL",
-                "Доходность: -1.00%",
-                "PnL: -$10.00",
-                "Баланс: $990",
-            ]
-        )
-    if kind == "exit_be":
-        return "\n".join(
-            [
-                "🟦 AI ВЫХОД | x10",
-                "TESTCOIN — BE",
-                "Доходность: +0.00%",
-                "PnL: +$0.00",
-                "Баланс: $1,000",
-            ]
-        )
-    return "\n".join(
-        [
-            "🧠 СТАТУС AI РЫНКА",
-            "Режим BTC: ФЛЭТ",
-            "Плотность сигналов: НИЗКАЯ",
-            "Режим: ОЖИДАНИЕ",
-        ]
-    )
+def _channel_test_signal_id(admin_user_id: int) -> str:
+    return f"test:{int(admin_user_id)}"
+
+
+def _channel_test_signal_payload(*, admin_user_id: int, be_level_pct: float | None = None) -> dict:
+    payload = {
+        "signal_id": _channel_test_signal_id(admin_user_id),
+        "symbol": "TESTCOIN",
+        "direction": "LONG",
+    }
+    if be_level_pct is not None:
+        payload["be_level_pct"] = float(be_level_pct)
+    return payload
+
+
+def _channel_test_result_payload(final_status: str) -> dict:
+    status = str(final_status).upper()
+    mapped = "TP1" if status == "TP" else status
+    return {"outcome": mapped}
 
 
 def _format_outcome_block(event: dict, lang: str) -> list[str]:
@@ -5459,15 +5473,48 @@ async def admin_channel_back_callback(callback: CallbackQuery):
         await callback.message.edit_text(i18n.t(lang or "ru", "BACK_TO_MAIN_TEXT"))
 
 
-@dp.callback_query(F.data.regexp(r"^admin:channel:test_(entry|be|exit_tp|exit_sl|exit_be|status)$"))
+@dp.callback_query(F.data.regexp(r"^admin:channel:test_(entry|fix8|fix10|exit_tp|exit_sl|exit_be|status|reset)$"))
 async def admin_channel_test_callback(callback: CallbackQuery):
     if not await _ensure_admin_callback(callback):
         return
     lang = get_user_lang(callback.from_user.id) if callback.from_user else None
     lang = lang or "ru"
+    if callback.from_user is None:
+        await callback.answer(i18n.t(lang, "ADMIN_ONLY"), show_alert=True)
+        return
+
     kind = callback.data.split("test_", 1)[1]
-    text = _channel_test_message(kind)
-    ok, reason = await publish_to_channel(bot, text)
+    admin_user_id = int(callback.from_user.id)
+    test_signal_id = _channel_test_signal_id(admin_user_id)
+    ok = False
+    reason = "unknown"
+
+    if kind == "entry":
+        reset_ai_public_trade_by_signal_id(signal_id=test_signal_id)
+        ok, reason = await _ai_public_on_activation(_channel_test_signal_payload(admin_user_id=admin_user_id))
+    elif kind == "fix8":
+        ok, reason = await _ai_public_on_be_triggered(
+            _channel_test_signal_payload(admin_user_id=admin_user_id, be_level_pct=8.0)
+        )
+    elif kind == "fix10":
+        ok, reason = await _ai_public_on_be_triggered(
+            _channel_test_signal_payload(admin_user_id=admin_user_id, be_level_pct=10.0)
+        )
+    elif kind in {"exit_tp", "exit_sl", "exit_be"}:
+        final_status = kind.split("exit_", 1)[1].upper()
+        ok, reason = await _ai_public_on_final_close(
+            _channel_test_signal_payload(admin_user_id=admin_user_id),
+            _channel_test_result_payload(final_status),
+        )
+    elif kind == "status":
+        text = _channel_panel_text(lang)
+        ok, reason = await publish_to_channel(bot, text)
+    elif kind == "reset":
+        reset_ai_public_trade_by_signal_id(signal_id=test_signal_id)
+        reset_ai_public_balance_to_start()
+        await callback.answer(i18n.t(lang, "CHANNEL_TEST_RESET_OK"), show_alert=True)
+        return
+
     if ok:
         await callback.answer(i18n.t(lang, "CHANNEL_TEST_OK"), show_alert=True)
         return
