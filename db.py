@@ -451,6 +451,37 @@ def close_ai_public_trade(*, signal_id: str, final_status: str) -> dict | None:
         conn.close()
 
 
+
+
+def reset_ai_public_test_trade(*, signal_id: str) -> None:
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM ai_public_trades WHERE signal_id = ?", (str(signal_id),))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def reset_ai_public_balance_to_start() -> dict | None:
+    conn = get_conn()
+    try:
+        state_row = conn.execute("SELECT * FROM ai_public_state WHERE id = 1").fetchone()
+        if state_row is None:
+            return None
+        start_balance = float(state_row["start_balance_usd"] or 0.0)
+        conn.execute(
+            """
+            UPDATE ai_public_state
+            SET balance_usd = ?, updated_at = datetime('now')
+            WHERE id = 1
+            """,
+            (start_balance,),
+        )
+        conn.commit()
+        return {"balance_usd": start_balance, "start_balance_usd": start_balance}
+    finally:
+        conn.close()
+
 def get_user_pref(user_id: int, key: str, default: int = 0) -> int:
     conn = get_conn()
     try:
