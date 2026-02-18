@@ -490,10 +490,10 @@ async def _ai_public_on_activation(signal: dict) -> None:
     state = get_ai_public_state() or {}
     balance = float(state.get("balance_usd") or AI_PUBLIC_START_BALANCE)
     text = (
-        f"⚡ AI ENTRY | x{int(AI_PUBLIC_LEVERAGE)}\n"
+        f"⚡ AI ВХОД | x{int(AI_PUBLIC_LEVERAGE)}\n"
         f"{symbol} — {side}\n"
-        f"Balance: ${balance:.2f}\n"
-        "Status: ACTIVE"
+        f"Баланс: ${balance:.2f}\n"
+        "Статус: АКТИВЕН"
     )
     await _ai_public_send_channel_message(text)
 
@@ -506,9 +506,9 @@ async def _ai_public_on_be_triggered(signal: dict) -> None:
     if not symbol:
         return
     text = (
-        f"🟢 BE TRIGGERED | x{int(AI_PUBLIC_LEVERAGE)}\n"
+        f"🟢 BE СРАБОТАЛ | x{int(AI_PUBLIC_LEVERAGE)}\n"
         f"{symbol} — {side}\n"
-        "Status: STOP → ENTRY"
+        "Статус: СТОП → ВХОД"
     )
     await _ai_public_send_channel_message(text)
 
@@ -533,11 +533,11 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> None:
         return
     emoji = {"TP": "🎯", "SL": "🛑", "BE": "🟦"}.get(final_status, "ℹ️")
     text = (
-        f"{emoji} AI EXIT | x{int(AI_PUBLIC_LEVERAGE)}\n"
+        f"{emoji} AI ВЫХОД | x{int(AI_PUBLIC_LEVERAGE)}\n"
         f"{closed['symbol']} — {final_status}\n"
-        f"Return: {closed['roi_pct']:+.2f}%\n"
+        f"Доходность: {closed['roi_pct']:+.2f}%\n"
         f"PnL: ${closed['pnl_usd']:+.2f}\n"
-        f"Balance: ${closed['balance_after']:.2f}"
+        f"Баланс: ${closed['balance_after']:.2f}"
     )
     await _ai_public_send_channel_message(text)
 
@@ -2276,56 +2276,56 @@ def _channel_test_message(kind: str) -> str:
     if kind == "entry":
         return "\n".join(
             [
-                "⚡ AI ENTRY | x10",
+                "⚡ AI ВХОД | x10",
                 "TESTCOIN — LONG",
-                "Balance: $1,000.00",
-                "Status: ACTIVE",
+                "Баланс: $1,000.00",
+                "Статус: АКТИВЕН",
             ]
         )
     if kind == "be":
         return "\n".join(
             [
-                "🟢 BE TRIGGERED | x10",
+                "🟢 BE СРАБОТАЛ | x10",
                 "TESTCOIN — LONG",
-                "Status: STOP → ENTRY",
+                "Статус: СТОП → ВХОД",
             ]
         )
     if kind == "exit_tp":
         return "\n".join(
             [
-                "🎯 AI EXIT | x10",
+                "🎯 AI ВЫХОД | x10",
                 "TESTCOIN — TP",
-                "Return: +3.00%",
+                "Доходность: +3.00%",
                 "PnL: +$30.00",
-                "Balance: $1,030.00",
+                "Баланс: $1,030.00",
             ]
         )
     if kind == "exit_sl":
         return "\n".join(
             [
-                "🛑 AI EXIT | x10",
+                "🛑 AI ВЫХОД | x10",
                 "TESTCOIN — SL",
-                "Return: -1.00%",
+                "Доходность: -1.00%",
                 "PnL: -$10.00",
-                "Balance: $990.00",
+                "Баланс: $990.00",
             ]
         )
     if kind == "exit_be":
         return "\n".join(
             [
-                "🟦 AI EXIT | x10",
+                "🟦 AI ВЫХОД | x10",
                 "TESTCOIN — BE",
-                "Return: +0.00%",
+                "Доходность: +0.00%",
                 "PnL: +$0.00",
-                "Balance: $1,000.00",
+                "Баланс: $1,000.00",
             ]
         )
     return "\n".join(
         [
-            "🧠 AI MARKET STATUS",
-            "BTC Regime: CHOP",
-            "Signal Density: LOW",
-            "Mode: STANDBY",
+            "🧠 СТАТУС AI РЫНКА",
+            "Режим BTC: ФЛЭТ",
+            "Плотность сигналов: НИЗКАЯ",
+            "Режим: ОЖИДАНИЕ",
         ]
     )
 
