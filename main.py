@@ -293,6 +293,22 @@ def get_signal_access_level(user_id: int, signal_created_at: datetime) -> str:
     return "FULL" if signal_created_at <= cutoff else "PREVIEW"
 
 
+def get_event_access_level(user_id: int, event: dict) -> str:
+    """Resolve access level for a concrete user event card/message.
+
+    If the event already belongs to the same user, keep it fully visible.
+    This prevents previously delivered free/trial signals from being
+    unexpectedly blurred after pressing expand/collapse.
+    """
+    try:
+        event_user_id = int(event.get("user_id") or 0)
+    except (TypeError, ValueError):
+        event_user_id = 0
+    if event_user_id > 0 and event_user_id == int(user_id):
+        return "FULL"
+    return get_signal_access_level(user_id, _event_created_at_utc(event))
+
+
 def _hidden_status_modules() -> set[str]:
     raw = os.getenv("STATUS_HIDE_MODULES", "signal_audit")
     return {item.strip() for item in raw.split(",") if item.strip()}
@@ -1687,7 +1703,7 @@ def _history_nav_kb(
             _format_history_item(
                 event,
                 lang,
-                access_level=get_signal_access_level(viewer_user_id, _event_created_at_utc(event)),
+                access_level=get_event_access_level(viewer_user_id, event),
             )
             if history_prefix == "history"
             else render_pd_list_item(viewer_user_id, event)
@@ -2980,7 +2996,7 @@ def _archive_inline_kb(
                         symbol=event.get("symbol"),
                         created_at=event.get("created_at") or event.get("ts"),
                         status_label=_signal_list_status_label(event),
-                        access_level=get_signal_access_level(viewer_user_id, _event_created_at_utc(event)),
+                        access_level=get_event_access_level(viewer_user_id, event),
                     ),
                     callback_data=f"history_open:{event.get('id')}",
                 )
@@ -3087,7 +3103,7 @@ async def sig_open(callback: CallbackQuery):
             stored_window, page, _, history_type = context
             history_prefix = "history" if history_type == "ai" else "history_pd"
             back_callback = f"{history_prefix}:{stored_window}:page={max(1, page)}"
-        access_level = get_signal_access_level(callback.from_user.id, _event_created_at_utc(event))
+        access_level = get_event_access_level(callback.from_user.id, event)
         expanded = _get_signal_detail_expanded(user_id=callback.from_user.id, signal_id=event_id)
         detail_text = _format_archive_detail_view(event, lang, expanded=expanded, access_level=access_level)
         detail_markup = _archive_detail_kb(
@@ -3272,7 +3288,7 @@ async def sig_toggle(callback: CallbackQuery):
         return
     event = dict(event_row)
 
-    access_level = get_signal_access_level(callback.from_user.id, _event_created_at_utc(event))
+    access_level = get_event_access_level(callback.from_user.id, event)
     current = _get_signal_detail_expanded(user_id=callback.from_user.id, signal_id=event_id)
     next_state = False if access_level == "PREVIEW" else not current
     _set_signal_detail_expanded(user_id=callback.from_user.id, signal_id=event_id, expanded=next_state)
@@ -3324,7 +3340,7 @@ async def signal_message_toggle(callback: CallbackQuery):
         return
 
     event = dict(event_row)
-    access_level = get_signal_access_level(callback.from_user.id, _event_created_at_utc(event))
+    access_level = get_event_access_level(callback.from_user.id, event)
     if access_level == "PREVIEW":
         expanded = False
         target_text = _format_archive_detail(event, lang, access_level="PREVIEW")
@@ -3435,7 +3451,7 @@ async def sig_refresh(callback: CallbackQuery):
             back_callback = f"{history_prefix}:{time_window}:page={max(1, page + 1)}"
         with suppress(Exception):
             event_data = dict(event)
-            access_level = get_signal_access_level(callback.from_user.id, _event_created_at_utc(event_data))
+            access_level = get_event_access_level(callback.from_user.id, event_data)
             expanded = _get_signal_detail_expanded(user_id=callback.from_user.id, signal_id=event_id)
             await callback.message.edit_text(
                 _format_archive_detail_view(event_data, lang, expanded=expanded, access_level=access_level),
