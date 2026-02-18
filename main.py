@@ -451,7 +451,15 @@ def _ai_public_ready() -> bool:
     return AI_PUBLIC_ENABLED and TELEGRAM_CHANNEL_ID != 0
 
 
-async def publish_to_channel(bot_instance: Bot | None, text: str) -> tuple[bool, str]:
+AI_PUBLIC_FREE_SIGNAL_URL = str(os.getenv("AI_PUBLIC_FREE_SIGNAL_URL", "")).strip()
+
+
+async def publish_to_channel(
+    bot_instance: Bot | None,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> tuple[bool, str]:
     if os.getenv("AI_PUBLIC_ENABLED", "0").strip().lower() not in ("1", "true", "yes", "on"):
         return False, "disabled"
     channel_id = int(os.getenv("TELEGRAM_CHANNEL_ID", "0") or 0)
@@ -460,15 +468,45 @@ async def publish_to_channel(bot_instance: Bot | None, text: str) -> tuple[bool,
     if bot_instance is None:
         return False, "bot_not_ready"
     try:
-        await bot_instance.send_message(channel_id, text)
+        await bot_instance.send_message(channel_id, text, reply_markup=reply_markup)
         return True, "ok"
     except Exception as exc:
         logger.exception("channel_send_failed")
         return False, str(exc)
 
 
-async def _ai_public_send_channel_message(text: str) -> tuple[bool, str]:
-    ok, reason = await publish_to_channel(bot, text)
+def _ai_public_signal_class(score: int) -> str:
+    if score >= 90:
+        return "Надёжный (90+)"
+    if score >= 80:
+        return "Повышенный риск (80–89)"
+    return "Требует подтверждения (<80)"
+
+
+def _ai_public_entry_kb(symbol: str) -> InlineKeyboardMarkup:
+    normalized = str(symbol or "").upper().replace("/", "").strip()
+    row = [
+        InlineKeyboardButton(
+            text="📊 Binance",
+            url=f"https://www.binance.com/ru/futures/{normalized}",
+        )
+    ]
+    if AI_PUBLIC_FREE_SIGNAL_URL:
+        row.append(
+            InlineKeyboardButton(
+                text="🤖 Забрать сигнал бесплатно",
+                url=AI_PUBLIC_FREE_SIGNAL_URL,
+            )
+        )
+    return InlineKeyboardMarkup(inline_keyboard=[row])
+
+
+async def _ai_public_send_channel_message(
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> tuple[bool, str]:
+    ok, reason = await publish_to_channel(bot, text, reply_markup=reply_markup)
     if not ok:
         logger.warning("[ai_public] channel send skipped/failed: %s", reason)
     return ok, reason
@@ -480,6 +518,7 @@ async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
     signal_id = str(signal.get("signal_id") or "")
     symbol = str(signal.get("symbol") or "")
     side = str(signal.get("direction") or "").upper()
+    score = max(0, min(100, int(signal.get("score") or 0)))
     if not signal_id or not symbol:
         return False, "invalid_signal"
     inserted = insert_ai_public_trade_open(
@@ -494,15 +533,19 @@ async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
     balance = float(state.get("balance_usd") or AI_PUBLIC_START_BALANCE)
     risk_pct = float(state.get("risk_pct") or AI_PUBLIC_RISK_PCT)
     risk_usd = balance * (risk_pct / 100.0)
+    class_label = _ai_public_signal_class(score)
     text = (
-        "⚡ AI ВХОД\n"
-        f"{symbol} — {side}\n"
-        f"Вход: {risk_pct:.1f}% риска (${_format_usd(risk_usd)})\n"
-        f"Плечо: x{int(AI_PUBLIC_LEVERAGE)}\n"
-        f"Баланс: ${_format_usd(balance)}\n"
-        "Статус: АКТИВЕН"
+        "🧠 Модель AI Public Account\n\n"
+        f"⚡️ AI ВХОД #{inserted}\n"
+        f"{symbol} — {side}\n\n"
+        f"📊 Оценка сигнала: {score} / 100\n"
+        f"⚠️ Класс: {class_label}\n\n"
+        f"💼 Вход: {risk_pct:.1f}% риска (${_format_usd(risk_usd)})\n"
+        f"📈 Плечо: x{int(AI_PUBLIC_LEVERAGE)}\n\n"
+        f"💰 Баланс модели: ${_format_usd(balance)}\n"
+        "🟢 Статус: АКТИВЕН"
     )
-    return await _ai_public_send_channel_message(text)
+    return await _ai_public_send_channel_message(text, reply_markup=_ai_public_entry_kb(symbol))
 
 
 async def _ai_public_on_be_triggered(signal: dict) -> tuple[bool, str]:
