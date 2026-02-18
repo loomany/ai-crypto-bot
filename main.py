@@ -1261,13 +1261,14 @@ def _get_history_page(
     *,
     time_window: str,
     page: int,
+    viewer_user_id: int | None = None,
     page_size: int = 12,
     include_legacy: bool = False,
     module: str = "ai_signals",
 ) -> tuple[int, int, int, list[dict]]:
     total = count_signal_history(
         time_window=time_window,
-        user_id=None,
+        user_id=viewer_user_id,
         min_score=None,
         include_legacy=include_legacy,
         module=module,
@@ -1277,7 +1278,7 @@ def _get_history_page(
     offset = (page_value - 1) * page_size
     rows = get_signal_history(
         time_window=time_window,
-        user_id=None,
+        user_id=viewer_user_id,
         limit=page_size,
         offset=offset,
         include_legacy=include_legacy,
@@ -1530,13 +1531,14 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         page_value, pages, total, rows = _get_history_page(
             time_window=time_window,
             page=page,
+            viewer_user_id=callback.from_user.id,
             include_legacy=include_legacy,
             module=module,
         )
         rows = _dedupe_signals(rows)
         history_summary = get_history_winrate_summary(
             time_window=time_window,
-            user_id=None,
+            user_id=callback.from_user.id,
             include_legacy=include_legacy,
             module=module,
         )
