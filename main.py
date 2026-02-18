@@ -480,7 +480,7 @@ def _ai_public_signal_class(score: int) -> str:
         return "Надёжный (90+)"
     if score >= 80:
         return "Повышенный риск (80–89)"
-    return "Требует подтверждения (<80)"
+    return "Требует подтверждения (&lt;80)"
 
 
 def _ai_public_entry_kb(symbol: str) -> InlineKeyboardMarkup:
