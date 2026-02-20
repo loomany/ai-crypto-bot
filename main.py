@@ -1752,14 +1752,14 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
         page_value, pages, total, rows = _get_history_page(
             time_window=time_window,
             page=page,
-            viewer_user_id=callback.from_user.id,
+            viewer_user_id=None,
             include_legacy=include_legacy,
             module=module,
         )
         rows = _dedupe_signals(rows)
         history_summary = get_history_winrate_summary(
             time_window=time_window,
-            user_id=callback.from_user.id,
+            user_id=None,
             include_legacy=include_legacy,
             module=module,
         )
