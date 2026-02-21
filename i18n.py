@@ -204,6 +204,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "🔒 Доступ к Pump/Dump сигналам по подписке.\n"
             "Нажми «Купить подписку» — покажу инструкцию."
         ),
+        "PAYWALL_PREVIEW_LIVE_TITLE": "🔒 ПРЕВЬЮ (в реальном времени)",
+        "PAYWALL_PREVIEW_PD_TITLE": "🔒 ПРЕВЬЮ Pump/Dump (в реальном времени)",
+        "PAYWALL_PREVIEW_LEVELS": "Уровни доступны по подписке:",
+        "PAYWALL_PREVIEW_PD_METRICS": "Метрики доступны по подписке:",
+        "PAYWALL_PREVIEW_BUY_PROMPT": "👉 Купить подписку — чтобы видеть детали сразу",
         "TRIAL_SUFFIX_AI": "\n\n🎁 Осталось {left}/{limit} бесплатных AI-сигналов",
         "TRIAL_SUFFIX_PD": "\n\n🎁 Осталось {left}/{limit} бесплатных Pump/Dump сигналов",
         "LANG_PICK_TEXT": "Выберите язык:",
@@ -1115,6 +1120,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "🔒 Pump/Dump alerts are available by subscription.\n"
             "Tap “Buy subscription” — I’ll show the instructions."
         ),
+        "PAYWALL_PREVIEW_LIVE_TITLE": "🔒 PREVIEW (Real-time)",
+        "PAYWALL_PREVIEW_PD_TITLE": "🔒 Pump/Dump preview (Real-time)",
+        "PAYWALL_PREVIEW_LEVELS": "Levels are available with a subscription:",
+        "PAYWALL_PREVIEW_PD_METRICS": "Metrics are available with a subscription:",
+        "PAYWALL_PREVIEW_BUY_PROMPT": "👉 Buy subscription — to see full details instantly",
         "TRIAL_SUFFIX_AI": "\n\n🎁 {left}/{limit} free AI signals left",
         "TRIAL_SUFFIX_PD": "\n\n🎁 {left}/{limit} free Pump/Dump signals left",
         "LANG_PICK_TEXT": "Please choose a language:",

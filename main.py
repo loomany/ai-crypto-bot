@@ -2868,6 +2868,61 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
     return "\n".join(lines)
 
 
+def _build_ai_paywall_preview(signal_dict: dict, lang: str) -> str:
+    score = int(round(float(signal_dict.get("score", 0) or 0)))
+    symbol_raw = _signal_symbol_text(str(signal_dict.get("symbol") or ""))
+    side = (
+        i18n.t(lang, "SIGNAL_SHORT_SIDE_LONG")
+        if str(signal_dict.get("direction") or "").lower() == "long"
+        else i18n.t(lang, "SIGNAL_SHORT_SIDE_SHORT")
+    )
+    ts_value = _safe_int(signal_dict.get("ts"), 0)
+    time_text = _format_event_time(ts_value) if ts_value > 0 else datetime.now(ALMATY_TZ).strftime("%d.%m - %H:%M")
+    ttl_minutes = _safe_int(signal_dict.get("ttl_minutes"), SIGNAL_TTL_SECONDS // 60)
+    ttl_hours = max(1, int(round(ttl_minutes / 60)))
+    lines = [
+        i18n.t(lang, "PAYWALL_PREVIEW_LIVE_TITLE"),
+        "",
+        f"📌 {symbol_raw} | Score {score}",
+        f"🟣 В процессе | {side}",
+        f"🕒 {time_text}",
+        "",
+        f"⏱ TTL: {ttl_hours}h",
+        "",
+        i18n.t(lang, "PAYWALL_PREVIEW_LEVELS"),
+        "",
+        "• ROI: *** – ***",
+        "• SL: ***",
+        "• TP1: ***",
+        "• TP2: ***",
+        "",
+        i18n.t(lang, "PAYWALL_PREVIEW_BUY_PROMPT"),
+    ]
+    return "\n".join(lines)
+
+
+def _build_pd_paywall_preview(signal: dict, lang: str) -> str:
+    symbol = str(signal.get("symbol") or "").upper()
+    side_raw = str(signal.get("type") or "").lower()
+    side = "PUMP" if side_raw == "pump" else "DUMP"
+    lines = [
+        i18n.t(lang, "PAYWALL_PREVIEW_PD_TITLE"),
+        "",
+        f"📌 {symbol} | {side}",
+        f"🕒 {datetime.now(ALMATY_TZ).strftime('%d.%m - %H:%M')}",
+        "",
+        i18n.t(lang, "PAYWALL_PREVIEW_PD_METRICS"),
+        "",
+        "• Δ (1m): ***%",
+        "• Δ (5m): ***%",
+        "• Объём (5m): *** USDT",
+        "• Volume xAvg: ***x",
+        "",
+        i18n.t(lang, "PAYWALL_PREVIEW_BUY_PROMPT"),
+    ]
+    return "\n".join(lines)
+
+
 def _signal_detail_expand_state_key(*, user_id: int, signal_id: int) -> str:
     return f"sig_detail_expand:{int(user_id)}:{int(signal_id)}"
 
@@ -6652,7 +6707,7 @@ async def send_signal_to_all(
                     if _should_send_paywall(chat_id, "ai"):
                         kind = "paywall"
                         should_log = False
-                        message_text = i18n.t(lang, "PAYWALL_AI")
+                        message_text = _build_ai_paywall_preview(signal_dict, lang)
                     else:
                         stats["skipped_notifications_off"] += 1
                         continue
@@ -7050,7 +7105,7 @@ async def _deliver_pumpdump_signal_stats(
                     continue
                 await bot.send_message(
                     chat_id,
-                    i18n.t(lang, "PAYWALL_PD"),
+                    _build_pd_paywall_preview(signal, lang),
                     reply_markup=_subscription_kb_for("pump", lang),
                 )
                 paywall_count += 1
