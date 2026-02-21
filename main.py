@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 import os
 import sqlite3
 import traceback
@@ -143,7 +144,7 @@ from db import (
 )
 from db_path import ensure_db_writable, get_db_path
 from history_status import get_signal_badge, get_signal_status_key
-from market_cache import get_ticker_request_count, reset_ticker_request_count
+from market_cache import get_spot_24h, get_ticker_request_count, reset_ticker_request_count
 from btc_context import get_btc_regime
 from alert_dedup_db import init_alert_dedup, can_send
 from status_utils import is_notify_enabled
@@ -898,6 +899,8 @@ AI_CHUNK_MAX_EFFECTIVE = (
     min(AI_CHUNK_MAX, AI_SAFE_CHUNK_MAX) if AI_SAFE_MODE else AI_CHUNK_MAX
 )
 AI_CYCLE_SLEEP_SEC = float(os.getenv("AI_CYCLE_SLEEP_SEC", "2"))
+AI_SIGNAL_MAX_ENTRY_DRIFT_PCT = float(os.getenv("AI_SIGNAL_MAX_ENTRY_DRIFT_PCT", "5.0"))
+AI_SIGNAL_REQUIRE_MARKET_PRICE = os.getenv("AI_SIGNAL_REQUIRE_MARKET_PRICE", "1").lower() in ("1", "true", "yes", "y")
 AI_ADAPT_ENABLED = os.getenv("AI_ADAPT_ENABLED", "1").lower() in ("1", "true", "yes", "y")
 AI_ADAPT_FAIL_NO_KLINES_HIGH = float(os.getenv("AI_ADAPT_FAIL_NO_KLINES_HIGH", "0.40"))
 AI_ADAPT_FAIL_TIMEOUT_HIGH = float(os.getenv("AI_ADAPT_FAIL_TIMEOUT_HIGH", "0.30"))
@@ -1861,14 +1864,24 @@ def enforce_signal_ttl() -> int:
     return updated
 
 
+def _price_precision(value: float, *, min_decimals: int = 4, max_decimals: int = 12) -> int:
+    abs_value = abs(float(value))
+    if abs_value <= 0:
+        return min_decimals
+    if abs_value >= 1:
+        return min_decimals
+    magnitude = int(math.floor(math.log10(abs_value)))
+    decimals = max(min_decimals, min(max_decimals, min_decimals - magnitude))
+    return decimals
+
+
 def _format_price(value: float) -> str:
     if value == 0:
         return "0"
-    if value >= 100:
+    if abs(value) >= 100:
         return f"{value:,.2f}".replace(",", " ")
-    if value >= 1:
-        return f"{value:,.4f}".replace(",", " ")
-    return f"{value:.6f}"
+    decimals = _price_precision(value)
+    return f"{value:.{decimals}f}"
 
 
 def _format_usd(value: float) -> str:
@@ -6056,6 +6069,10 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
     score = int(signal.get("score", 0))
     breakdown = signal.get("score_breakdown") or signal.get("breakdown") or []
 
+    signal_levels = [entry_low, entry_high, float(signal["sl"]), float(signal["tp1"]), float(signal["tp2"])]
+    price_levels_non_zero = [float(level) for level in signal_levels if float(level) > 0]
+    price_precision = max((_price_precision(level) for level in price_levels_non_zero), default=4)
+
     text = format_scenario_message(
         lang=lang,
         symbol_text=symbol_text,
@@ -6072,7 +6089,7 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
         rsi_1h=rsi_1h,
         volume_ratio=volume_ratio,
         rr=rr,
-        price_precision=4,
+        price_precision=price_precision,
         score_breakdown=breakdown,
         lifetime_minutes=int(signal.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60) or SIGNAL_TTL_SECONDS // 60),
     )
@@ -6220,6 +6237,51 @@ def _strip_runtime_signal_fields(signal_dict: Dict[str, Any]) -> Dict[str, Any]:
     for key in ("_raw_direction", "_final_direction", "_inverted", "_inversion_applied"):
         db_signal.pop(key, None)
     return db_signal
+
+
+def _build_spot_last_price_map(rows: list[dict[str, Any]] | None) -> dict[str, float]:
+    result: dict[str, float] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").upper().strip()
+        if not symbol:
+            continue
+        with suppress(TypeError, ValueError):
+            price = float(row.get("lastPrice") or 0.0)
+            if price > 0:
+                result[symbol] = price
+    return result
+
+
+def _signal_entry_mid_price(signal: Dict[str, Any]) -> float:
+    entry_zone = signal.get("entry_zone")
+    if isinstance(entry_zone, (list, tuple)) and len(entry_zone) >= 2:
+        with suppress(TypeError, ValueError):
+            low = float(entry_zone[0])
+            high = float(entry_zone[1])
+            if low > 0 and high > 0:
+                return (low + high) / 2.0
+    return 0.0
+
+
+def _is_signal_entry_far_from_market(
+    signal: Dict[str, Any],
+    spot_last_price: dict[str, float],
+) -> tuple[bool, float, float, str]:
+    symbol = str(signal.get("symbol") or "").upper().strip()
+    market_price = float(spot_last_price.get(symbol) or 0.0)
+    entry_mid = _signal_entry_mid_price(signal)
+    if entry_mid <= 0:
+        return True, market_price, entry_mid, "invalid_entry"
+    if market_price <= 0:
+        if AI_SIGNAL_REQUIRE_MARKET_PRICE:
+            return True, market_price, entry_mid, "no_market_price"
+        return False, market_price, entry_mid, ""
+    drift_pct = abs(entry_mid - market_price) / market_price * 100.0
+    if drift_pct > AI_SIGNAL_MAX_ENTRY_DRIFT_PCT:
+        return True, market_price, entry_mid, "entry_drift"
+    return False, market_price, entry_mid, ""
 
 
 def _signal_payload_from_event(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -7344,6 +7406,8 @@ async def ai_scan_once() -> None:
             retry_signals = await process_confirm_retry_queue(
                 diag_state=module_state.state if module_state else None
             )
+            spot_24h_rows = await get_spot_24h()
+        spot_last_price = _build_spot_last_price_map(spot_24h_rows)
         for signal in retry_signals:
             if time.time() - start > BUDGET:
                 print("[AI] budget exceeded during confirm retry sends")
@@ -7379,6 +7443,14 @@ async def ai_scan_once() -> None:
             signal["btc_direction"] = btc_context.get("btc_direction")
             signal["btc_trend"] = btc_context.get("btc_trend")
             try:
+                too_far, market_price, entry_mid, skip_reason = _is_signal_entry_far_from_market(signal, spot_last_price)
+                if too_far:
+                    print(
+                        "[ai_signals] skip retry signal by entry drift "
+                        f"symbol={signal.get('symbol', '')} market={market_price:.6f} "
+                        f"entry_mid={entry_mid:.6f} reason={skip_reason} max_drift_pct={AI_SIGNAL_MAX_ENTRY_DRIFT_PCT:.2f}"
+                    )
+                    continue
                 update_current_symbol("ai_signals", signal.get("symbol", ""))
                 print(
                     "[ai_signals] RETRY SEND "
@@ -7583,6 +7655,14 @@ async def ai_scan_once() -> None:
             signal["btc_direction"] = btc_context.get("btc_direction")
             signal["btc_trend"] = btc_context.get("btc_trend")
             try:
+                too_far, market_price, entry_mid, skip_reason = _is_signal_entry_far_from_market(signal, spot_last_price)
+                if too_far:
+                    print(
+                        "[ai_signals] skip direct signal by entry drift "
+                        f"symbol={signal.get('symbol', '')} market={market_price:.6f} "
+                        f"entry_mid={entry_mid:.6f} reason={skip_reason} max_drift_pct={AI_SIGNAL_MAX_ENTRY_DRIFT_PCT:.2f}"
+                    )
+                    continue
                 update_current_symbol("ai_signals", signal.get("symbol", ""))
                 print(f"[ai_signals] DIRECT SEND {signal['symbol']} {signal['direction']} score={score} confirm_strict={bool(signal.get('confirm_strict', False))}")
                 await send_signal_to_all(signal)
