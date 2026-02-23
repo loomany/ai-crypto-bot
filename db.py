@@ -1296,6 +1296,7 @@ def get_history_winrate_summary(
             SELECT
                 CAST(ROUND(se.score) AS INTEGER) AS score,
                 UPPER(TRIM(COALESCE(se.result, se.status, ''))) AS outcome,
+                se.side,
                 se.result,
                 se.status,
                 se.state,
@@ -1307,6 +1308,10 @@ def get_history_winrate_summary(
                 se.poi_high,
                 se.sl,
                 se.tp1,
+                se.tp1_hit,
+                se.tp2_hit,
+                se.entry_price,
+                se.max_profit_pct,
                 se.be_level_pct
             FROM signal_events se
             JOIN ({dedup_subquery}) uniq ON uniq.id = se.id
@@ -1340,6 +1345,39 @@ def get_history_winrate_summary(
     be_level_sum = 0.0
     be_level_count = 0
 
+    def _is_tp_reached_after_be(signal_row: sqlite3.Row) -> bool:
+        try:
+            if int(signal_row["tp2_hit"] or 0) == 1 or int(signal_row["tp1_hit"] or 0) == 1:
+                return True
+        except (TypeError, ValueError, KeyError):
+            pass
+
+        try:
+            max_profit_pct = float(signal_row["max_profit_pct"] or 0.0)
+        except (TypeError, ValueError, KeyError):
+            return False
+        if max_profit_pct <= 0:
+            return False
+
+        try:
+            entry_price = float(signal_row["entry_price"] or 0.0)
+            if entry_price <= 0:
+                poi_low = float(signal_row["poi_low"])
+                poi_high = float(signal_row["poi_high"])
+                entry_price = (poi_low + poi_high) / 2.0
+            tp1_price = float(signal_row["tp1"])
+            if entry_price <= 0 or tp1_price <= 0:
+                return False
+
+            side = str(signal_row["side"] or "").upper()
+            if side == "SELL":
+                tp1_target_pct = safe_div(entry_price - tp1_price, entry_price, 0.0) * 100.0
+            else:
+                tp1_target_pct = safe_div(tp1_price - entry_price, entry_price, 0.0) * 100.0
+            return tp1_target_pct > 0 and max_profit_pct >= tp1_target_pct
+        except (TypeError, ValueError, KeyError):
+            return False
+
     for row in rows:
         score = int(row["score"] or 0)
         if score < 80:
@@ -1348,8 +1386,15 @@ def get_history_winrate_summary(
             continue
 
         outcome_type = get_signal_status_key(dict(row))
+        raw_outcome = str(row["outcome"] or "").upper()
+        effective_outcome = raw_outcome
+        if raw_outcome == "BE" and _is_tp_reached_after_be(row):
+            # Recalculate archive by business rule:
+            # if BE was triggered and TP was reached later, count signal as TP.
+            effective_outcome = "TP"
+
         totals = summary["totals"]
-        if str(row["outcome"] or "").upper() == "BE":
+        if effective_outcome == "BE":
             try:
                 raw_be_level = float(row["be_level_pct"] or 0.0)
                 # Older rows may have 0 in this field because the column default is 0.
@@ -1362,8 +1407,7 @@ def get_history_winrate_summary(
         if isinstance(totals, dict):
             badge = get_signal_badge(dict(row))
             if badge == "🟢":
-                outcome_upper = str(row["outcome"] or "").upper()
-                if outcome_upper == "BE":
+                if effective_outcome == "BE":
                     totals["be"] = int(totals.get("be", 0) or 0) + 1
                 else:
                     totals["tp"] = int(totals.get("tp", 0) or 0) + 1
