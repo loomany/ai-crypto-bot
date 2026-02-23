@@ -2910,12 +2910,13 @@ def _build_ai_paywall_preview(signal_dict: dict, lang: str) -> str:
 
 def _build_pd_paywall_preview(signal: dict, lang: str) -> str:
     symbol = str(signal.get("symbol") or "").upper()
+    masked_symbol = _blurred_pd_symbol(symbol)
     side_raw = str(signal.get("type") or "").lower()
     side = "PUMP" if side_raw == "pump" else "DUMP"
     lines = [
         i18n.t(lang, "PAYWALL_PREVIEW_PD_TITLE"),
         "",
-        f"📌 {symbol} | {side}",
+        f"📌 {masked_symbol} | {side}",
         f"🕒 {datetime.now(ALMATY_TZ).strftime('%d.%m - %H:%M')}",
         "",
         i18n.t(lang, "PAYWALL_PREVIEW_PD_METRICS"),
@@ -6042,6 +6043,17 @@ def _format_signed_number(value: float, decimals: int = 1) -> str:
 
 def _signal_symbol_text(symbol: str) -> str:
     return ui_symbol(symbol)
+
+
+def _blurred_pd_symbol(symbol: str) -> str:
+    normalized = str(symbol or "").upper().replace("/", "").strip()
+    if not normalized:
+        return "***"
+    quote_candidates = ("USDT", "USDC", "BUSD", "FDUSD", "BTC", "ETH", "BNB")
+    for quote in quote_candidates:
+        if normalized.endswith(quote) and len(normalized) > len(quote):
+            return f"***{quote}"
+    return "***"
 
 
 def _binance_spot_url(symbol: str) -> str:
