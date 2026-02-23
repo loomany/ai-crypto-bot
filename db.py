@@ -1092,6 +1092,16 @@ def _append_cutoff_filter(
         params.append(int(cutoff_ts))
 
 
+def _history_dedupe_partition_expr() -> str:
+    return (
+        "COALESCE(" 
+        "CAST(tg_message_id AS TEXT), "
+        "module || '|' || symbol || '|' || side || '|' || "
+        "CAST(ts AS TEXT) || '|' || CAST(CAST(ROUND(score) AS INTEGER) AS TEXT)"
+        ")"
+    )
+
+
 def get_signal_history(
     time_window: str,
     user_id: int | None = None,
@@ -1126,33 +1136,43 @@ def get_signal_history(
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         params.extend([int(limit), int(offset)])
+        partition_expr = _history_dedupe_partition_expr()
         cur = conn.execute(
             f"""
-            SELECT
-                id,
-                symbol,
-                side,
-                CAST(ROUND(score) AS INTEGER) AS score,
-                COALESCE(result, status) AS outcome,
-                result,
-                status,
-                state,
-                poi_touched_at,
-                activated_at,
-                ttl_minutes,
-                ts AS created_at,
-                poi_low AS entry_low,
-                poi_high AS entry_high,
-                tp1,
-                tp2,
-                sl AS sl_price,
-                timeframe,
-                max_profit_pct,
-                be_level_pct,
-                be_triggered
-            FROM signal_events
-            WHERE {where_clause}
-            ORDER BY ts DESC
+            WITH ranked AS (
+                SELECT
+                    id,
+                    symbol,
+                    side,
+                    CAST(ROUND(score) AS INTEGER) AS score,
+                    COALESCE(result, status) AS outcome,
+                    result,
+                    status,
+                    state,
+                    poi_touched_at,
+                    activated_at,
+                    ttl_minutes,
+                    ts AS created_at,
+                    poi_low AS entry_low,
+                    poi_high AS entry_high,
+                    tp1,
+                    tp2,
+                    sl AS sl_price,
+                    timeframe,
+                    max_profit_pct,
+                    be_level_pct,
+                    be_triggered,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY {partition_expr}
+                        ORDER BY id DESC
+                    ) AS rn
+                FROM signal_events
+                WHERE {where_clause}
+            )
+            SELECT *
+            FROM ranked
+            WHERE rn = 1
+            ORDER BY created_at DESC
             LIMIT ? OFFSET ?
             """,
             params,
@@ -1197,8 +1217,17 @@ def count_signal_history(
         _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
+        partition_expr = _history_dedupe_partition_expr()
         cur = conn.execute(
-            f"SELECT COUNT(*) AS cnt FROM signal_events WHERE {where_clause}",
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM (
+                SELECT 1
+                FROM signal_events
+                WHERE {where_clause}
+                GROUP BY {partition_expr}
+            ) AS deduped
+            """,
             params,
         )
         row = cur.fetchone()
@@ -1239,11 +1268,35 @@ def get_history_winrate_summary(
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
 
+        partition_expr = _history_dedupe_partition_expr()
         cur = conn.execute(
             f"""
+            WITH ranked AS (
+                SELECT
+                    CAST(ROUND(score) AS INTEGER) AS score,
+                    UPPER(TRIM(COALESCE(result, status, ''))) AS outcome,
+                    result,
+                    status,
+                    state,
+                    poi_touched_at,
+                    activated_at,
+                    ttl_minutes,
+                    ts,
+                    poi_low,
+                    poi_high,
+                    sl,
+                    tp1,
+                    be_level_pct,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY {partition_expr}
+                        ORDER BY id DESC
+                    ) AS rn
+                FROM signal_events
+                WHERE {where_clause}
+            )
             SELECT
-                CAST(ROUND(score) AS INTEGER) AS score,
-                UPPER(TRIM(COALESCE(result, status, ''))) AS outcome,
+                score,
+                outcome,
                 result,
                 status,
                 state,
@@ -1256,8 +1309,8 @@ def get_history_winrate_summary(
                 sl,
                 tp1,
                 be_level_pct
-            FROM signal_events
-            WHERE {where_clause}
+            FROM ranked
+            WHERE rn = 1
             """,
             params,
         )
