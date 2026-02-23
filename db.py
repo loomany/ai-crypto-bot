@@ -83,6 +83,24 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_signal_events_symbol_ts ON signal_events(symbol, ts)"
         )
+        # Deduplicate legacy rows that may appear after repeated retries of the same
+        # user-facing signal delivery.
+        conn.execute(
+            """
+            DELETE FROM signal_events
+            WHERE id NOT IN (
+                SELECT MAX(id)
+                FROM signal_events
+                GROUP BY user_id, module, symbol, ts
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_events_user_module_symbol_ts_uniq
+            ON signal_events(user_id, module, symbol, ts)
+            """
+        )
         cur = conn.execute("PRAGMA table_info(signal_events)")
         cols = {row["name"] for row in cur.fetchall()}
         if "reason_json" not in cols:
@@ -850,7 +868,7 @@ def insert_signal_event(
     try:
         cur = conn.execute(
             """
-            INSERT INTO signal_events (
+            INSERT OR IGNORE INTO signal_events (
                 ts, user_id, module, symbol, side, timeframe, score,
                 poi_low, poi_high, sl, tp1, tp2, status, is_test, tg_message_id,
                 reason_json, breakdown_json, ttl_minutes, is_expanded
@@ -879,7 +897,21 @@ def insert_signal_event(
             ),
         )
         conn.commit()
-        return int(cur.lastrowid)
+        if int(cur.rowcount or 0) > 0 and cur.lastrowid is not None:
+            return int(cur.lastrowid)
+
+        cur = conn.execute(
+            """
+            SELECT id
+            FROM signal_events
+            WHERE user_id = ? AND module = ? AND symbol = ? AND ts = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(user_id), module, symbol, int(ts)),
+        )
+        existing = cur.fetchone()
+        return int(existing["id"]) if existing is not None else 0
     finally:
         conn.close()
 
@@ -1126,33 +1158,39 @@ def get_signal_history(
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         params.extend([int(limit), int(offset)])
+        dedup_subquery = f"""
+            SELECT MAX(id) AS id
+            FROM signal_events
+            WHERE {where_clause}
+            GROUP BY module, symbol, ts
+        """
         cur = conn.execute(
             f"""
             SELECT
-                id,
-                symbol,
-                side,
-                CAST(ROUND(score) AS INTEGER) AS score,
-                COALESCE(result, status) AS outcome,
-                result,
-                status,
-                state,
-                poi_touched_at,
-                activated_at,
-                ttl_minutes,
-                ts AS created_at,
-                poi_low AS entry_low,
-                poi_high AS entry_high,
-                tp1,
-                tp2,
-                sl AS sl_price,
-                timeframe,
-                max_profit_pct,
-                be_level_pct,
-                be_triggered
-            FROM signal_events
-            WHERE {where_clause}
-            ORDER BY ts DESC
+                se.id,
+                se.symbol,
+                se.side,
+                CAST(ROUND(se.score) AS INTEGER) AS score,
+                COALESCE(se.result, se.status) AS outcome,
+                se.result,
+                se.status,
+                se.state,
+                se.poi_touched_at,
+                se.activated_at,
+                se.ttl_minutes,
+                se.ts AS created_at,
+                se.poi_low AS entry_low,
+                se.poi_high AS entry_high,
+                se.tp1,
+                se.tp2,
+                se.sl AS sl_price,
+                se.timeframe,
+                se.max_profit_pct,
+                se.be_level_pct,
+                se.be_triggered
+            FROM signal_events se
+            JOIN ({dedup_subquery}) uniq ON uniq.id = se.id
+            ORDER BY se.ts DESC, se.id DESC
             LIMIT ? OFFSET ?
             """,
             params,
@@ -1198,7 +1236,15 @@ def count_signal_history(
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
         cur = conn.execute(
-            f"SELECT COUNT(*) AS cnt FROM signal_events WHERE {where_clause}",
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM (
+                SELECT 1
+                FROM signal_events
+                WHERE {where_clause}
+                GROUP BY module, symbol, ts
+            ) uniq
+            """,
             params,
         )
         row = cur.fetchone()
@@ -1239,25 +1285,31 @@ def get_history_winrate_summary(
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
 
+        dedup_subquery = f"""
+            SELECT MAX(id) AS id
+            FROM signal_events
+            WHERE {where_clause}
+            GROUP BY module, symbol, ts
+        """
         cur = conn.execute(
             f"""
             SELECT
-                CAST(ROUND(score) AS INTEGER) AS score,
-                UPPER(TRIM(COALESCE(result, status, ''))) AS outcome,
-                result,
-                status,
-                state,
-                poi_touched_at,
-                activated_at,
-                ttl_minutes,
-                ts,
-                poi_low,
-                poi_high,
-                sl,
-                tp1,
-                be_level_pct
-            FROM signal_events
-            WHERE {where_clause}
+                CAST(ROUND(se.score) AS INTEGER) AS score,
+                UPPER(TRIM(COALESCE(se.result, se.status, ''))) AS outcome,
+                se.result,
+                se.status,
+                se.state,
+                se.poi_touched_at,
+                se.activated_at,
+                se.ttl_minutes,
+                se.ts,
+                se.poi_low,
+                se.poi_high,
+                se.sl,
+                se.tp1,
+                se.be_level_pct
+            FROM signal_events se
+            JOIN ({dedup_subquery}) uniq ON uniq.id = se.id
             """,
             params,
         )
