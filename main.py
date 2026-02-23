@@ -1623,7 +1623,7 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
             i18n.t(lang, "totals_title"),
             "",
             i18n.t(lang, "totals_tp", value=tp_total),
-            i18n.t(lang, "totals_be_avg", value=be_total, avg=f"{be_avg:.1f}"),
+            i18n.t(lang, "totals_be_avg", value=be_total, avg=f"{be_avg:.1f}", lev=f"{int(AI_PUBLIC_LEVERAGE)}"),
             i18n.t(lang, "totals_sl", value=sl_total),
             i18n.t(lang, "totals_exp", value=expired_total),
             i18n.t(lang, "totals_active", value=active_total),
