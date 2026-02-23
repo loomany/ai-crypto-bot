@@ -1435,12 +1435,19 @@ def _signal_list_status_label(row: dict[str, Any]) -> str:
 def _dedupe_signals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     unique: dict[str, dict[str, Any]] = {}
     for row in rows:
-        sid = row.get("signal_id")
-        if sid:
-            key = f"id:{sid}"
+        row_id = _safe_int(row.get("id"), 0)
+        if row_id > 0:
+            key = f"id:{row_id}"
         else:
-            created_min = int((_safe_int(row.get("created_at") or row.get("ts"), 0)) / 60)
-            key = f"{row.get('symbol','')}|{row.get('side','')}|{_safe_int(row.get('score'),0)}|{created_min}"
+            sid = str(row.get("signal_id") or "").strip()
+            if sid:
+                key = f"signal:{sid}"
+            else:
+                created_at = _safe_int(row.get("created_at") or row.get("ts"), 0)
+                key = (
+                    f"{row.get('symbol','')}|{row.get('side','')}|{_safe_int(row.get('score'),0)}|"
+                    f"{created_at}|{_safe_int(row.get('id'), 0)}"
+                )
         unique[key] = row
     return list(unique.values())
 
