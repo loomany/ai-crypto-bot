@@ -169,7 +169,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PERIOD_30D": "30 дней",
         "PERIOD_ALL": "Все время",
         "OFFER_TEXT": (
-            "🧾 Оферта на подписку (5/30/90/365 дней)\n\n"
+            "🧾 Оферта на подписку (30/90/365 дней)\n\n"
             "1) Подписка предоставляет доступ к функционалу бота и сигналам с момента активации выбранного периода.\n"
             "2) Сигналы и аналитика не гарантируют прибыль и могут приводить к убыткам.\n"
             "3) Бот не является финансовым консультантом и не дает персональных рекомендаций “войти/выйти”. "
@@ -182,8 +182,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Нажимая «✅ Принять», вы подтверждаете согласие с условиями."
         ),
         "PAYMENT_TEXT_TRX": (
-            "9$ - 5 дней\n"
-            "30$ - 30 дней\n"
+            "39$ - 30 дней\n"
             "99$ - 90 дней\n"
             "299$ - 365 дней\n\n"
             "Отправь TRX (TRON) на адрес:\n"
@@ -1056,7 +1055,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PERIOD_30D": "30 days",
         "PERIOD_ALL": "All time",
         "OFFER_TEXT": (
-            "🧾 Subscription offer (5/30/90/365 days)\n\n"
+            "🧾 Subscription offer (30/90/365 days)\n\n"
             "1) The subscription grants access to bot functionality and signals from the moment the selected period is activated.\n"
             "2) Signals and analytics do not guarantee profit and may result in losses.\n"
             "3) The bot is not a financial advisor and does not provide personalized enter/exit recommendations. "
@@ -1069,8 +1068,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "By clicking «✅ Accept», you confirm agreement with the terms."
         ),
         "PAYMENT_TEXT_TRX": (
-            "$9 - 5 days\n"
-            "$30 - 30 days\n"
+            "$39 - 30 days\n"
             "$99 - 90 days\n"
             "$299 - 365 days\n\n"
             "Send TRX (TRON) to the address:\n"
