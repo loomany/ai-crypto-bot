@@ -78,6 +78,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SYS_DIAG_ADMIN": "🧪 Диагностика (админ)",
         "SYS_TEST_AI": "🧪 Тест AI (всем)",
         "SYS_TEST_PD": "🧪 Тест Pump/Dump (всем)",
+        "SYS_ARB_HISTORY_ADMIN": "📚 ARB История (админ)",
+        "SYS_ARB_TEST_ADMIN": "🧪 ARB Тест (админ)",
         "SYS_USERS": "👥 Пользователи",
         "SYS_CHANNEL_PANEL": "📣 Телеграм канал",
         "SYS_PAY": "💳 Оплатить подписку",
@@ -173,8 +175,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "BTN_AI_OFF": "🚫 Отключить AI-уведомления",
         "BTN_PD_ON": "🔔 Включить Pump/Dump-уведомления",
         "BTN_PD_OFF": "🚫 Отключить Pump/Dump-уведомления",
-        "BTN_ARB_ON": "🔔 Включить уведомления",
-        "BTN_ARB_OFF": "🔕 Отключить уведомления",
+        "BTN_ARB_ON": "🔔 Вкл уведомления",
+        "BTN_ARB_OFF": "🔕 Выкл уведомления",
         "PERIOD_1D": "1 день",
         "PERIOD_7D": "7 дней",
         "PERIOD_30D": "30 дней",
@@ -371,6 +373,26 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "ARB_OFF_OK": "🔕 Уведомления по межбиржевому арбитражу отключены.",
         "ARB_ALREADY_ON": "Уведомления по арбитражу уже включены.",
         "ARB_ALREADY_OFF": "Уведомления по арбитражу уже отключены.",
+        "ARB_HISTORY_EMPTY": "📚 История арбитража пуста.",
+        "ARB_HISTORY_TITLE": "📚 ARB история",
+        "ARB_HISTORY_PAGE": "Страница {page}/{pages} • всего: {total}",
+        "ARB_HISTORY_ROW": (
+            "#{idx} {symbol}\n"
+            "BUY: {buy_ex} @ {ask}\n"
+            "SELL: {sell_ex} @ {bid}\n"
+            "Gross: {gross}% | NET: {net}%\n"
+            "Breakdown: fees {fees}% / slip {slippage}% / wd {withdraw}% / risk {risk}%\n"
+            "Age: {age}s | ts: {ts}"
+        ),
+        "ARB_TEST_TITLE": "🧪 ARB тест (1 цикл, без рассылки)",
+        "ARB_TEST_STATS": (
+            "Бирж опрошено: {exchanges}\n"
+            "Символов собрано: {symbols}\n"
+            "Кандидатов (gross>0): {gross}\n"
+            "Прошло NET≥{min_net}%: {qualified}"
+        ),
+        "ARB_TEST_TOP_HEADER": "Топ-5 возможностей:",
+        "ARB_TEST_EMPTY": "Подходящих возможностей не найдено.",
         "ARB_ALERT_RU": (
             "⚡️ Межбиржевой арбитраж (NET ≥ {min_net}%)\n"
             "Монета: {symbol}\n"
@@ -837,6 +859,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "DIAG_SECTION_FILTERS": "🧪 Фильтрация (Pre-score)",
         "DIAG_SECTION_BINANCE": "🌐 Binance API",
         "DIAG_SECTION_PUMPDUMP": "🚀 Pump / Dump Scanner",
+        "DIAG_SECTION_ARB": "⚡️ ARB модуль",
+        "DIAG_ARB_EXCHANGES": "• Бирж: {count}",
+        "DIAG_ARB_CACHE_SYMBOLS": "• Символов в кэше: {count}",
+        "DIAG_ARB_LAST_CYCLE": "• Последний цикл: {value}",
+        "DIAG_ARB_CYCLE_MS": "• Время цикла: {value} ms",
+        "DIAG_ARB_GROSS_FOUND": "• Найдено (gross>0): {count}",
+        "DIAG_ARB_NET_FOUND": "• Прошло NET≥{min_net}%: {count}",
+        "DIAG_ARB_API_ERRORS_24H": "• Ошибки API за 24ч: {count}",
+        "DIAG_ARB_SENT_24H": "• Отправлено уведомлений за 24ч: {count}",
+        "DIAG_ARB_WARN": "• WARN: повышенный уровень ошибок API",
         "DIAG_STATUS_WORKING": "работает",
         "DIAG_STATUS_NOT_STARTED": "не запускался",
         "DIAG_STATUS_ISSUES": "есть проблемы",
@@ -1030,6 +1062,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SYS_DIAG_ADMIN": "🧪 Diagnostics (admin)",
         "SYS_TEST_AI": "🧪 Test AI (all)",
         "SYS_TEST_PD": "🧪 Test Pump/Dump (all)",
+        "SYS_ARB_HISTORY_ADMIN": "📚 ARB History (admin)",
+        "SYS_ARB_TEST_ADMIN": "🧪 ARB Test (admin)",
         "SYS_USERS": "👥 Users",
         "SYS_CHANNEL_PANEL": "📣 Telegram channel",
         "SYS_PAY": "💳 Buy subscription",
@@ -1096,8 +1130,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "BTN_AI_OFF": "🚫 Disable AI notifications",
         "BTN_PD_ON": "🔔 Enable Pump/Dump notifications",
         "BTN_PD_OFF": "🚫 Disable Pump/Dump notifications",
-        "BTN_ARB_ON": "🔔 Enable notifications",
-        "BTN_ARB_OFF": "🔕 Disable notifications",
+        "BTN_ARB_ON": "🔔 Notifications ON",
+        "BTN_ARB_OFF": "🔕 Notifications OFF",
         "PERIOD_1D": "1 day",
         "PERIOD_7D": "7 days",
         "PERIOD_30D": "30 days",
@@ -1329,6 +1363,26 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "ARB_OFF_OK": "🔕 Inter-exchange arbitrage notifications disabled.",
         "ARB_ALREADY_ON": "Arbitrage notifications are already enabled.",
         "ARB_ALREADY_OFF": "Arbitrage notifications are already disabled.",
+        "ARB_HISTORY_EMPTY": "📚 Arbitrage history is empty.",
+        "ARB_HISTORY_TITLE": "📚 ARB history",
+        "ARB_HISTORY_PAGE": "Page {page}/{pages} • total: {total}",
+        "ARB_HISTORY_ROW": (
+            "#{idx} {symbol}\n"
+            "BUY: {buy_ex} @ {ask}\n"
+            "SELL: {sell_ex} @ {bid}\n"
+            "Gross: {gross}% | NET: {net}%\n"
+            "Breakdown: fees {fees}% / slip {slippage}% / wd {withdraw}% / risk {risk}%\n"
+            "Age: {age}s | ts: {ts}"
+        ),
+        "ARB_TEST_TITLE": "🧪 ARB test (single cycle, no user broadcast)",
+        "ARB_TEST_STATS": (
+            "Exchanges polled: {exchanges}\n"
+            "Symbols collected: {symbols}\n"
+            "Candidates (gross>0): {gross}\n"
+            "Passed NET≥{min_net}%: {qualified}"
+        ),
+        "ARB_TEST_TOP_HEADER": "Top-5 opportunities:",
+        "ARB_TEST_EMPTY": "No opportunities passed threshold.",
         "ARB_ALERT_EN": (
             "⚡️ Inter-exchange arbitrage (NET ≥ {min_net}%)\n"
             "Symbol: {symbol}\n"
@@ -1785,6 +1839,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "DIAG_SECTION_FILTERS": "🧪 Filters (Pre-score)",
         "DIAG_SECTION_BINANCE": "🌐 Binance API",
         "DIAG_SECTION_PUMPDUMP": "🚀 Pump / Dump Scanner",
+        "DIAG_SECTION_ARB": "⚡️ ARB module",
+        "DIAG_ARB_EXCHANGES": "• Exchanges: {count}",
+        "DIAG_ARB_CACHE_SYMBOLS": "• Symbols in cache: {count}",
+        "DIAG_ARB_LAST_CYCLE": "• Last cycle: {value}",
+        "DIAG_ARB_CYCLE_MS": "• Cycle time: {value} ms",
+        "DIAG_ARB_GROSS_FOUND": "• Found (gross>0): {count}",
+        "DIAG_ARB_NET_FOUND": "• Passed NET≥{min_net}%: {count}",
+        "DIAG_ARB_API_ERRORS_24H": "• API errors in 24h: {count}",
+        "DIAG_ARB_SENT_24H": "• Notifications sent in 24h: {count}",
+        "DIAG_ARB_WARN": "• WARN: high API error level",
         "DIAG_STATUS_WORKING": "running",
         "DIAG_STATUS_NOT_STARTED": "not started",
         "DIAG_STATUS_ISSUES": "issues detected",

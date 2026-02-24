@@ -61,6 +61,26 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS arb_opportunities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                buy_ex TEXT NOT NULL,
+                sell_ex TEXT NOT NULL,
+                ask REAL NOT NULL,
+                bid REAL NOT NULL,
+                gross REAL NOT NULL,
+                net REAL NOT NULL,
+                breakdown_json TEXT NOT NULL,
+                age_sec INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_arb_opportunities_ts ON arb_opportunities(ts DESC)"
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS arb_sent_log (
                 user_id INTEGER NOT NULL,
                 dedup_key TEXT NOT NULL,
