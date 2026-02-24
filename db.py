@@ -161,35 +161,6 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signal_events ADD COLUMN finalised_at TEXT DEFAULT NULL")
         if "final_notified" not in cols:
             conn.execute("ALTER TABLE signal_events ADD COLUMN final_notified INTEGER NOT NULL DEFAULT 0")
-        # Remove active duplicates created by repeated retries of the exact same
-        # signal payload (same prices/score/side), keeping only the latest row.
-        conn.execute(
-            """
-            DELETE FROM signal_events
-            WHERE id NOT IN (
-                SELECT MAX(id)
-                FROM signal_events
-                WHERE UPPER(COALESCE(result, status, 'OPEN')) NOT IN (
-                    'TP1', 'TP2', 'TP', 'BE', 'SL', 'EXP', 'EXPIRED', 'NO_FILL', 'NF'
-                )
-                GROUP BY
-                    user_id,
-                    module,
-                    symbol,
-                    UPPER(COALESCE(side, '')),
-                    UPPER(COALESCE(timeframe, '')),
-                    ROUND(COALESCE(score, 0), 2),
-                    ROUND(COALESCE(poi_low, 0), 8),
-                    ROUND(COALESCE(poi_high, 0), 8),
-                    ROUND(COALESCE(sl, 0), 8),
-                    ROUND(COALESCE(tp1, 0), 8),
-                    ROUND(COALESCE(tp2, 0), 8)
-            )
-            AND UPPER(COALESCE(result, status, 'OPEN')) NOT IN (
-                'TP1', 'TP2', 'TP', 'BE', 'SL', 'EXP', 'EXPIRED', 'NO_FILL', 'NF'
-            )
-            """
-        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS pumpdump_events (
@@ -895,56 +866,6 @@ def insert_signal_event(
         return 0
     conn = get_conn()
     try:
-        duplicate_cur = conn.execute(
-            """
-            SELECT id
-            FROM signal_events
-            WHERE user_id = ?
-              AND module = ?
-              AND symbol = ?
-              AND UPPER(COALESCE(side, '')) = UPPER(?)
-              AND UPPER(COALESCE(timeframe, '')) = UPPER(?)
-              AND ABS(COALESCE(score, 0) - ?) <= 0.01
-              AND ABS(COALESCE(poi_low, 0) - ?) <= 0.000001
-              AND ABS(COALESCE(poi_high, 0) - ?) <= 0.000001
-              AND ABS(COALESCE(sl, 0) - ?) <= 0.000001
-              AND ABS(COALESCE(tp1, 0) - ?) <= 0.000001
-              AND ABS(COALESCE(tp2, 0) - ?) <= 0.000001
-              AND UPPER(COALESCE(result, status, 'OPEN')) NOT IN (
-                  'TP1', 'TP2', 'TP', 'BE', 'SL', 'EXP', 'EXPIRED', 'NO_FILL', 'NF'
-              )
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (
-                int(user_id),
-                module,
-                symbol,
-                side,
-                timeframe,
-                float(score),
-                float(poi_low),
-                float(poi_high),
-                float(sl),
-                float(tp1),
-                float(tp2),
-            ),
-        )
-        duplicate_row = duplicate_cur.fetchone()
-        if duplicate_row is not None:
-            existing_id = int(duplicate_row["id"])
-            conn.execute(
-                """
-                UPDATE signal_events
-                SET tg_message_id = COALESCE(?, tg_message_id),
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (tg_message_id, int(time.time()), existing_id),
-            )
-            conn.commit()
-            return existing_id
-
         cur = conn.execute(
             """
             INSERT OR IGNORE INTO signal_events (
