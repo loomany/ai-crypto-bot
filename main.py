@@ -156,6 +156,7 @@ from message_templates import (
 from signal_audit_db import (
     get_public_stats,
     get_last_signal_audit,
+    has_recent_signal_for_symbol,
     count_signals_sent_since,
     init_signal_audit_tables,
     insert_signal_audit,
@@ -888,6 +889,7 @@ bot: Bot | None = None
 dp = Dispatcher()
 FREE_MIN_SCORE = cfg.final_score_threshold
 COOLDOWN_FREE_SEC = int(os.getenv("AI_SIGNALS_COOLDOWN_SEC", "86400"))
+AI_SYMBOL_REEMIT_COOLDOWN_SEC = int(os.getenv("AI_SYMBOL_REEMIT_COOLDOWN_SEC", "86400"))
 MAX_SIGNALS_PER_CYCLE = 3
 MAX_BTC_PER_CYCLE = 1
 AI_CHUNK_SIZE = int(os.getenv("AI_CHUNK_SIZE", "30"))
@@ -7722,6 +7724,7 @@ async def ai_scan_once() -> None:
                 logger.exception("AI signals error")
         deep_scans_done = stats.get("deep_scans_done", 0) if isinstance(stats, dict) else 0
         sent_count = retry_sent
+        skipped_recent_symbol = 0
         for signal in _select_signals_for_cycle(signals):
             if time.time() - start > BUDGET:
                 print("[AI] budget exceeded, stopping early")
@@ -7759,6 +7762,19 @@ async def ai_scan_once() -> None:
             signal["btc_regime"] = btc_context.get("btc_regime")
             signal["btc_direction"] = btc_context.get("btc_direction")
             signal["btc_trend"] = btc_context.get("btc_trend")
+            symbol = str(signal.get("symbol") or "").strip().upper()
+            if symbol and AI_SYMBOL_REEMIT_COOLDOWN_SEC > 0:
+                if has_recent_signal_for_symbol(
+                    module="ai_signals",
+                    symbol=symbol,
+                    within_sec=AI_SYMBOL_REEMIT_COOLDOWN_SEC,
+                ):
+                    skipped_recent_symbol += 1
+                    print(
+                        f"[ai_signals] skip recent duplicate symbol={symbol} "
+                        f"cooldown_sec={AI_SYMBOL_REEMIT_COOLDOWN_SEC}"
+                    )
+                    continue
             try:
                 too_far, market_price, entry_mid, skip_reason = _is_signal_entry_far_from_market(signal, spot_last_price)
                 if too_far:
@@ -7803,11 +7819,13 @@ async def ai_scan_once() -> None:
         if module_state:
             module_state.last_error = None
             module_state.state["last_exception"] = None
+            module_state.state["skipped_recent_symbol"] = skipped_recent_symbol
         mark_ok(
             "ai_signals",
             extra=(
                 f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
                 f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done} close_retry_sent={retried_close_notifications} "
+                f"skip_recent_symbol={skipped_recent_symbol} "
                 f"current={current_symbol or '-'} cycle={int(time.time() - start)}s "
                 f"req={req_count} klines={klines_count} "
                 f"klines_hits={cache_stats.get('hits')} klines_misses={cache_stats.get('misses')} "

@@ -707,6 +707,51 @@ def get_last_signal_audit(module: str, *, include_legacy: bool = False) -> dict 
         conn.close()
 
 
+def has_recent_signal_for_symbol(
+    *,
+    module: str,
+    symbol: str,
+    within_sec: int,
+    now_ts: int | None = None,
+) -> bool:
+    symbol_value = str(symbol or "").strip().upper()
+    if not symbol_value:
+        return False
+
+    now_value = int(time.time()) if now_ts is None else int(now_ts)
+    since_ts = max(0, now_value - max(0, int(within_sec)))
+
+    conn = sqlite3.connect(get_db_path())
+    conn.row_factory = sqlite3.Row
+    try:
+        blocked_clause, blocked_params = _blocked_symbols_clause()
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT 1
+            FROM signal_audit
+            WHERE module = ?
+              AND UPPER(symbol) = ?
+              AND sent_at >= ?
+              AND NOT (
+                symbol LIKE 'TEST%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR
+                LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%test%' OR
+                LOWER(COALESCE(notes, '')) LIKE '%тест%'
+              )
+              {blocked_clause}
+            LIMIT 1
+            """,
+            [module, symbol_value, since_ts, *blocked_params],
+        )
+        return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
 def count_signals_sent_since(
     since_ts: int,
     *,
