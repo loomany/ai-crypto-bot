@@ -23,7 +23,6 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 from aiogram.filters import CommandStart, Command
-import aiohttp
 from dotenv import load_dotenv
 
 from binance_rest import (
@@ -291,8 +290,6 @@ ARB_DEDUP_TTL_SEC = int(os.getenv("ARB_DEDUP_TTL_SEC", "1800") or 1800)
 FEE_TAKER_BUY_PCT = float(os.getenv("FEE_TAKER_BUY_PCT", "0.10") or 0.10)
 FEE_TAKER_SELL_PCT = float(os.getenv("FEE_TAKER_SELL_PCT", "0.10") or 0.10)
 SLIPPAGE_PCT = float(os.getenv("SLIPPAGE_PCT", "0.10") or 0.10)
-ARB_MAX_TS_AGE_DIFF_SEC = float(os.getenv("ARB_MAX_TS_AGE_DIFF_SEC", "0.5") or 0.5)
-ARB_MIN_LIQUIDITY_USDT = float(os.getenv("ARB_MIN_LIQUIDITY_USDT", "3000") or 3000)
 
 _arb_scanner = ArbScanner()
 
@@ -8505,83 +8502,7 @@ def _format_arb_alert(lang: str, item: dict, net_pct: float) -> str:
         slippage=f"{SLIPPAGE_PCT:.2f}",
         net=f"{net_pct:.2f}",
         age=str(int(item.get("age_sec", 0) or 0)),
-        latency_diff_sec=f"{float(item.get('latency_diff_sec', 0.0) or 0.0):.3f}",
-        liquidity_buy_usdt=f"{float(item.get('liquidity_buy_usdt', 0.0) or 0.0):.0f}",
-        liquidity_sell_usdt=f"{float(item.get('liquidity_sell_usdt', 0.0) or 0.0):.0f}",
     )
-
-
-def _depth_symbol(exchange: str, symbol: str) -> str:
-    base = symbol[:-4]
-    if exchange == "OKX":
-        return f"{base}-USDT"
-    if exchange in {"KuCoin", "Gate.io", "BingX"}:
-        return f"{base}_USDT"
-    return symbol
-
-
-async def _top3_liquidity_usdt(session: aiohttp.ClientSession, exchange: str, symbol: str, side: str) -> float:
-    side_key = "asks" if side == "ask" else "bids"
-    symbol_value = _depth_symbol(exchange, symbol)
-    try:
-        if exchange == "Binance":
-            data = await _arb_scanner._fetch_json(session, f"https://api.binance.com/api/v3/depth?symbol={symbol_value}&limit=5")
-            levels = data.get(side_key, [])
-        elif exchange == "OKX":
-            data = await _arb_scanner._fetch_json(session, f"https://www.okx.com/api/v5/market/books?instId={symbol_value}&sz=5")
-            rows = data.get("data", [])
-            levels = rows[0].get(side_key, []) if rows else []
-        elif exchange == "Bybit":
-            data = await _arb_scanner._fetch_json(session, f"https://api.bybit.com/v5/market/orderbook?category=spot&symbol={symbol_value}&limit=5")
-            levels = data.get("result", {}).get("a" if side == "ask" else "b", [])
-        elif exchange == "KuCoin":
-            data = await _arb_scanner._fetch_json(session, f"https://api.kucoin.com/api/v1/market/orderbook/level2_20?symbol={symbol_value}")
-            levels = data.get("data", {}).get(side_key, [])
-        elif exchange == "Gate.io":
-            data = await _arb_scanner._fetch_json(session, f"https://api.gateio.ws/api/v4/spot/order_book?currency_pair={symbol_value}&limit=5")
-            levels = data.get(side_key, [])
-        elif exchange == "MEXC":
-            data = await _arb_scanner._fetch_json(session, f"https://api.mexc.com/api/v3/depth?symbol={symbol_value}&limit=5")
-            levels = data.get(side_key, [])
-        elif exchange == "Bitget":
-            data = await _arb_scanner._fetch_json(session, f"https://api.bitget.com/api/v2/spot/market/orderbook?symbol={symbol_value}&limit=5")
-            book = data.get("data") or {}
-            levels = book.get(side_key, [])
-        elif exchange == "BingX":
-            data = await _arb_scanner._fetch_json(session, f"https://open-api.bingx.com/openApi/spot/v1/market/depth?symbol={symbol_value}&limit=5")
-            book = data.get("data", {})
-            levels = book.get(side_key, [])
-        else:
-            return 0.0
-    except Exception:
-        return 0.0
-
-    total_usdt = 0.0
-    for level in levels[:3]:
-        try:
-            if isinstance(level, dict):
-                price = float(level.get("price") or level.get("0") or 0.0)
-                qty = float(level.get("qty") or level.get("size") or level.get("1") or 0.0)
-            else:
-                price = float(level[0] if len(level) > 0 else 0.0)
-                qty = float(level[1] if len(level) > 1 else 0.0)
-            total_usdt += price * qty
-        except (TypeError, ValueError):
-            continue
-    return total_usdt
-
-
-async def _enrich_arb_opportunity_liquidity(items: list[dict]) -> None:
-    if not items:
-        return
-    timeout = aiohttp.ClientTimeout(total=10)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        for item in items:
-            symbol = str(item.get("symbol") or "")
-            buy_ex = str(item.get("buy_exchange") or "")
-            sell_ex = str(item.get("sell_exchange") or "")
-            item["liquidity_buy_usdt"] = await _top3_liquidity_usdt(session, buy_ex, symbol, "ask")
-            item["liquidity_sell_usdt"] = await _top3_liquidity_usdt(session, sell_ex, symbol, "bid")
 
 
 async def arbitrage_scan_once(bot: Bot) -> None:
@@ -8599,22 +8520,6 @@ async def arbitrage_scan_once(bot: Bot) -> None:
     all_opportunities = details.get("all_opportunities", [])
     insert_arb_opportunities(all_opportunities, limit=20)
 
-    for item in qualified_notify:
-        buy_age = float(item.get("buy_ts_age_sec", 0.0) or 0.0)
-        sell_age = float(item.get("sell_ts_age_sec", 0.0) or 0.0)
-        item["latency_diff_sec"] = abs(buy_age - sell_age)
-    qualified_notify = [
-        item for item in qualified_notify
-        if float(item.get("latency_diff_sec", 0.0) or 0.0) <= ARB_MAX_TS_AGE_DIFF_SEC
-    ]
-
-    await _enrich_arb_opportunity_liquidity(qualified_notify)
-    qualified_notify = [
-        item for item in qualified_notify
-        if float(item.get("liquidity_buy_usdt", 0.0) or 0.0) >= ARB_MIN_LIQUIDITY_USDT
-        and float(item.get("liquidity_sell_usdt", 0.0) or 0.0) >= ARB_MIN_LIQUIDITY_USDT
-    ]
-
     st = MODULES.get("arbitrage")
     if st is not None:
         state = st.state if isinstance(st.state, dict) else {}
@@ -8624,17 +8529,7 @@ async def arbitrage_scan_once(bot: Bot) -> None:
         state["symbols_collected"] = int(details.get("symbols_collected", 0) or 0)
         state["api_errors_24h"] = int(state.get("api_errors_24h", 0) or 0) + int(details.get("api_errors", 0) or 0)
         state["api_errors_24h_updated_at"] = int(time.time())
-
-        stability_raw = state.get("arb_stability") if isinstance(state.get("arb_stability"), dict) else {}
-        stability: dict[str, int] = {}
-        for item in qualified_notify:
-            key = f"{item.get('symbol','')}|{item.get('buy_exchange','')}->{item.get('sell_exchange','')}"
-            stability[key] = int(stability_raw.get(key, 0) or 0) + 1
-            item["stability_cycles"] = stability[key]
-        state["arb_stability"] = stability
         st.state = state
-
-    qualified_notify = [item for item in qualified_notify if int(item.get("stability_cycles", 0) or 0) >= 2]
 
     users = list_arb_enabled_users()
     sent = 0
