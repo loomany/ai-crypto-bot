@@ -1508,25 +1508,37 @@ def _get_history_page(
     include_legacy: bool = False,
     module: str = "ai_signals",
 ) -> tuple[int, int, int, list[dict]]:
-    total = count_signal_history(
+    raw_total = count_signal_history(
         time_window=time_window,
         user_id=viewer_user_id,
         min_score=None,
         include_legacy=include_legacy,
         module=module,
     )
+
+    if raw_total <= 0:
+        return 1, 1, 0, []
+
+    # Сначала получаем весь отфильтрованный срез за период,
+    # затем применяем то же дедуп-правило, что и для отображения кнопок.
+    all_rows = [
+        dict(row)
+        for row in get_signal_history(
+            time_window=time_window,
+            user_id=viewer_user_id,
+            limit=raw_total,
+            offset=0,
+            include_legacy=include_legacy,
+            module=module,
+        )
+    ]
+    deduped_rows = _dedupe_signals(all_rows)
+    total = len(deduped_rows)
     pages = max(1, (total + page_size - 1) // page_size)
     page_value = max(1, min(page, pages))
     offset = (page_value - 1) * page_size
-    rows = get_signal_history(
-        time_window=time_window,
-        user_id=viewer_user_id,
-        limit=page_size,
-        offset=offset,
-        include_legacy=include_legacy,
-        module=module,
-    )
-    return page_value, pages, total, [dict(row) for row in rows]
+    page_rows = deduped_rows[offset : offset + page_size]
+    return page_value, pages, total, page_rows
 
 
 def _format_history_item(row: dict[str, Any], lang: str, *, access_level: str = "FULL") -> str:
@@ -1777,7 +1789,6 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
             include_legacy=include_legacy,
             module=module,
         )
-        rows = _dedupe_signals(rows)
         history_summary = get_history_winrate_summary(
             time_window=time_window,
             user_id=None,
