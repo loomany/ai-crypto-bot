@@ -190,10 +190,7 @@ from signal_inversion import apply_inversion
 from arb_scanner import ArbScanner
 from arb_db import (
     can_send_arb_notification,
-    count_arb_notifications_sent_since,
     get_arb_notify_enabled,
-    get_arb_opportunities_page,
-    insert_arb_opportunities,
     list_arb_enabled_users,
     record_arb_notification_sent,
     set_arb_notify_enabled,
@@ -1311,7 +1308,7 @@ async def arbitrage_menu(message: Message):
     status = i18n.t(lang, "STATUS_ON") if get_arb_notify_enabled(message.chat.id) else i18n.t(lang, "STATUS_OFF")
     await message.answer(
         f"{i18n.t(lang, 'ARBITRAGE_TEXT')}\n\n{i18n.t(lang, 'STATUS_LABEL')}: {status}",
-        reply_markup=arbitrage_inline_kb(lang, is_admin=is_admin(message.from_user.id) if message.from_user else False),
+        reply_markup=arbitrage_inline_kb(lang),
     )
 @dp.message(F.text.in_(i18n.all_labels("MENU_PD")))
 async def pumpdump_menu(message: Message):
@@ -5094,39 +5091,6 @@ def _format_pump_section(st, now: float, lang: str) -> str:
     return _format_section(i18n.t(lang, "DIAG_SECTION_PUMPDUMP"), status_label, details, lang)
 
 
-def _format_arb_section(st, now: float, lang: str) -> str:
-    status_label = _build_status_label(
-        ok=bool(st.last_tick) and not st.last_error and not st.last_warn,
-        warn=bool(st.last_warn),
-        error=bool(st.last_error),
-        ok_text=i18n.t(lang, "DIAG_STATUS_WORKING"),
-        warn_text=i18n.t(lang, "DIAG_STATUS_ISSUES"),
-        error_text=i18n.t(lang, "DIAG_STATUS_ERROR"),
-    )
-    state = st.state if isinstance(st.state, dict) else {}
-    last_cycle_ago = i18n.t(lang, "DIAG_STATUS_NOT_STARTED")
-    if st.last_tick:
-        last_cycle_ago = _human_ago(int(now - st.last_tick), lang)
-    details = [
-        i18n.t(lang, "DIAG_ARB_EXCHANGES", count=5),
-        i18n.t(lang, "DIAG_ARB_CACHE_SYMBOLS", count=len(_arb_scanner.cached_symbols)),
-        i18n.t(lang, "DIAG_ARB_LAST_CYCLE", value=last_cycle_ago),
-        i18n.t(lang, "DIAG_ARB_CYCLE_MS", value=int(state.get("cycle_ms", 0) or 0)),
-        i18n.t(lang, "DIAG_ARB_GROSS_FOUND", count=int(state.get("candidates_gross", 0) or 0)),
-        i18n.t(lang, "DIAG_ARB_NET_FOUND", min_net=f"{ARB_MIN_NET_PCT:.1f}", count=int(state.get("qualified_count", 0) or 0)),
-    ]
-    since_24h = int(time.time()) - 86400
-    api_errors_24h = int(state.get("api_errors_24h", 0) or 0)
-    sent_24h = count_arb_notifications_sent_since(since_24h)
-    details.append(i18n.t(lang, "DIAG_ARB_API_ERRORS_24H", count=api_errors_24h))
-    details.append(i18n.t(lang, "DIAG_ARB_SENT_24H", count=sent_24h))
-    if api_errors_24h >= 20:
-        details.append(i18n.t(lang, "DIAG_ARB_WARN"))
-    if st.last_error:
-        details.append(i18n.t(lang, "DIAG_MODULE_ERROR", error=f"⚠️ {st.last_error}"))
-    return _format_section(i18n.t(lang, "DIAG_SECTION_ARB"), status_label, details, lang)
-
-
 @dp.message(Command("testadmin"))
 async def test_admin(message: Message):
     lang = get_user_lang(message.chat.id) or "ru"
@@ -5168,9 +5132,6 @@ async def test_admin(message: Message):
     pump_module = MODULES.get("pumpdump")
     if pump_module:
         blocks.append(_format_pump_section(pump_module, now, lang))
-    arb_module = MODULES.get("arbitrage")
-    if arb_module:
-        blocks.append(_format_arb_section(arb_module, now, lang))
 
     lang = get_user_lang(message.chat.id) or "ru"
     await _answer_long_message(
@@ -5187,59 +5148,6 @@ async def test_admin_button(message: Message):
         await message.answer(i18n.t(lang, "NO_ACCESS"))
         return
     await test_admin(message)
-
-
-@dp.message(F.text.in_(i18n.all_labels("SYS_ARB_HISTORY_ADMIN")))
-async def admin_arb_history_button(message: Message):
-    lang = get_user_lang(message.chat.id) or "ru"
-    if message.from_user is None or not is_admin(message.from_user.id):
-        await message.answer(i18n.t(lang, "NO_ACCESS"))
-        return
-    page = 1
-    page_size = 5
-    rows, total = get_arb_opportunities_page(page=page, page_size=page_size)
-    pages = max(1, math.ceil(total / page_size)) if total > 0 else 1
-    await _answer_long_message(
-        message,
-        _format_arb_history_text(lang, rows, page, page_size, total),
-        reply_markup=_arb_history_kb(lang, page, pages),
-    )
-
-
-@dp.message(F.text.in_(i18n.all_labels("SYS_ARB_TEST_ADMIN")))
-async def admin_arb_test_button(message: Message):
-    lang = get_user_lang(message.chat.id) or "ru"
-    if message.from_user is None or not is_admin(message.from_user.id):
-        await message.answer(i18n.t(lang, "NO_ACCESS"))
-        return
-    await _answer_long_message(message, await _run_admin_arb_test(lang), reply_markup=build_admin_diagnostics_kb(lang))
-
-
-@dp.callback_query(F.data.regexp(r"^admin:arb:history:(\d+)$"))
-async def admin_arb_history_callback(callback: CallbackQuery):
-    if not await _ensure_admin_callback(callback):
-        return
-    lang = get_user_lang(callback.from_user.id) or "ru"
-    m = re.match(r"^admin:arb:history:(\d+)$", callback.data or "")
-    page = int(m.group(1)) if m else 1
-    page_size = 5
-    rows, total = get_arb_opportunities_page(page=page, page_size=page_size)
-    pages = max(1, math.ceil(total / page_size)) if total > 0 else 1
-    text = _format_arb_history_text(lang, rows, page, page_size, total)
-    if callback.message:
-        with suppress(Exception):
-            await callback.message.edit_text(text, reply_markup=_arb_history_kb(lang, page, pages))
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "admin:arb:test")
-async def admin_arb_test_callback(callback: CallbackQuery):
-    if not await _ensure_admin_callback(callback):
-        return
-    lang = get_user_lang(callback.from_user.id) or "ru"
-    if callback.message:
-        await _answer_long_message(callback.message, await _run_admin_arb_test(lang), reply_markup=build_admin_diagnostics_kb(lang))
-    await callback.answer()
 
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_CHANNEL_PANEL")))
@@ -8360,91 +8268,6 @@ async def ai_scan_once() -> None:
 
 
 
-def _format_arb_history_text(lang: str, rows: list[dict], page: int, page_size: int, total: int) -> str:
-    if total <= 0 or not rows:
-        return i18n.t(lang, "ARB_HISTORY_EMPTY")
-    pages = max(1, math.ceil(total / max(1, page_size)))
-    lines = [i18n.t(lang, "ARB_HISTORY_TITLE"), i18n.t(lang, "ARB_HISTORY_PAGE", page=page, pages=pages, total=total), ""]
-    for idx, row in enumerate(rows, start=1 + (page - 1) * page_size):
-        breakdown = row.get("breakdown") if isinstance(row.get("breakdown"), dict) else {}
-        lines.append(
-            i18n.t(
-                lang,
-                "ARB_HISTORY_ROW",
-                idx=idx,
-                symbol=row.get("symbol", ""),
-                buy_ex=row.get("buy_exchange", ""),
-                sell_ex=row.get("sell_exchange", ""),
-                ask=f"{float(row.get('ask', 0.0) or 0.0):.8f}",
-                bid=f"{float(row.get('bid', 0.0) or 0.0):.8f}",
-                gross=f"{float(row.get('gross_pct', 0.0) or 0.0):.2f}",
-                net=f"{float(row.get('net_pct', 0.0) or 0.0):.2f}",
-                fees=f"{float(breakdown.get('trading_fees', 0.0) or 0.0):.2f}",
-                slippage=f"{float(breakdown.get('slippage', 0.0) or 0.0):.2f}",
-                withdraw=f"{float(breakdown.get('withdraw_est', 0.0) or 0.0):.2f}",
-                risk=f"{float(breakdown.get('risk_buf', 0.0) or 0.0):.2f}",
-                age=int(row.get("age_sec", 0) or 0),
-                ts=datetime.fromtimestamp(int(row.get("ts", 0) or 0), timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-            )
-        )
-        lines.append("")
-    return "\n".join(lines).strip()
-
-
-def _arb_history_kb(lang: str, page: int, pages: int) -> InlineKeyboardMarkup:
-    row = []
-    if page > 1:
-        row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"admin:arb:history:{page-1}"))
-    if page < pages:
-        row.append(InlineKeyboardButton(text="➡️ Next", callback_data=f"admin:arb:history:{page+1}"))
-    inline = []
-    if row:
-        inline.append(row)
-    inline.append([InlineKeyboardButton(text="🔄 Обновить", callback_data=f"admin:arb:history:{page}")])
-    inline.append([InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data="admin_back")])
-    return InlineKeyboardMarkup(inline_keyboard=inline)
-
-
-async def _run_admin_arb_test(lang: str) -> str:
-    details = await _arb_scanner.collect_opportunities_details(
-        min_net_pct=ARB_MIN_NET_PCT,
-        fees_buy_pct=FEE_TAKER_BUY_PCT,
-        fees_sell_pct=FEE_TAKER_SELL_PCT,
-        slippage_pct=SLIPPAGE_PCT,
-        withdraw_pct=WITHDRAW_COST_PCT_EST,
-        risk_buffer_pct=RISK_BUFFER_PCT,
-    )
-    top = details.get("qualified", [])[:5]
-    lines = [
-        i18n.t(lang, "ARB_TEST_TITLE"),
-        i18n.t(
-            lang,
-            "ARB_TEST_STATS",
-            exchanges=int(details.get("exchanges_polled", 0) or 0),
-            symbols=int(details.get("symbols_collected", 0) or 0),
-            gross=int(details.get("candidates_gross", 0) or 0),
-            min_net=f"{ARB_MIN_NET_PCT:.1f}",
-            qualified=len(details.get("qualified", [])),
-        ),
-        "",
-    ]
-    if not top:
-        lines.append(i18n.t(lang, "ARB_TEST_EMPTY"))
-    else:
-        lines.append(i18n.t(lang, "ARB_TEST_TOP_HEADER"))
-        for idx, item in enumerate(top, start=1):
-            breakdown = item.get("breakdown") if isinstance(item.get("breakdown"), dict) else {}
-            lines.append(
-                f"{idx}) {item.get('symbol','')} {item.get('buy_exchange','')}→{item.get('sell_exchange','')} "
-                f"NET {float(item.get('net_pct',0.0) or 0.0):.2f}% (Gross {float(item.get('gross_pct',0.0) or 0.0):.2f}%)"
-            )
-            lines.append(
-                f"   fees {float(breakdown.get('trading_fees',0.0) or 0.0):.2f}% / slip {float(breakdown.get('slippage',0.0) or 0.0):.2f}% / "
-                f"wd {float(breakdown.get('withdraw_est',0.0) or 0.0):.2f}% / risk {float(breakdown.get('risk_buf',0.0) or 0.0):.2f}%"
-            )
-    return "\n".join(lines).strip()
-
-
 def _format_arb_alert(lang: str, item: dict, net_pct: float) -> str:
     tpl = "ARB_ALERT_RU" if lang == "ru" else "ARB_ALERT_EN"
     return i18n.t(
@@ -8470,33 +8293,20 @@ async def arbitrage_scan_once(bot: Bot) -> None:
     if not ARB_ENABLED:
         return
     mark_tick("arbitrage")
-    details = await _arb_scanner.collect_opportunities_details(
-        min_net_pct=ARB_MIN_NET_PCT,
-        fees_buy_pct=FEE_TAKER_BUY_PCT,
-        fees_sell_pct=FEE_TAKER_SELL_PCT,
-        slippage_pct=SLIPPAGE_PCT,
-        withdraw_pct=WITHDRAW_COST_PCT_EST,
-        risk_buffer_pct=RISK_BUFFER_PCT,
-    )
-    qualified = details.get("qualified", [])
-    insert_arb_opportunities(qualified, limit=30)
-
-    st = MODULES.get("arbitrage")
-    if st is not None:
-        state = st.state if isinstance(st.state, dict) else {}
-        state["cycle_ms"] = int(details.get("cycle_ms", 0) or 0)
-        state["candidates_gross"] = int(details.get("candidates_gross", 0) or 0)
-        state["qualified_count"] = len(qualified)
-        state["symbols_collected"] = int(details.get("symbols_collected", 0) or 0)
-        state["api_errors_24h"] = int(state.get("api_errors_24h", 0) or 0) + int(details.get("api_errors", 0) or 0)
-        state["api_errors_24h_updated_at"] = int(time.time())
-        st.state = state
-
     users = list_arb_enabled_users()
+    if not users:
+        mark_ok("arbitrage", extra="enabled_users=0")
+        return
+
+    opportunities = await _arb_scanner.collect_opportunities()
     sent = 0
-    for item in qualified:
-        net_pct = float(item.get("net_pct", 0.0) or 0.0)
-        dedup_key = str(item.get("dedup_key") or f"{item.get('symbol','')}:{item.get('buy_exchange','')}:{item.get('sell_exchange','')}:{net_pct:.2f}")
+    for item in opportunities:
+        trading_fees_pct = FEE_TAKER_BUY_PCT + FEE_TAKER_SELL_PCT
+        net_pct = item["gross_pct"] - trading_fees_pct - SLIPPAGE_PCT - WITHDRAW_COST_PCT_EST - RISK_BUFFER_PCT
+        if net_pct < ARB_MIN_NET_PCT:
+            continue
+        rounded_net = f"{net_pct:.2f}"
+        dedup_key = f"{item['symbol']}:{item['buy_exchange']}:{item['sell_exchange']}:{rounded_net}"
         for user_id in users:
             if not can_send_arb_notification(
                 user_id,
@@ -8514,7 +8324,7 @@ async def arbitrage_scan_once(bot: Bot) -> None:
                 sent += 1
             except Exception:
                 logger.exception("[arb] failed send user_id=%s symbol=%s", user_id, item.get("symbol"))
-    mark_ok("arbitrage", extra=f"enabled_users={len(users)} opportunities={len(qualified)} sent={sent}")
+    mark_ok("arbitrage", extra=f"enabled_users={len(users)} opportunities={len(opportunities)} sent={sent}")
 
 
 async def arbitrage_worker_loop(bot: Bot) -> None:
