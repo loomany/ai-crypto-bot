@@ -5107,7 +5107,7 @@ def _format_arb_section(st, now: float, lang: str) -> str:
     if st.last_tick:
         last_cycle_ago = _human_ago(int(now - st.last_tick), lang)
     details = [
-        i18n.t(lang, "DIAG_ARB_EXCHANGES", count=int(state.get("total_exchanges_active", 0) or 0)),
+        i18n.t(lang, "DIAG_ARB_EXCHANGES", count=5),
         i18n.t(lang, "DIAG_ARB_CACHE_SYMBOLS", count=len(_arb_scanner.cached_symbols)),
         i18n.t(lang, "DIAG_ARB_LAST_CYCLE", value=last_cycle_ago),
         i18n.t(lang, "DIAG_ARB_CYCLE_MS", value=int(state.get("cycle_ms", 0) or 0)),
@@ -5122,21 +5122,6 @@ def _format_arb_section(st, now: float, lang: str) -> str:
     max_metrics_24h = get_arb_max_metrics_since(since_24h)
     details.append(i18n.t(lang, "DIAG_ARB_MAX_NET_24H", value=f"{float(max_metrics_24h.get('max_net', 0.0) or 0.0):.2f}"))
     details.append(i18n.t(lang, "DIAG_ARB_MAX_GROSS_24H", value=f"{float(max_metrics_24h.get('max_gross', 0.0) or 0.0):.2f}"))
-    exchange_stats = state.get("exchange_stats") if isinstance(state.get("exchange_stats"), dict) else {}
-    for ex_name in sorted(exchange_stats.keys()):
-        ex = exchange_stats.get(ex_name) or {}
-        details.append(
-            i18n.t(
-                lang,
-                "DIAG_ARB_EXCHANGE_LINE",
-                exchange=ex_name,
-                status=str(ex.get("status", "ERROR")),
-                latency=int(ex.get("latency_ms", 0) or 0),
-                ws_age=("-" if ex.get("last_ws_update_age_sec") is None else f"{float(ex.get('last_ws_update_age_sec', 0.0) or 0.0):.1f}"),
-                symbols=int(ex.get("received_symbols_count", 0) or 0),
-                error=str(ex.get("last_error", "") or "-"),
-            )
-        )
     if api_errors_24h >= 20:
         details.append(i18n.t(lang, "DIAG_ARB_WARN"))
     if st.last_error:
@@ -8446,13 +8431,6 @@ async def _run_admin_arb_test(lang: str) -> str:
         i18n.t(lang, "ARB_TEST_MAX_NET_CYCLE", value=f"{max_net:.2f}"),
         "",
     ]
-    exchange_stats = details.get("exchange_stats") if isinstance(details.get("exchange_stats"), dict) else {}
-    if exchange_stats:
-        lines.append(i18n.t(lang, "ARB_TEST_EXCHANGE_HEADER"))
-        for ex_name in sorted(exchange_stats.keys()):
-            ex = exchange_stats.get(ex_name) or {}
-            lines.append(i18n.t(lang, "ARB_TEST_EXCHANGE_LINE", exchange=ex_name, symbols=int(ex.get("received_symbols_count", 0) or 0), error=str(ex.get("last_error", "") or "-")))
-        lines.append("")
     if not top_by_net:
         lines.append(i18n.t(lang, "ARB_TEST_EMPTY"))
     else:
