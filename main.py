@@ -8469,6 +8469,20 @@ async def _run_admin_arb_test(lang: str) -> str:
             lines.append(
                 f"   fees {float(breakdown.get('trading_fees',0.0) or 0.0):.2f}% / slip {float(breakdown.get('slippage',0.0) or 0.0):.2f}%"
             )
+            lines.append(
+                f"   buy_ts_age_sec={float(item.get('buy_ts_age_sec', 0.0) or 0.0):.2f} / "
+                f"sell_ts_age_sec={float(item.get('sell_ts_age_sec', 0.0) or 0.0):.2f}"
+            )
+            ref_mid = item.get('ref_mid')
+            dev_buy = item.get('deviation_buy_pct')
+            dev_sell = item.get('deviation_sell_pct')
+            if isinstance(ref_mid, (int, float)) and ref_mid > 0 and isinstance(dev_buy, (int, float)) and isinstance(dev_sell, (int, float)):
+                lines.append(
+                    f"   ref_mid={float(ref_mid):.8f} | deviation_buy={float(dev_buy):.2f}% | deviation_sell={float(dev_sell):.2f}%"
+                )
+            else:
+                lines.append("   ref_mid=n/a | deviation_buy=n/a | deviation_sell=n/a")
+            lines.append(f"   suspicious_reason={str(item.get('suspicious_reason') or '-')}")
     return "\n".join(lines).strip()
 
 
@@ -8502,6 +8516,7 @@ async def arbitrage_scan_once(bot: Bot) -> None:
         slippage_pct=SLIPPAGE_PCT,
     )
     qualified = details.get("qualified", [])
+    qualified_notify = details.get("qualified_notify", qualified)
     all_opportunities = details.get("all_opportunities", [])
     insert_arb_opportunities(all_opportunities, limit=20)
 
@@ -8510,7 +8525,7 @@ async def arbitrage_scan_once(bot: Bot) -> None:
         state = st.state if isinstance(st.state, dict) else {}
         state["cycle_ms"] = int(details.get("cycle_ms", 0) or 0)
         state["candidates_gross"] = int(details.get("candidates_gross", 0) or 0)
-        state["qualified_count"] = len(qualified)
+        state["qualified_count"] = len(qualified_notify)
         state["symbols_collected"] = int(details.get("symbols_collected", 0) or 0)
         state["api_errors_24h"] = int(state.get("api_errors_24h", 0) or 0) + int(details.get("api_errors", 0) or 0)
         state["api_errors_24h_updated_at"] = int(time.time())
@@ -8518,7 +8533,7 @@ async def arbitrage_scan_once(bot: Bot) -> None:
 
     users = list_arb_enabled_users()
     sent = 0
-    for item in qualified:
+    for item in qualified_notify:
         net_pct = float(item.get("net_pct", 0.0) or 0.0)
         dedup_key = str(item.get("dedup_key") or f"{item.get('symbol','')}:{item.get('buy_exchange','')}:{item.get('sell_exchange','')}:{net_pct:.2f}")
         for user_id in users:
