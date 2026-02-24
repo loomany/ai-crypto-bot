@@ -178,3 +178,24 @@ def get_arb_opportunities_page(*, page: int, page_size: int) -> tuple[List[dict]
         return out, total
     finally:
         conn.close()
+
+
+def get_arb_max_metrics_since(since_ts: int) -> dict[str, float]:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT MAX(net) AS max_net, MAX(gross) AS max_gross
+            FROM arb_opportunities
+            WHERE ts >= ?
+            """,
+            (int(since_ts),),
+        ).fetchone()
+        if not row:
+            return {"max_net": 0.0, "max_gross": 0.0}
+        return {
+            "max_net": float(row["max_net"] or 0.0),
+            "max_gross": float(row["max_gross"] or 0.0),
+        }
+    finally:
+        conn.close()

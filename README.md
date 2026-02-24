@@ -5,7 +5,7 @@ AI Telegram bot for crypto market analysis (TA + orderflow + ML)
 
 - `ARB_ENABLED=1`
 - `ARB_SCAN_INTERVAL_SEC=8`
-- `ARB_MIN_NET_PCT=0.7`
+- `ARB_MIN_NET_PCT=0.5`
 - `ARB_USER_COOLDOWN_SEC=300`
 - `ARB_DEDUP_TTL_SEC=1800`
 - `ARB_MAX_QUOTE_AGE_SEC=12`
@@ -13,5 +13,5 @@ AI Telegram bot for crypto market analysis (TA + orderflow + ML)
 - `ARB_TOP_SYMBOLS_LIMIT=120`
 - `FEE_TAKER_BUY_PCT=0.10`
 - `FEE_TAKER_SELL_PCT=0.10`
-- `SLIPPAGE_PCT=0.15`
+- `SLIPPAGE_PCT=0.10`
 - `ARB_EXCLUDE_SYMBOLS=BTCUSDT,USDCUSDT,TUSDUSDT`

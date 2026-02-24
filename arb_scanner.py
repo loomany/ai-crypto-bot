@@ -240,10 +240,10 @@ class ArbScanner:
 
     async def collect_opportunities(self) -> List[Dict[str, Any]]:
         details = await self.collect_opportunities_details(
-            min_net_pct=float(os.getenv("ARB_MIN_NET_PCT", "0.7") or 0.7),
+            min_net_pct=float(os.getenv("ARB_MIN_NET_PCT", "0.5") or 0.5),
             fees_buy_pct=float(os.getenv("FEE_TAKER_BUY_PCT", "0.10") or 0.10),
             fees_sell_pct=float(os.getenv("FEE_TAKER_SELL_PCT", "0.10") or 0.10),
-            slippage_pct=float(os.getenv("SLIPPAGE_PCT", "0.15") or 0.15),
+            slippage_pct=float(os.getenv("SLIPPAGE_PCT", "0.10") or 0.10),
         )
         return details["all_opportunities"]
 
