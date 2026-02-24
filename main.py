@@ -289,6 +289,8 @@ ARB_DEDUP_TTL_SEC = int(os.getenv("ARB_DEDUP_TTL_SEC", "1800") or 1800)
 FEE_TAKER_BUY_PCT = float(os.getenv("FEE_TAKER_BUY_PCT", "0.10") or 0.10)
 FEE_TAKER_SELL_PCT = float(os.getenv("FEE_TAKER_SELL_PCT", "0.10") or 0.10)
 SLIPPAGE_PCT = float(os.getenv("SLIPPAGE_PCT", "0.15") or 0.15)
+WITHDRAW_COST_PCT_EST = float(os.getenv("WITHDRAW_COST_PCT_EST", "0.25") or 0.25)
+RISK_BUFFER_PCT = float(os.getenv("RISK_BUFFER_PCT", "0.15") or 0.15)
 
 _arb_scanner = ArbScanner()
 
@@ -8379,6 +8381,8 @@ def _format_arb_history_text(lang: str, rows: list[dict], page: int, page_size: 
                 net=f"{float(row.get('net_pct', 0.0) or 0.0):.2f}",
                 fees=f"{float(breakdown.get('trading_fees', 0.0) or 0.0):.2f}",
                 slippage=f"{float(breakdown.get('slippage', 0.0) or 0.0):.2f}",
+                withdraw=f"{float(breakdown.get('withdraw_est', 0.0) or 0.0):.2f}",
+                risk=f"{float(breakdown.get('risk_buf', 0.0) or 0.0):.2f}",
                 age=int(row.get("age_sec", 0) or 0),
                 ts=datetime.fromtimestamp(int(row.get("ts", 0) or 0), timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
             )
@@ -8407,6 +8411,8 @@ async def _run_admin_arb_test(lang: str) -> str:
         fees_buy_pct=FEE_TAKER_BUY_PCT,
         fees_sell_pct=FEE_TAKER_SELL_PCT,
         slippage_pct=SLIPPAGE_PCT,
+        withdraw_pct=WITHDRAW_COST_PCT_EST,
+        risk_buffer_pct=RISK_BUFFER_PCT,
     )
     top = details.get("qualified", [])[:5]
     lines = [
@@ -8433,7 +8439,8 @@ async def _run_admin_arb_test(lang: str) -> str:
                 f"NET {float(item.get('net_pct',0.0) or 0.0):.2f}% (Gross {float(item.get('gross_pct',0.0) or 0.0):.2f}%)"
             )
             lines.append(
-                f"   fees {float(breakdown.get('trading_fees',0.0) or 0.0):.2f}% / slip {float(breakdown.get('slippage',0.0) or 0.0):.2f}%"
+                f"   fees {float(breakdown.get('trading_fees',0.0) or 0.0):.2f}% / slip {float(breakdown.get('slippage',0.0) or 0.0):.2f}% / "
+                f"wd {float(breakdown.get('withdraw_est',0.0) or 0.0):.2f}% / risk {float(breakdown.get('risk_buf',0.0) or 0.0):.2f}%"
             )
     return "\n".join(lines).strip()
 
@@ -8452,6 +8459,8 @@ def _format_arb_alert(lang: str, item: dict, net_pct: float) -> str:
         gross=f"{item['gross_pct']:.2f}",
         fees=f"{(FEE_TAKER_BUY_PCT + FEE_TAKER_SELL_PCT):.2f}",
         slippage=f"{SLIPPAGE_PCT:.2f}",
+        withdraw=f"{WITHDRAW_COST_PCT_EST:.2f}",
+        risk=f"{RISK_BUFFER_PCT:.2f}",
         net=f"{net_pct:.2f}",
         age=str(int(item.get("age_sec", 0) or 0)),
     )
@@ -8466,6 +8475,8 @@ async def arbitrage_scan_once(bot: Bot) -> None:
         fees_buy_pct=FEE_TAKER_BUY_PCT,
         fees_sell_pct=FEE_TAKER_SELL_PCT,
         slippage_pct=SLIPPAGE_PCT,
+        withdraw_pct=WITHDRAW_COST_PCT_EST,
+        risk_buffer_pct=RISK_BUFFER_PCT,
     )
     qualified = details.get("qualified", [])
     insert_arb_opportunities(qualified, limit=30)

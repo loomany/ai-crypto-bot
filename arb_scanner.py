@@ -146,7 +146,7 @@ class ArbScanner:
         self.last_symbols_refresh = now
         return self.cached_symbols
 
-    async def collect_opportunities_details(self, *, min_net_pct: float, fees_buy_pct: float, fees_sell_pct: float, slippage_pct: float) -> Dict[str, Any]:
+    async def collect_opportunities_details(self, *, min_net_pct: float, fees_buy_pct: float, fees_sell_pct: float, slippage_pct: float, withdraw_pct: float, risk_buffer_pct: float) -> Dict[str, Any]:
         api_errors = 0
         started_ms = int(time.time() * 1000)
         async with aiohttp.ClientSession() as session:
@@ -203,11 +203,13 @@ class ArbScanner:
             gross_pct = (best_sell["price"] - best_buy["price"]) / best_buy["price"] * 100.0
             if gross_pct > 0:
                 candidates_gross += 1
-            net_pct = gross_pct - fees_total - slippage_pct
+            net_pct = gross_pct - fees_total - slippage_pct - withdraw_pct - risk_buffer_pct
             age_sec = max(0.0, (now_ms - min(best_buy["ts"], best_sell["ts"])) / 1000.0)
             breakdown = {
                 "trading_fees": fees_total,
                 "slippage": slippage_pct,
+                "withdraw_est": withdraw_pct,
+                "risk_buf": risk_buffer_pct,
             }
             opportunities.append(
                 {
@@ -244,6 +246,8 @@ class ArbScanner:
             fees_buy_pct=float(os.getenv("FEE_TAKER_BUY_PCT", "0.10") or 0.10),
             fees_sell_pct=float(os.getenv("FEE_TAKER_SELL_PCT", "0.10") or 0.10),
             slippage_pct=float(os.getenv("SLIPPAGE_PCT", "0.15") or 0.15),
+            withdraw_pct=float(os.getenv("WITHDRAW_COST_PCT_EST", "0.25") or 0.25),
+            risk_buffer_pct=float(os.getenv("RISK_BUFFER_PCT", "0.15") or 0.15),
         )
         return details["all_opportunities"]
 
