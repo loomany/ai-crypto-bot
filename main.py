@@ -1435,19 +1435,30 @@ def _signal_list_status_label(row: dict[str, Any]) -> str:
 def _dedupe_signals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     unique: dict[str, dict[str, Any]] = {}
     for row in rows:
-        row_id = _safe_int(row.get("id"), 0)
-        if row_id > 0:
-            key = f"id:{row_id}"
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side = _signal_side_label(row.get("side"))
+        module = str(row.get("module") or "ai_signals").strip().lower()
+
+        # В истории пользователю важен последний сигнал по инструменту/направлению,
+        # поэтому схлопываем повторы и оставляем самую свежую запись.
+        if symbol:
+            key = f"{module}:{symbol}:{side}"
         else:
-            sid = str(row.get("signal_id") or "").strip()
-            if sid:
-                key = f"signal:{sid}"
+            row_id = _safe_int(row.get("id"), 0)
+            if row_id > 0:
+                key = f"id:{row_id}"
             else:
-                created_at = _safe_int(row.get("created_at") or row.get("ts"), 0)
-                key = (
-                    f"{row.get('symbol','')}|{row.get('side','')}|{_safe_int(row.get('score'),0)}|"
-                    f"{created_at}|{_safe_int(row.get('id'), 0)}"
-                )
+                sid = str(row.get("signal_id") or "").strip()
+                if sid:
+                    key = f"signal:{sid}"
+                else:
+                    created_at = _safe_int(row.get("created_at") or row.get("ts"), 0)
+                    key = (
+                        f"{row.get('symbol','')}|{row.get('side','')}|{_safe_int(row.get('score'),0)}|"
+                        f"{created_at}|{_safe_int(row.get('id'), 0)}"
+                    )
+        if key in unique:
+            continue
         unique[key] = row
     return list(unique.values())
 
