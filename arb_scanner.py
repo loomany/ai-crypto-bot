@@ -25,6 +25,7 @@ class ArbScanner:
         }
         self.last_symbols_refresh = 0.0
         self.cached_symbols: List[str] = []
+        self._spot_symbols_by_exchange: Dict[str, Set[str]] = {}
         self.rest_refresh_sec = float(os.getenv("ARB_REST_REFRESH_SEC", "4") or 4)
         self._rest_cache: Dict[str, Dict[str, Any]] = {}
         self._ws_cache: Dict[str, Dict[str, Dict[str, float]]] = {"HTX": {}, "BitMart": {}}
@@ -155,12 +156,24 @@ class ArbScanner:
             self._fetch_symbols_bingx(session),
             return_exceptions=True,
         )
+        spot_symbol_sources = (
+            "Binance",
+            "OKX",
+            "Bybit",
+            "KuCoin",
+            "Gate.io",
+            "MEXC",
+            "Bitget",
+            "BingX",
+        )
+        self._spot_symbols_by_exchange = {}
 
         common_symbols: Set[str] | None = None
         union_symbols: Set[str] = set()
-        for payload in symbols_payload:
+        for idx, payload in enumerate(symbols_payload):
             if isinstance(payload, Exception):
                 continue
+            self._spot_symbols_by_exchange[spot_symbol_sources[idx]] = set(payload)
             union_symbols |= set(payload)
             if common_symbols is None:
                 common_symbols = set(payload)
@@ -259,6 +272,12 @@ class ArbScanner:
         now_ms = int(time.time() * 1000)
         fees_total = fees_buy_pct + fees_sell_pct
         candidates_gross = 0
+        skipped_anomalies_count = 0
+        skipped_anomalies: Dict[str, int] = {
+            "zero_price": 0,
+            "extreme_spread": 0,
+            "invalid_symbol": 0,
+        }
         opportunities: List[Dict[str, Any]] = []
         for symbol in symbols:
             best_buy = None
@@ -270,9 +289,16 @@ class ArbScanner:
                 age_sec = max(0.0, (now_ms - q["ts"]) / 1000.0)
                 if age_sec > self.max_quote_age_sec:
                     continue
+                spot_symbols = self._spot_symbols_by_exchange.get(exchange)
+                if spot_symbols is not None and symbol not in spot_symbols:
+                    skipped_anomalies_count += 1
+                    skipped_anomalies["invalid_symbol"] += 1
+                    continue
                 ask = q["ask"]
                 bid = q["bid"]
-                if ask <= 0 or bid <= 0:
+                if ask <= 0 or bid <= 0 or ask < 0.0000001:
+                    skipped_anomalies_count += 1
+                    skipped_anomalies["zero_price"] += 1
                     continue
                 if best_buy is None or ask < best_buy["price"]:
                     best_buy = {"exchange": exchange, "price": ask, "ts": q["ts"]}
@@ -287,6 +313,20 @@ class ArbScanner:
                 continue
 
             gross_pct = (best_sell["price"] - best_buy["price"]) / best_buy["price"] * 100.0
+            if gross_pct > 50.0:
+                skipped_anomalies_count += 1
+                skipped_anomalies["extreme_spread"] += 1
+                continue
+            mid = (best_sell["price"] + best_buy["price"]) / 2.0
+            if mid <= 0:
+                skipped_anomalies_count += 1
+                skipped_anomalies["zero_price"] += 1
+                continue
+            spread_ratio = abs(best_sell["price"] - best_buy["price"]) / mid
+            if spread_ratio > 0.5:
+                skipped_anomalies_count += 1
+                skipped_anomalies["extreme_spread"] += 1
+                continue
             if gross_pct > 0:
                 candidates_gross += 1
             net_pct = gross_pct - fees_total - slippage_pct
@@ -320,6 +360,9 @@ class ArbScanner:
             "exchange_stats": exchange_meta,
             "symbols_collected": len(symbols),
             "candidates_gross": candidates_gross,
+            "skipped_anomalies_count": skipped_anomalies_count,
+            "reason": skipped_anomalies,
+            "skipped_anomalies": skipped_anomalies,
             "qualified": qualified,
             "all_opportunities": opportunities,
             "api_errors": api_errors,
