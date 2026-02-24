@@ -1666,6 +1666,10 @@ def _signal_list_status_label(row: dict[str, Any]) -> str:
     if normalized in {"TP1", "TP2", "TP"}:
         return "TP"
     if normalized == "BE":
+        if bool(row.get("tp1_hit")) or bool(row.get("tp2_hit")):
+            # BE after TP1/TP2 is counted as TP in summary stats,
+            # keep list label consistent with aggregate block.
+            return "TP"
         level = float(row.get("be_level_pct") or 8.0)
         return f"+{level:.0f}%"
     if normalized == "SL":
@@ -3093,9 +3097,12 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
 
     status_raw = _normalize_signal_status(str(event.get("result") or event.get("status") or ""))
     if status_raw == "BE":
-        status_line = (
-            f"🟢 BE (+{float(event.get('be_level_pct') or 8.0):.0f}%)"
-        )
+        if bool(event.get("tp1_hit")) or bool(event.get("tp2_hit")):
+            status_line = "🟢 TP"
+        else:
+            status_line = (
+                f"🟢 BE (+{float(event.get('be_level_pct') or 8.0):.0f}%)"
+            )
         status_with_side_line = f"{status_line} | {side}"
     ttl_hours = max(1, int(round(float(event.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60)))
 
