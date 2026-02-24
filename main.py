@@ -1730,8 +1730,7 @@ def _signal_list_status_label(row: dict[str, Any]) -> str:
             # BE after TP1/TP2 is counted as TP in summary stats,
             # keep list label consistent with aggregate block.
             return "TP"
-        level = float(row.get("be_level_pct") or 8.0)
-        return f"+{level:.0f}%"
+        return "BE"
     if normalized == "SL":
         return "SL"
     if normalized in {"EXP", "EXPIRED", "NO_FILL", "NF"}:
@@ -1801,7 +1800,12 @@ def _format_signal_list_row(
         time_prefix = dt_local.strftime("%H:%M/%d.%m")
     else:
         time_prefix = "--:--/--.--"
-    row_core = f"{side_prefix} | {icon_value} | Score {score_value} | {symbol_value}"
+    status_value = str(status_label or "").strip()
+    if icon_value == "🟢" and status_value and status_value != "…":
+        status_icon = f"{status_value} {icon_value}"
+    else:
+        status_icon = icon_value
+    row_core = f"{side_prefix} | {status_icon} | Score {score_value} | {symbol_value}"
     row_text = f"{time_prefix} | {row_core}"
     if access_level == "PREVIEW":
         return f"🔒 {row_text}"
