@@ -1352,17 +1352,18 @@ def get_history_winrate_summary(
 
     def _is_tp_reached_after_be(signal_row: sqlite3.Row) -> bool:
         try:
-            if int(signal_row["tp2_hit"] or 0) == 1 or int(signal_row["tp1_hit"] or 0) == 1:
-                return True
+            tp2_hit = int(signal_row["tp2_hit"] or 0) == 1
+            tp1_hit = int(signal_row["tp1_hit"] or 0) == 1
         except (TypeError, ValueError, KeyError):
-            pass
+            tp2_hit = False
+            tp1_hit = False
 
         try:
             max_profit_pct = float(signal_row["max_profit_pct"] or 0.0)
         except (TypeError, ValueError, KeyError):
-            return False
+            return tp1_hit or tp2_hit
         if max_profit_pct <= 0:
-            return False
+            return tp1_hit or tp2_hit
 
         try:
             entry_price = float(signal_row["entry_price"] or 0.0)
@@ -1372,16 +1373,18 @@ def get_history_winrate_summary(
                 entry_price = (poi_low + poi_high) / 2.0
             tp1_price = float(signal_row["tp1"])
             if entry_price <= 0 or tp1_price <= 0:
-                return False
+                return tp1_hit or tp2_hit
 
             side = str(signal_row["side"] or "").upper()
             if side == "SELL":
                 tp1_target_pct = safe_div(entry_price - tp1_price, entry_price, 0.0) * 100.0
             else:
                 tp1_target_pct = safe_div(tp1_price - entry_price, entry_price, 0.0) * 100.0
-            return tp1_target_pct > 0 and max_profit_pct >= tp1_target_pct
+            if tp1_target_pct <= 0:
+                return tp1_hit or tp2_hit
+            return max_profit_pct >= tp1_target_pct
         except (TypeError, ValueError, KeyError):
-            return False
+            return tp1_hit or tp2_hit
 
     for row in rows:
         score = int(row["score"] or 0)

@@ -1675,15 +1675,15 @@ def _is_true_flag(value: Any) -> bool:
 
 
 def _be_reached_tp(row: dict[str, Any]) -> bool:
-    if _is_true_flag(row.get("tp2_hit")) or _is_true_flag(row.get("tp1_hit")):
-        return True
+    tp2_hit = _is_true_flag(row.get("tp2_hit"))
+    tp1_hit = _is_true_flag(row.get("tp1_hit"))
 
     try:
         max_profit_pct = float(row.get("max_profit_pct") or 0.0)
     except (TypeError, ValueError):
         return False
     if max_profit_pct <= 0:
-        return False
+        return tp1_hit or tp2_hit
 
     try:
         entry_price = float(row.get("entry_price") or 0.0)
@@ -1705,7 +1705,7 @@ def _be_reached_tp(row: dict[str, Any]) -> bool:
         tp1_price = 0.0
 
     if entry_price <= 0 or tp1_price <= 0:
-        return False
+        return tp1_hit or tp2_hit
 
     side = _signal_side_label(row.get("side"))
     if side == "SHORT":
@@ -1713,7 +1713,12 @@ def _be_reached_tp(row: dict[str, Any]) -> bool:
     else:
         tp1_target_pct = ((tp1_price - entry_price) / entry_price) * 100.0
 
-    return tp1_target_pct > 0 and max_profit_pct >= tp1_target_pct
+    if tp1_target_pct <= 0:
+        return tp1_hit or tp2_hit
+
+    # Max profit is the most reliable source for distinguishing BE from TP
+    # in archived rows where historical tp*_hit flags may be inconsistent.
+    return max_profit_pct >= tp1_target_pct
 
 
 def _signal_list_status_label(row: dict[str, Any]) -> str:
@@ -3152,7 +3157,7 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
 
     status_raw = _normalize_signal_status(str(event.get("result") or event.get("status") or ""))
     if status_raw == "BE":
-        if bool(event.get("tp1_hit")) or bool(event.get("tp2_hit")):
+        if _be_reached_tp(event):
             status_line = "🟢 TP"
         else:
             status_line = (
