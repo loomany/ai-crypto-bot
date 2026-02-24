@@ -7821,6 +7821,7 @@ async def ai_scan_once() -> None:
         retried_close_notifications = await retry_pending_close_notifications(limit=200)
 
         retry_sent = 0
+        skipped_recent_symbol = 0
         cycle_regime_key = _normalize_regime_for_diag(btc_context.get("btc_regime"))
 
         def _inc_regime_signal() -> None:
@@ -7886,6 +7887,19 @@ async def ai_scan_once() -> None:
             signal["btc_regime"] = btc_context.get("btc_regime")
             signal["btc_direction"] = btc_context.get("btc_direction")
             signal["btc_trend"] = btc_context.get("btc_trend")
+            symbol = str(signal.get("symbol") or "").strip().upper()
+            if symbol and AI_SYMBOL_REEMIT_COOLDOWN_SEC > 0:
+                if has_recent_signal_for_symbol(
+                    module="ai_signals",
+                    symbol=symbol,
+                    within_sec=AI_SYMBOL_REEMIT_COOLDOWN_SEC,
+                ):
+                    skipped_recent_symbol += 1
+                    print(
+                        f"[ai_signals] skip retry recent duplicate symbol={symbol} "
+                        f"cooldown_sec={AI_SYMBOL_REEMIT_COOLDOWN_SEC}"
+                    )
+                    continue
             try:
                 too_far, market_price, entry_mid, skip_reason = _is_signal_entry_far_from_market(signal, spot_last_price)
                 if too_far:
@@ -8067,7 +8081,6 @@ async def ai_scan_once() -> None:
                 logger.exception("AI signals error")
         deep_scans_done = stats.get("deep_scans_done", 0) if isinstance(stats, dict) else 0
         sent_count = retry_sent
-        skipped_recent_symbol = 0
         for signal in _select_signals_for_cycle(signals):
             if time.time() - start > BUDGET:
                 print("[AI] budget exceeded, stopping early")
