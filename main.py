@@ -1383,19 +1383,14 @@ def _get_history_context(user_id: int) -> tuple[str, int, dict[str, Any] | None,
     return time_window, max(1, page_value), winrate_summary, history_type
 
 
-def _normalize_history_status(raw_status: str | None) -> str:
-    status_key = get_signal_status_key({"outcome": raw_status})
-    if status_key in {"ACTIVATED", "POI_TOUCHED"}:
-        return "IN_PROGRESS"
-    return status_key
-
-
 def _history_status_label(status_key: str, lang: str) -> str:
     status_labels = {
         "TP": i18n.t(lang, "history_status_tp"),
         "SL": i18n.t(lang, "history_status_sl"),
         "EXPIRED_NO_ENTRY": i18n.t(lang, "history_status_expired_no_entry"),
         "NO_CONFIRMATION": i18n.t(lang, "history_status_no_confirmation"),
+        "POI_TOUCHED": i18n.t(lang, "history_status_poi_touched"),
+        "ACTIVATED": i18n.t(lang, "history_status_activated"),
         "IN_PROGRESS": i18n.t(lang, "history_status_in_progress"),
     }
     return status_labels.get(status_key, status_labels["IN_PROGRESS"])
@@ -1407,6 +1402,8 @@ def _history_status_icon(status_key: str) -> str:
         "SL": "🔴",
         "EXPIRED_NO_ENTRY": "⚪",
         "NO_CONFIRMATION": "🔵",
+        "POI_TOUCHED": "🟠",
+        "ACTIVATED": "🟡",
         "IN_PROGRESS": "🟣",
     }
     return icon_map.get(status_key, "🟣")
@@ -2844,7 +2841,7 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
         symbol_pair = symbol_raw
 
     side = _signal_side_label(event.get("side"))
-    status_key = _normalize_history_status(str(event.get("result") or event.get("status") or ""))
+    status_key = get_signal_status_key(event)
     status_line = _history_status_label(status_key, lang)
     status_with_side_line = f"{status_line} | {side}"
 
