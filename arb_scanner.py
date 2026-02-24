@@ -15,8 +15,6 @@ class ArbScanner:
         self.symbol_refresh_sec = int(os.getenv("ARB_SYMBOLS_REFRESH_SEC", "3600"))
         self.top_symbols_limit = int(os.getenv("ARB_TOP_SYMBOLS_LIMIT", "120"))
         self.max_quote_age_sec = int(os.getenv("ARB_MAX_QUOTE_AGE_SEC", "12"))
-        self.max_gross_notify_pct = float(os.getenv("ARB_MAX_GROSS_NOTIFY_PCT", "3.0") or 3.0)
-        self.max_deviation_from_ref_pct = float(os.getenv("ARB_MAX_DEVIATION_FROM_REF_PCT", "2.0") or 2.0)
         self.exclude_symbols = {
             s.strip().upper()
             for s in os.getenv(
@@ -34,8 +32,6 @@ class ArbScanner:
         self._ws_last_message_ts: Dict[str, float] = {"HTX": 0.0, "BitMart": 0.0}
         self._ws_last_error: Dict[str, str] = {"HTX": "", "BitMart": ""}
         self._ws_tasks: Dict[str, asyncio.Task] = {}
-        self._last_quote_price: Dict[str, Dict[str, float]] = {}
-        self._last_quote_change_ts_ms: Dict[str, Dict[str, int]] = {}
 
     @staticmethod
     def normalize_symbol(raw: str) -> str:
@@ -45,18 +41,6 @@ class ArbScanner:
         async with session.get(url, timeout=12) as resp:
             resp.raise_for_status()
             return await resp.json()
-
-    def _quote_stale_age_sec(self, exchange: str, symbol: str, *, ask: float, bid: float, now_ms: int) -> float:
-        ex_price = self._last_quote_price.setdefault(exchange, {})
-        ex_change = self._last_quote_change_ts_ms.setdefault(exchange, {})
-        mid = (ask + bid) / 2.0 if ask > 0 and bid > 0 else 0.0
-        prev_mid = ex_price.get(symbol)
-        prev_change_ts = ex_change.get(symbol, now_ms)
-        if prev_mid is None or abs(prev_mid - mid) > 1e-12:
-            ex_price[symbol] = mid
-            ex_change[symbol] = now_ms
-            return 0.0
-        return max(0.0, (now_ms - prev_change_ts) / 1000.0)
 
     @staticmethod
     def _to_float(value: Any) -> float:
@@ -298,27 +282,23 @@ class ArbScanner:
         for symbol in symbols:
             best_buy = None
             best_sell = None
-            ref_mid = None
-            ref_exchange = None
-            ref_quote = quotes.get("Binance", {}).get(symbol) or quotes.get("OKX", {}).get(symbol)
-            if ref_quote and ref_quote.get("ask", 0) > 0 and ref_quote.get("bid", 0) > 0:
-                ref_exchange = "Binance" if quotes.get("Binance", {}).get(symbol) else "OKX"
-                ref_mid = (ref_quote["ask"] + ref_quote["bid"]) / 2.0
             for exchange in EXCHANGES:
                 q = quotes.get(exchange, {}).get(symbol)
                 if not q:
+                    continue
+                age_sec = max(0.0, (now_ms - q["ts"]) / 1000.0)
+                if age_sec > self.max_quote_age_sec:
+                    continue
+                spot_symbols = self._spot_symbols_by_exchange.get(exchange)
+                if spot_symbols is not None and symbol not in spot_symbols:
+                    skipped_anomalies_count += 1
+                    skipped_anomalies["invalid_symbol"] += 1
                     continue
                 ask = q["ask"]
                 bid = q["bid"]
                 if ask <= 0 or bid <= 0 or ask < 0.0000001:
                     skipped_anomalies_count += 1
                     skipped_anomalies["zero_price"] += 1
-                    continue
-                self._quote_stale_age_sec(exchange, symbol, ask=ask, bid=bid, now_ms=now_ms)
-                spot_symbols = self._spot_symbols_by_exchange.get(exchange)
-                if spot_symbols is not None and symbol not in spot_symbols:
-                    skipped_anomalies_count += 1
-                    skipped_anomalies["invalid_symbol"] += 1
                     continue
                 if best_buy is None or ask < best_buy["price"]:
                     best_buy = {"exchange": exchange, "price": ask, "ts": q["ts"]}
@@ -350,31 +330,7 @@ class ArbScanner:
             if gross_pct > 0:
                 candidates_gross += 1
             net_pct = gross_pct - fees_total - slippage_pct
-            buy_last_change = self._last_quote_change_ts_ms.get(best_buy["exchange"], {}).get(symbol, best_buy["ts"])
-            sell_last_change = self._last_quote_change_ts_ms.get(best_sell["exchange"], {}).get(symbol, best_sell["ts"])
-            age_buy_sec = max(0.0, (now_ms - (best_buy["ts"] or buy_last_change)) / 1000.0)
-            age_sell_sec = max(0.0, (now_ms - (best_sell["ts"] or sell_last_change)) / 1000.0)
-            if best_buy["ts"] <= 0:
-                age_buy_sec = max(0.0, (now_ms - buy_last_change) / 1000.0)
-            if best_sell["ts"] <= 0:
-                age_sell_sec = max(0.0, (now_ms - sell_last_change) / 1000.0)
-            age_sec = max(age_buy_sec, age_sell_sec)
-            deviation_buy_pct = None
-            deviation_sell_pct = None
-            if ref_mid and ref_mid > 0:
-                deviation_buy_pct = abs(best_buy["price"] - ref_mid) / ref_mid * 100.0
-                deviation_sell_pct = abs(best_sell["price"] - ref_mid) / ref_mid * 100.0
-            suspicious_reason = ""
-            if gross_pct > self.max_gross_notify_pct:
-                suspicious_reason = "gross_too_high"
-            elif age_buy_sec > self.max_quote_age_sec or age_sell_sec > self.max_quote_age_sec:
-                suspicious_reason = "stale"
-            elif (
-                deviation_buy_pct is not None
-                and deviation_sell_pct is not None
-                and (deviation_buy_pct > self.max_deviation_from_ref_pct or deviation_sell_pct > self.max_deviation_from_ref_pct)
-            ):
-                suspicious_reason = "deviation"
+            age_sec = max(0.0, (now_ms - min(best_buy["ts"], best_sell["ts"])) / 1000.0)
             breakdown = {
                 "trading_fees": fees_total,
                 "slippage": slippage_pct,
@@ -391,22 +347,12 @@ class ArbScanner:
                     "net_pct": net_pct,
                     "breakdown": breakdown,
                     "age_sec": int(age_sec),
-                    "buy_ts_age_sec": round(age_buy_sec, 3),
-                    "sell_ts_age_sec": round(age_sell_sec, 3),
-                    "ref_exchange": ref_exchange,
-                    "ref_mid": ref_mid,
-                    "deviation_buy_pct": deviation_buy_pct,
-                    "deviation_sell_pct": deviation_sell_pct,
-                    "suspicious_reason": suspicious_reason,
                     "dedup_key": f"{symbol}|{best_buy['exchange']}->{best_sell['exchange']}|{net_pct:.2f}",
                 }
             )
 
         opportunities.sort(key=lambda x: x["net_pct"], reverse=True)
         qualified = [item for item in opportunities if item["net_pct"] >= min_net_pct]
-        qualified_notify = [
-            item for item in qualified if not item.get("suspicious_reason")
-        ]
         ended_ms = int(time.time() * 1000)
         return {
             "exchanges_polled": exchanges_ok,
@@ -418,7 +364,6 @@ class ArbScanner:
             "reason": skipped_anomalies,
             "skipped_anomalies": skipped_anomalies,
             "qualified": qualified,
-            "qualified_notify": qualified_notify,
             "all_opportunities": opportunities,
             "api_errors": api_errors,
             "cycle_ms": max(0, ended_ms - started_ms),
@@ -471,7 +416,7 @@ class ArbScanner:
                 symbol = self.normalize_symbol(row.get("symbol", ""))
                 if not symbol.endswith("USDT"):
                     continue
-                out[symbol] = {"ask": self._to_float(row.get("askPrice")), "bid": self._to_float(row.get("bidPrice")), "ts": 0}
+                out[symbol] = {"ask": self._to_float(row.get("askPrice")), "bid": self._to_float(row.get("bidPrice")), "ts": now_ms}
             return out
 
         return await self._fetch_cached_rest("Binance", _load)
@@ -499,7 +444,7 @@ class ArbScanner:
                 symbol = self.normalize_symbol(row.get("symbol", ""))
                 if not symbol.endswith("USDT"):
                     continue
-                out[symbol] = {"ask": self._to_float(row.get("ask1Price")), "bid": self._to_float(row.get("bid1Price")), "ts": 0}
+                out[symbol] = {"ask": self._to_float(row.get("ask1Price")), "bid": self._to_float(row.get("bid1Price")), "ts": now_ms}
             return out
 
         return await self._fetch_cached_rest("Bybit", _load)
@@ -531,7 +476,7 @@ class ArbScanner:
                         symbol = self.normalize_symbol(row.get("currency_pair", ""))
                         if not symbol.endswith("USDT"):
                             continue
-                        out[symbol] = {"ask": self._to_float(row.get("lowest_ask")), "bid": self._to_float(row.get("highest_bid")), "ts": 0}
+                        out[symbol] = {"ask": self._to_float(row.get("lowest_ask")), "bid": self._to_float(row.get("highest_bid")), "ts": now_ms}
                     return out
                 except Exception:
                     continue
@@ -547,7 +492,7 @@ class ArbScanner:
             for row in data:
                 symbol = self.normalize_symbol(row.get("symbol", ""))
                 if symbol.endswith("USDT"):
-                    out[symbol] = {"ask": self._to_float(row.get("askPrice")), "bid": self._to_float(row.get("bidPrice")), "ts": 0}
+                    out[symbol] = {"ask": self._to_float(row.get("askPrice")), "bid": self._to_float(row.get("bidPrice")), "ts": now_ms}
             return out
 
         return await self._fetch_cached_rest("MEXC", _load)
@@ -578,7 +523,7 @@ class ArbScanner:
                 bid = self._to_float(row.get("bidPrice") or row.get("bid") or row.get("bestBid"))
                 ask = self._to_float(row.get("askPrice") or row.get("ask") or row.get("bestAsk"))
                 if bid > 0 and ask > 0:
-                    out[symbol] = {"ask": ask, "bid": bid, "ts": 0}
+                    out[symbol] = {"ask": ask, "bid": bid, "ts": now_ms}
             if out:
                 return out
             depth = await self._fetch_json(session, "https://open-api.bingx.com/openApi/spot/v1/ticker/bookTicker")
@@ -586,7 +531,7 @@ class ArbScanner:
             for row in rows:
                 symbol = self.normalize_symbol(row.get("symbol", ""))
                 if symbol.endswith("USDT"):
-                    out[symbol] = {"ask": self._to_float(row.get("askPrice") or row.get("ask")), "bid": self._to_float(row.get("bidPrice") or row.get("bid")), "ts": 0}
+                    out[symbol] = {"ask": self._to_float(row.get("askPrice") or row.get("ask")), "bid": self._to_float(row.get("bidPrice") or row.get("bid")), "ts": now_ms}
             return out
 
         return await self._fetch_cached_rest("BingX", _load)
