@@ -110,7 +110,6 @@ from db import (
     list_signal_events_by_identity,
     get_signal_history,
     count_signal_history,
-    get_history_winrate_summary,
     list_open_signal_events,
     count_signal_events,
     get_signal_outcome_counts,
@@ -1854,6 +1853,61 @@ def _get_history_page(
     return page_value, pages, total, page_rows
 
 
+def _history_summary_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    totals = {
+        "tp": 0,
+        "be": 0,
+        "sl": 0,
+        "expired_no_entry": 0,
+        "no_confirmation": 0,
+        "in_progress": 0,
+    }
+    be_level_sum = 0.0
+    be_level_count = 0
+
+    for row in rows:
+        score = _safe_int(row.get("score"), 0)
+        if score < 80:
+            continue
+
+        status_label = _signal_list_status_label(row)
+        icon = _history_row_icon(row)
+
+        if status_label == "TP":
+            totals["tp"] += 1
+        elif status_label == "BE":
+            totals["be"] += 1
+            try:
+                raw_be_level = float(row.get("be_level_pct") or 0.0)
+                be_level_sum += raw_be_level if raw_be_level > 0 else 8.0
+                be_level_count += 1
+            except (TypeError, ValueError):
+                pass
+        elif status_label == "SL":
+            totals["sl"] += 1
+        elif status_label == "EXP":
+            totals["expired_no_entry"] += 1
+        elif icon == "🔵":
+            totals["no_confirmation"] += 1
+        else:
+            totals["in_progress"] += 1
+
+    trades = totals["tp"] + totals["be"] + totals["sl"]
+    winrate = round(((totals["tp"] + totals["be"]) / trades) * 100.0, 1) if trades else None
+    be_avg = round(be_level_sum / be_level_count, 1) if be_level_count else 0.0
+
+    return {
+        "90_100": {"wins": 0, "losses": 0, "closed": 0, "winrate": None, "avg_rr": None},
+        "80_89": {"wins": 0, "losses": 0, "closed": 0, "winrate": None},
+        "totals": totals,
+        "metrics": {
+            "winrate": winrate,
+            "be_avg": be_avg,
+            "trades": trades,
+        },
+    }
+
+
 def _format_history_item(row: dict[str, Any], lang: str, *, access_level: str = "FULL") -> str:
     del lang
     icon = _history_row_icon(row)
@@ -2102,12 +2156,25 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
             include_legacy=include_legacy,
             module=module,
         )
-        history_summary = get_history_winrate_summary(
+        raw_total = count_signal_history(
             time_window=time_window,
             user_id=None,
+            min_score=None,
             include_legacy=include_legacy,
             module=module,
         )
+        all_rows = [
+            dict(row)
+            for row in get_signal_history(
+                time_window=time_window,
+                user_id=None,
+                limit=raw_total,
+                offset=0,
+                include_legacy=include_legacy,
+                module=module,
+            )
+        ]
+        history_summary = _history_summary_from_rows(_dedupe_signals(all_rows))
     else:
         page_size = 12
         total = count_pumpdump_history(time_window=time_window)
