@@ -48,7 +48,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "⚡️ Межбиржевой арбитраж (SPOT, 5 бирж)\n\n"
             "Бот автоматически сканирует Binance, OKX, Bybit, KuCoin и Gate.io по публичным API.\n"
             "Уведомление приходит только если чистая прибыль (NET) после всех вычетов >= 0.7%.\n\n"
-            "Формула: NET = Gross − комиссии − slippage.\n"
+            "Формула: NET = Gross − комиссии − slippage − перевод/вывод (оценка) − risk buffer.\n"
             "Анти-спам: cooldown + дедуп одинаковых окон.\n\n"
             "🔔 Управление уведомлениями кнопками ниже."
         ),
@@ -381,7 +381,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "BUY: {buy_ex} @ {ask}\n"
             "SELL: {sell_ex} @ {bid}\n"
             "Gross: {gross}% | NET: {net}%\n"
-            "Breakdown: fees {fees}% / slip {slippage}%\n"
+            "Breakdown: fees {fees}% / slip {slippage}% / wd {withdraw}% / risk {risk}%\n"
             "Age: {age}s | ts: {ts}"
         ),
         "ARB_TEST_TITLE": "🧪 ARB тест (1 цикл, без рассылки)",
@@ -401,10 +401,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Gross: {gross}%\n"
             "− Комиссии (buy+sell): {fees}%\n"
             "− Slippage: {slippage}%\n"
-            "\n"
+            "− Перевод/вывод (оценка): {withdraw}%\n"
+            "− Risk buffer: {risk}%\n\n"
             "✅ NET: {net}%\n"
             "⏱ Обновлено: {age}s назад\n\n"
-            "ℹ️ Описание: Модель рассчитана на арбитраж при наличии балансов на обеих биржах (без перевода средств)."
+            "ℹ️ Описание: бот сканирует 5 бирж по публичным API и присылает только когда чистая прибыль ≥ {min_net}%. Значения комиссий/перевода в MVP оценочные (консервативные)."
         ),
         "NO_ACCESS": "⛔ Нет доступа",
         "SIGNAL_NOT_FOUND": "Сигнал не найден.",
@@ -1031,7 +1032,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "⚡️ Inter-exchange arbitrage (SPOT, 5 exchanges)\n\n"
             "The bot scans Binance, OKX, Bybit, KuCoin, and Gate.io via public APIs.\n"
             "It notifies only when net profit (NET) after all deductions is >= 0.7%.\n\n"
-            "Formula: NET = Gross − fees − slippage.\n"
+            "Formula: NET = Gross − fees − slippage − transfer/withdraw (est.) − risk buffer.\n"
             "Anti-spam: per-user cooldown + dedup for identical windows.\n\n"
             "🔔 Use buttons below to manage notifications."
         ),
@@ -1370,7 +1371,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "BUY: {buy_ex} @ {ask}\n"
             "SELL: {sell_ex} @ {bid}\n"
             "Gross: {gross}% | NET: {net}%\n"
-            "Breakdown: fees {fees}% / slip {slippage}%\n"
+            "Breakdown: fees {fees}% / slip {slippage}% / wd {withdraw}% / risk {risk}%\n"
             "Age: {age}s | ts: {ts}"
         ),
         "ARB_TEST_TITLE": "🧪 ARB test (single cycle, no user broadcast)",
@@ -1390,10 +1391,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Gross: {gross}%\n"
             "− Fees (buy+sell): {fees}%\n"
             "− Slippage: {slippage}%\n"
-            "\n"
+            "− Transfer/withdraw (est.): {withdraw}%\n"
+            "− Risk buffer: {risk}%\n\n"
             "✅ NET: {net}%\n"
             "⏱ Updated: {age}s ago\n\n"
-            "ℹ️ Info: model is designed for arbitrage with balances already available on both exchanges (no funds transfer)."
+            "ℹ️ Info: the bot scans 5 exchanges via public APIs and notifies only when net profit ≥ {min_net}%. Fees/transfer are conservative estimates in MVP."
         ),
         "NO_ACCESS": "⛔ Access denied",
         "SIGNAL_NOT_FOUND": "Signal not found.",
