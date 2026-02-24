@@ -6581,8 +6581,18 @@ async def send_signal_to_all(
 
     dedup_key = f"{symbol}:24h"
 
-    sent_at = int(time.time())
-    insert_signal_audit(_strip_runtime_signal_fields(signal_dict), tier="free", module="ai_signals", sent_at=sent_at)
+    lifecycle_ts_raw = signal_dict.get("created_at")
+    try:
+        lifecycle_ts = int(float(lifecycle_ts_raw))
+    except (TypeError, ValueError):
+        lifecycle_ts = 0
+    sent_at = lifecycle_ts if lifecycle_ts > 0 else int(time.time())
+    insert_signal_audit(
+        _strip_runtime_signal_fields(signal_dict),
+        tier="free",
+        module="ai_signals",
+        sent_at=sent_at,
+    )
     reason = signal_dict.get("reason")
     breakdown = (
         signal_dict.get("score_breakdown")
