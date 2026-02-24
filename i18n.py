@@ -407,7 +407,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "− Slippage: {slippage}%\n"
             "\n"
             "✅ NET: {net}%\n"
-            "⏱ Обновлено: {age}s назад\n\n"
+            "⏱ Обновлено: {age}s назад\n"
+            "Δ latency: {latency_diff_sec}s\n"
+            "💧 Ликвидность BUY(ask x3): {liquidity_buy_usdt} USDT\n"
+            "💧 Ликвидность SELL(bid x3): {liquidity_sell_usdt} USDT\n\n"
             "ℹ️ Описание: Модель рассчитана на арбитраж при наличии балансов на обеих биржах (без перевода средств)."
         ),
         "NO_ACCESS": "⛔ Нет доступа",
@@ -1405,7 +1408,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "− Slippage: {slippage}%\n"
             "\n"
             "✅ NET: {net}%\n"
-            "⏱ Updated: {age}s ago\n\n"
+            "⏱ Updated: {age}s ago\n"
+            "Δ latency: {latency_diff_sec}s\n"
+            "💧 BUY liquidity (ask x3): {liquidity_buy_usdt} USDT\n"
+            "💧 SELL liquidity (bid x3): {liquidity_sell_usdt} USDT\n\n"
             "ℹ️ Info: model is designed for arbitrage with balances already available on both exchanges (no funds transfer)."
         ),
         "NO_ACCESS": "⛔ Access denied",
