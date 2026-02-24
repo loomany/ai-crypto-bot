@@ -251,6 +251,12 @@ AI_PUBLIC_LEVERAGE = float(os.getenv("AI_PUBLIC_LEVERAGE", "10") or 10)
 PUMP_COOLDOWN_SYMBOL_SEC = int(os.getenv("PUMP_COOLDOWN_SYMBOL_SEC", "86400"))  # 24h
 PUMP_COOLDOWN_GLOBAL_SEC = int(os.getenv("PUMP_COOLDOWN_GLOBAL_SEC", "3600"))  # 1h
 PUMP_DAILY_LIMIT = int(os.getenv("PUMP_DAILY_LIMIT", "6"))
+CHANNEL_FREE_AI_ENABLED = os.getenv("CHANNEL_FREE_AI_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
+CHANNEL_FREE_AI_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_AI_DAILY_LIMIT", "2") or 2)
+CHANNEL_FREE_AI_MAX_SCORE = int(os.getenv("CHANNEL_FREE_AI_MAX_SCORE", "89") or 89)
+CHANNEL_FREE_AI_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_MIN_GAP_SEC", str(5 * 60 * 60)) or 18000)
+CHANNEL_FREE_PD_ENABLED = os.getenv("CHANNEL_FREE_PD_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
+CHANNEL_FREE_PD_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_PD_DAILY_LIMIT", "1") or 1)
 SUB_DAYS = 30
 SUB_PRICE_USD = 39
 PAY_WALLET_TRX = "TGnSveNVrBHytZyA5AfqAj3hDK3FbFCtBY"
@@ -726,6 +732,7 @@ def increment_pumpdump_daily_count(chat_id: int, date_key: str) -> None:
 
 _PUMP_TOGGLE_TTL_SEC = 24 * 60 * 60
 _PUMP_MESSAGE_STATE: dict[tuple[int, int], dict[str, Any]] = {}
+_PUBLIC_AI_MESSAGE_STATE: dict[tuple[int, int], dict[str, Any]] = {}
 
 
 def _pump_state_cleanup(now_ts: int | None = None) -> None:
@@ -777,8 +784,202 @@ def _pump_toggle_inline_kb(
     symbol: str,
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[build_binance_button(lang, symbol)]],
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "SIGNAL_BUTTON_COLLAPSE" if expanded else "SIGNAL_BUTTON_EXPAND"),
+                    callback_data=f"pump_toggle:{int(chat_id)}:{int(message_id)}",
+                )
+            ],
+            [build_binance_button(lang, symbol)],
+        ],
     )
+
+
+def _utc_date_key(ts: int | None = None) -> str:
+    dt = datetime.fromtimestamp(int(ts or time.time()), tz=timezone.utc)
+    return dt.strftime("%Y-%m-%d")
+
+
+def _channel_daily_counter_key(kind: str) -> str:
+    return f"channel_free:{kind}:daily"
+
+
+def _channel_gap_key(kind: str) -> str:
+    return f"channel_free:{kind}:last_ts"
+
+
+def _channel_take_slot(*, kind: str, daily_limit: int, min_gap_sec: int = 0) -> tuple[bool, str]:
+    if daily_limit <= 0:
+        return False, "daily_limit_disabled"
+    now = int(time.time())
+    date_key = _utc_date_key(now)
+    state_key = _channel_daily_counter_key(kind)
+    raw_daily = get_state(state_key)
+    used_date = ""
+    used_count = 0
+    if raw_daily:
+        try:
+            used_date, used_count_text = str(raw_daily).split(":", 1)
+            used_count = int(used_count_text)
+        except Exception:
+            used_date, used_count = "", 0
+    if used_date != date_key:
+        used_count = 0
+    if used_count >= daily_limit:
+        return False, "daily_limit"
+
+    last_ts = int(kv_get_int(_channel_gap_key(kind), 0) or 0)
+    if min_gap_sec > 0 and last_ts > 0 and now - last_ts < min_gap_sec:
+        return False, "min_gap"
+
+    set_state(state_key, f"{date_key}:{used_count + 1}")
+    kv_set_int(_channel_gap_key(kind), now)
+    return True, "ok"
+
+
+def _public_ai_channel_kb(*, lang: str, chat_id: int, message_id: int, expanded: bool, symbol: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "SIGNAL_BUTTON_COLLAPSE" if expanded else "SIGNAL_BUTTON_EXPAND"),
+                    callback_data=f"public_ai_toggle:{int(chat_id)}:{int(message_id)}",
+                )
+            ],
+            [build_binance_button(lang, symbol)],
+        ]
+    )
+
+
+def _public_ai_state_cleanup(now_ts: int | None = None) -> None:
+    now = int(time.time()) if now_ts is None else int(now_ts)
+    expired_keys = [
+        key for key, value in _PUBLIC_AI_MESSAGE_STATE.items() if now - int(value.get("ts", now)) > _PUMP_TOGGLE_TTL_SEC
+    ]
+    for key in expired_keys:
+        _PUBLIC_AI_MESSAGE_STATE.pop(key, None)
+
+
+def _save_public_ai_message_state(
+    *,
+    chat_id: int,
+    message_id: int,
+    collapsed_text: str,
+    expanded_text: str,
+    lang: str,
+    symbol: str,
+) -> None:
+    _public_ai_state_cleanup()
+    _PUBLIC_AI_MESSAGE_STATE[(int(chat_id), int(message_id))] = {
+        "ts": int(time.time()),
+        "collapsed": collapsed_text,
+        "expanded": expanded_text,
+        "is_expanded": False,
+        "lang": lang,
+        "symbol": str(symbol or ""),
+    }
+
+
+def _get_public_ai_message_state(chat_id: int, message_id: int) -> dict[str, Any] | None:
+    _public_ai_state_cleanup()
+    state = _PUBLIC_AI_MESSAGE_STATE.get((int(chat_id), int(message_id)))
+    if state is None:
+        return None
+    if int(time.time()) - int(state.get("ts", 0)) > _PUMP_TOGGLE_TTL_SEC:
+        _PUBLIC_AI_MESSAGE_STATE.pop((int(chat_id), int(message_id)), None)
+        return None
+    return state
+
+
+async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str = "ru") -> tuple[bool, str]:
+    if bot is None:
+        return False, "bot_not_ready"
+    if not CHANNEL_FREE_AI_ENABLED:
+        return False, "disabled"
+    if TELEGRAM_CHANNEL_ID == 0:
+        return False, "no_channel_id"
+
+    score = int(round(float(signal.get("score", 0) or 0)))
+    if score > CHANNEL_FREE_AI_MAX_SCORE:
+        return False, "score_cap"
+
+    allow, reason = _channel_take_slot(
+        kind="ai",
+        daily_limit=CHANNEL_FREE_AI_DAILY_LIMIT,
+        min_gap_sec=CHANNEL_FREE_AI_MIN_GAP_SEC,
+    )
+    if not allow:
+        return False, reason
+
+    collapsed_text, expanded_text = _build_signal_text_variants(signal, lang, is_admin_user=False)
+    sent = await bot.send_message(
+        TELEGRAM_CHANNEL_ID,
+        collapsed_text,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    _save_public_ai_message_state(
+        chat_id=TELEGRAM_CHANNEL_ID,
+        message_id=int(sent.message_id),
+        collapsed_text=collapsed_text,
+        expanded_text=expanded_text,
+        lang=lang,
+        symbol=str(signal.get("symbol") or ""),
+    )
+    await bot.edit_message_reply_markup(
+        chat_id=TELEGRAM_CHANNEL_ID,
+        message_id=int(sent.message_id),
+        reply_markup=_public_ai_channel_kb(
+            lang=lang,
+            chat_id=TELEGRAM_CHANNEL_ID,
+            message_id=int(sent.message_id),
+            expanded=False,
+            symbol=str(signal.get("symbol") or ""),
+        ),
+    )
+    return True, "sent"
+
+
+async def _send_free_pumpdump_to_channel(signal: Dict[str, Any], *, symbol: str, lang: str = "ru") -> tuple[bool, str]:
+    if bot is None:
+        return False, "bot_not_ready"
+    if not CHANNEL_FREE_PD_ENABLED:
+        return False, "disabled"
+    if TELEGRAM_CHANNEL_ID == 0:
+        return False, "no_channel_id"
+
+    allow, reason = _channel_take_slot(kind="pump", daily_limit=CHANNEL_FREE_PD_DAILY_LIMIT, min_gap_sec=0)
+    if not allow:
+        return False, reason
+
+    collapsed_text = format_pump_message(signal, lang, expanded=False)
+    expanded_text = format_pump_message(signal, lang, expanded=True)
+    sent = await bot.send_message(
+        TELEGRAM_CHANNEL_ID,
+        collapsed_text,
+        parse_mode="Markdown",
+    )
+    _save_pump_message_state(
+        chat_id=TELEGRAM_CHANNEL_ID,
+        message_id=int(sent.message_id),
+        collapsed_text=collapsed_text,
+        expanded_text=expanded_text,
+        lang=lang,
+        symbol=symbol,
+    )
+    await bot.edit_message_reply_markup(
+        chat_id=TELEGRAM_CHANNEL_ID,
+        message_id=int(sent.message_id),
+        reply_markup=_pump_toggle_inline_kb(
+            lang=lang,
+            chat_id=TELEGRAM_CHANNEL_ID,
+            message_id=int(sent.message_id),
+            expanded=False,
+            symbol=symbol,
+        ),
+    )
+    return True, "sent"
 
 
 def _clean_lang(lang: str | None) -> str | None:
@@ -3755,6 +3956,56 @@ async def pump_toggle_callback(callback: CallbackQuery):
     )
     toast_key = "PUMP_TOGGLE_EXPANDED" if next_expanded else "PUMP_TOGGLE_COLLAPSED"
     await callback.answer(i18n.t(state_lang, toast_key))
+
+
+@dp.callback_query(F.data.regexp(r"^public_ai_toggle:-?\d+:\d+$"))
+async def public_ai_toggle_callback(callback: CallbackQuery):
+    if callback.from_user is None or callback.message is None:
+        return
+    match = re.match(r"^public_ai_toggle:(-?\d+):(\d+)$", callback.data or "")
+    if not match:
+        await callback.answer()
+        return
+
+    chat_id = int(match.group(1))
+    message_id = int(match.group(2))
+    lang = "ru"
+
+    current_chat = int(callback.message.chat.id)
+    current_message = int(callback.message.message_id)
+    if current_chat != chat_id or current_message != message_id:
+        await callback.answer(i18n.t(lang, "PUMP_TOGGLE_EXPIRED"), show_alert=True)
+        return
+
+    state = _get_public_ai_message_state(chat_id, message_id)
+    if state is None:
+        await callback.answer(i18n.t(lang, "PUMP_TOGGLE_EXPIRED"), show_alert=True)
+        return
+
+    state_lang = str(state.get("lang") or lang)
+    is_expanded = bool(state.get("is_expanded", False))
+    next_expanded = not is_expanded
+    next_text = state.get("expanded") if next_expanded else state.get("collapsed")
+    if not isinstance(next_text, str):
+        await callback.answer(i18n.t(lang, "PUMP_TOGGLE_EXPIRED"), show_alert=True)
+        return
+
+    state["is_expanded"] = next_expanded
+    state["ts"] = int(time.time())
+
+    await callback.message.edit_text(
+        next_text,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        reply_markup=_public_ai_channel_kb(
+            lang=state_lang,
+            chat_id=chat_id,
+            message_id=message_id,
+            expanded=next_expanded,
+            symbol=str(state.get("symbol", "")),
+        ),
+    )
+    await callback.answer(i18n.t(state_lang, "PUMP_TOGGLE_EXPANDED" if next_expanded else "PUMP_TOGGLE_COLLAPSED"))
 
 
 @dp.callback_query(F.data.startswith("sub_paywall:"))
@@ -7445,6 +7696,12 @@ async def pump_scan_once(bot: Bot) -> None:
             )
             sent_count += sent_delta
             if sent_delta > 0:
+                with suppress(Exception):
+                    ok_channel, reason_channel = await _send_free_pumpdump_to_channel(sig, symbol=symbol, lang="ru")
+                    if ok_channel:
+                        logger.info("[channel_free] pump sent symbol=%s", symbol)
+                    else:
+                        logger.info("[channel_free] pump skipped symbol=%s reason=%s", symbol, reason_channel)
                 direction = "PUMP" if sig.get("type") == "pump" else "DUMP"
                 set_last_pumpdump_signal(
                     {
@@ -7645,6 +7902,12 @@ async def ai_scan_once() -> None:
                     f"score={signal.get('score', 0)} confirm_strict={bool(signal.get('confirm_strict', False))}"
                 )
                 await send_signal_to_all(signal)
+                with suppress(Exception):
+                    ok_channel, reason_channel = await _send_free_ai_signal_to_channel(signal, lang="ru")
+                    if ok_channel:
+                        logger.info("[channel_free] ai sent symbol=%s score=%s", signal.get("symbol"), score)
+                    else:
+                        logger.info("[channel_free] ai skipped symbol=%s reason=%s", signal.get("symbol"), reason_channel)
                 meta = signal.get("meta") if isinstance(signal, dict) else None
                 setup_id = meta.get("setup_id") if isinstance(meta, dict) else None
                 if setup_id:
