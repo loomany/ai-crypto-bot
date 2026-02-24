@@ -866,63 +866,6 @@ def insert_signal_event(
         return 0
     conn = get_conn()
     try:
-        now_ts = int(time.time())
-        existing_cur = conn.execute(
-            """
-            SELECT id
-            FROM signal_events
-            WHERE user_id = ?
-              AND module = ?
-              AND symbol = ?
-              AND side = ?
-              AND COALESCE(NULLIF(UPPER(result), ''), UPPER(status), '') NOT IN (
-                  'TP1', 'TP2', 'TP', 'BE', 'SL', 'EXP', 'EXPIRED', 'NO_FILL', 'NF'
-              )
-              AND (? - ts) < (COALESCE(ttl_minutes, 720) * 60)
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (int(user_id), module, symbol, side, now_ts),
-        )
-        existing_row = existing_cur.fetchone()
-        if existing_row is not None:
-            existing_id = int(existing_row["id"])
-            conn.execute(
-                """
-                UPDATE signal_events
-                SET tg_message_id = COALESCE(?, tg_message_id),
-                    score = ?,
-                    poi_low = ?,
-                    poi_high = ?,
-                    sl = ?,
-                    tp1 = ?,
-                    tp2 = ?,
-                    timeframe = ?,
-                    updated_at = ?,
-                    ttl_minutes = ?,
-                    reason_json = COALESCE(?, reason_json),
-                    breakdown_json = COALESCE(?, breakdown_json)
-                WHERE id = ?
-                """,
-                (
-                    tg_message_id,
-                    float(score),
-                    float(poi_low),
-                    float(poi_high),
-                    float(sl),
-                    float(tp1),
-                    float(tp2),
-                    timeframe,
-                    now_ts,
-                    int(ttl_minutes),
-                    reason_json,
-                    breakdown_json,
-                    existing_id,
-                ),
-            )
-            conn.commit()
-            return existing_id
-
         cur = conn.execute(
             """
             INSERT OR IGNORE INTO signal_events (
