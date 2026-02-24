@@ -378,6 +378,12 @@ def init_app_db():
             )
             """
         )
+        cur = conn.execute("PRAGMA table_info(users)")
+        user_cols = {row[1] for row in cur.fetchall()}
+        if "last_delivery_status" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN last_delivery_status TEXT DEFAULT 'green'")
+        if "last_delivery_at" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN last_delivery_at INTEGER")
         conn.commit()
     finally:
         conn.close()
@@ -1094,6 +1100,49 @@ def upsert_user(
         conn.close()
 
 
+def get_last_delivery_status(chat_id: int) -> str:
+    conn = sqlite3.connect(get_db_path())
+    try:
+        cur = conn.execute(
+            "SELECT last_delivery_status FROM users WHERE chat_id = ?",
+            (chat_id,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    status = str(row[0]).lower() if row and row[0] else "green"
+    return "red" if status == "red" else "green"
+
+
+def set_last_delivery_status(chat_id: int, status: str) -> None:
+    now = int(time.time())
+    normalized = "red" if str(status).lower() == "red" else "green"
+    conn = sqlite3.connect(get_db_path())
+    try:
+        conn.execute(
+            """
+            UPDATE users
+            SET last_delivery_status = ?, last_delivery_at = ?
+            WHERE chat_id = ?
+            """,
+            (normalized, now, chat_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _is_blocked_or_deleted_error(exc: Exception) -> bool:
+    error_text = str(exc).lower()
+    blocked_markers = (
+        "bot was blocked by the user",
+        "forbidden",
+        "chat not found",
+        "user is deactivated",
+    )
+    return any(marker in error_text for marker in blocked_markers)
+
+
 def list_ai_subscribers() -> List[int]:
     """
     Единый источник подписчиков AI:
@@ -1117,7 +1166,7 @@ def list_ai_subscribers() -> List[int]:
     finally:
         conn.close()
 
-    return sorted(subs)
+    return sorted(chat_id for chat_id in subs if get_last_delivery_status(chat_id) != "red")
 
 
 def get_pumpdump_subscribers() -> list[int]:
@@ -5875,6 +5924,29 @@ def _format_user_time(ts: int | None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
+def _load_users_page(page: int, page_size: int = 7) -> tuple[list[sqlite3.Row], int, int, int]:
+    safe_page_size = max(1, int(page_size))
+    conn = sqlite3.connect(get_db_path())
+    conn.row_factory = sqlite3.Row
+    try:
+        total = int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+        total_pages = max(1, math.ceil(total / safe_page_size))
+        safe_page = max(1, min(int(page), total_pages))
+        offset = (safe_page - 1) * safe_page_size
+        cur = conn.execute(
+            """
+            SELECT chat_id, username, last_delivery_status
+            FROM users
+            ORDER BY chat_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (safe_page_size, offset),
+        )
+        return cur.fetchall(), safe_page, total_pages, total
+    finally:
+        conn.close()
+
+
 def _load_users(limit: int = 50) -> list[sqlite3.Row]:
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
@@ -5917,6 +5989,62 @@ def _build_users_list_markup(rows: list[sqlite3.Row], lang: str) -> InlineKeyboa
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _build_users_page_markup(page: int, total_pages: int, lang: str) -> InlineKeyboardMarkup:
+    nav_buttons: list[InlineKeyboardButton] = []
+    if page > 1:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text=i18n.t(lang, "USER_PAGE_BACK"),
+                callback_data=f"admin_users_page:{page - 1}",
+            )
+        )
+    if page < total_pages:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text=i18n.t(lang, "USER_PAGE_FORWARD"),
+                callback_data=f"admin_users_page:{page + 1}",
+            )
+        )
+    buttons: list[list[InlineKeyboardButton]] = []
+    if nav_buttons:
+        buttons.append(nav_buttons)
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text=i18n.t(lang, "nav_back_label"),
+                callback_data="admin_back",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _users_page_payload(
+    lang: str,
+    page: int = 1,
+    prefix: str | None = None,
+) -> tuple[str, InlineKeyboardMarkup | None]:
+    rows, safe_page, total_pages, total = _load_users_page(page=page, page_size=7)
+    header = i18n.t(lang, "USER_PAGE_HEADER", page=safe_page, total_pages=total_pages, total=total)
+    header_block = f"{prefix}\n\n{header}" if prefix else header
+    if not rows:
+        return f"{header_block}\n\n{i18n.t(lang, 'USER_LIST_EMPTY')}", _build_users_page_markup(
+            safe_page,
+            total_pages,
+            lang,
+        )
+
+    lines = [header_block, ""]
+    for row in rows:
+        chat_id = int(row["chat_id"])
+        username = row["username"]
+        username_text = f"@{username}" if username else "(-)"
+        delivery_status = str(row["last_delivery_status"] or "green").lower()
+        status_icon = "🔴" if delivery_status == "red" else "🟢"
+        lines.append(f"{status_icon} {chat_id} ({username_text})")
+    return "\n".join(lines), _build_users_page_markup(safe_page, total_pages, lang)
 
 
 def _users_list_payload(
@@ -6114,7 +6242,7 @@ async def users_list(message: Message):
     if message.from_user is None or not is_admin(message.from_user.id):
         return
     lang = get_user_lang(message.from_user.id) or "ru"
-    text, markup = _users_list_payload(lang)
+    text, markup = _users_page_payload(lang, page=1)
     await message.answer(text, reply_markup=markup)
 
 
@@ -6123,10 +6251,23 @@ async def users_list_callback(callback: CallbackQuery):
     if not await _ensure_admin_callback(callback):
         return
     lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-    text, markup = _users_list_payload(lang or "ru")
+    text, markup = _users_page_payload(lang or "ru", page=1)
     await callback.answer()
     if callback.message:
         await callback.message.edit_text(text, reply_markup=markup)
+
+
+@dp.callback_query(F.data.regexp(r"^admin_users_page:\d+$"))
+async def admin_users_page_callback(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
+        return
+    if callback.message is None:
+        return
+    page = int(callback.data.split(":", 1)[1])
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    text, markup = _users_page_payload(lang or "ru", page=page)
+    await callback.answer()
+    await callback.message.edit_text(text, reply_markup=markup)
 
 
 @dp.callback_query(F.data == "admin_back")
@@ -6299,8 +6440,9 @@ async def user_delete_callback(callback: CallbackQuery):
         )
     lang = get_user_lang(callback.from_user.id) if callback.from_user else None
     lang = lang or "ru"
-    text, markup = _users_list_payload(
+    text, markup = _users_page_payload(
         lang,
+        page=1,
         prefix=i18n.t(lang, "USER_DELETED_PREFIX", user_id=user_id),
     )
     await callback.answer(i18n.t(lang, "USER_DELETED_ALERT", user_id=user_id))
@@ -7269,6 +7411,7 @@ async def send_signal_to_all(
                     reply_markup=signal_reply_markup,
                 )
             stats["sent"] += 1
+            set_last_delivery_status(chat_id, "green")
             if chat_id == admin_chat_id:
                 stats["admin_received"] = True
             print(f"[{log_tag}] send ok user_id={chat_id} chat_id={chat_id}")
@@ -7297,6 +7440,7 @@ async def send_signal_to_all(
                         disable_web_page_preview=True,
                     )
                 stats["sent"] += 1
+                set_last_delivery_status(chat_id, "green")
                 if chat_id == admin_chat_id:
                     stats["admin_received"] = True
                 print(f"[{log_tag}] send ok after retry user_id={chat_id} chat_id={chat_id}")
@@ -7323,6 +7467,8 @@ async def send_signal_to_all(
             stats["error_blocked"] += 1
             set_user_pref(chat_id, "tg_blocked", 1)
             set_user_pref(chat_id, "ai_signals_enabled", 0)
+            if _is_blocked_or_deleted_error(exc):
+                set_last_delivery_status(chat_id, "red")
             sample = {
                 "user_id": chat_id,
                 "chat_id": chat_id,
@@ -7341,6 +7487,8 @@ async def send_signal_to_all(
             stats["errors"] += 1
             stats["error_invalid_chat"] += 1
             set_user_pref(chat_id, "invalid_chat_id", 1)
+            if _is_blocked_or_deleted_error(exc):
+                set_last_delivery_status(chat_id, "red")
             sample = {
                 "user_id": chat_id,
                 "chat_id": chat_id,
