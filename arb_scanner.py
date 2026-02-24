@@ -1,11 +1,13 @@
 import asyncio
+import gzip
+import json
 import os
 import time
 from typing import Any, Dict, List, Set
 
 import aiohttp
 
-EXCHANGES = ("Binance", "OKX", "Bybit", "KuCoin", "Gate.io")
+EXCHANGES = ("Binance", "OKX", "Bybit", "KuCoin", "Gate.io", "MEXC", "Bitget", "HTX", "BingX", "BitMart")
 
 
 class ArbScanner:
@@ -23,6 +25,12 @@ class ArbScanner:
         }
         self.last_symbols_refresh = 0.0
         self.cached_symbols: List[str] = []
+        self.rest_refresh_sec = float(os.getenv("ARB_REST_REFRESH_SEC", "4") or 4)
+        self._rest_cache: Dict[str, Dict[str, Any]] = {}
+        self._ws_cache: Dict[str, Dict[str, Dict[str, float]]] = {"HTX": {}, "BitMart": {}}
+        self._ws_last_message_ts: Dict[str, float] = {"HTX": 0.0, "BitMart": 0.0}
+        self._ws_last_error: Dict[str, str] = {"HTX": "", "BitMart": ""}
+        self._ws_tasks: Dict[str, asyncio.Task] = {}
 
     @staticmethod
     def normalize_symbol(raw: str) -> str:
@@ -32,6 +40,20 @@ class ArbScanner:
         async with session.get(url, timeout=12) as resp:
             resp.raise_for_status()
             return await resp.json()
+
+    @staticmethod
+    def _to_float(value: Any) -> float:
+        try:
+            return float(value or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _to_int(value: Any, default: int) -> int:
+        try:
+            return int(float(value or 0.0))
+        except (TypeError, ValueError):
+            return default
 
     async def _fetch_symbols_binance(self, session: aiohttp.ClientSession) -> Set[str]:
         data = await self._fetch_json(session, "https://api.binance.com/api/v3/exchangeInfo?permissions=SPOT")
@@ -93,6 +115,30 @@ class ArbScanner:
                 continue
         return set()
 
+
+    async def _fetch_symbols_mexc(self, session: aiohttp.ClientSession) -> Set[str]:
+        data = await self._fetch_json(session, "https://api.mexc.com/api/v3/ticker/bookTicker")
+        return {self.normalize_symbol(row.get("symbol", "")) for row in data if self.normalize_symbol(row.get("symbol", "")).endswith("USDT")}
+
+    async def _fetch_symbols_bitget(self, session: aiohttp.ClientSession) -> Set[str]:
+        data = await self._fetch_json(session, "https://api.bitget.com/api/v2/spot/market/tickers")
+        symbols: Set[str] = set()
+        for row in data.get("data", []):
+            symbol = self.normalize_symbol(row.get("symbol", ""))
+            if symbol.endswith("USDT"):
+                symbols.add(symbol)
+        return symbols
+
+    async def _fetch_symbols_bingx(self, session: aiohttp.ClientSession) -> Set[str]:
+        data = await self._fetch_json(session, "https://open-api.bingx.com/openApi/spot/v1/ticker/24hr")
+        rows = data.get("data", data if isinstance(data, list) else [])
+        symbols: Set[str] = set()
+        for row in rows:
+            symbol = self.normalize_symbol(row.get("symbol", ""))
+            if symbol.endswith("USDT"):
+                symbols.add(symbol)
+        return symbols
+
     async def _refresh_symbols(self, session: aiohttp.ClientSession) -> List[str]:
         now = time.time()
         if self.cached_symbols and now - self.last_symbols_refresh < self.symbol_refresh_sec:
@@ -104,13 +150,18 @@ class ArbScanner:
             self._fetch_symbols_bybit(session),
             self._fetch_symbols_kucoin(session),
             self._fetch_symbols_gate(session),
+            self._fetch_symbols_mexc(session),
+            self._fetch_symbols_bitget(session),
+            self._fetch_symbols_bingx(session),
             return_exceptions=True,
         )
 
         common_symbols: Set[str] | None = None
+        union_symbols: Set[str] = set()
         for payload in symbols_payload:
             if isinstance(payload, Exception):
                 continue
+            union_symbols |= set(payload)
             if common_symbols is None:
                 common_symbols = set(payload)
             else:
@@ -118,6 +169,8 @@ class ArbScanner:
 
         if common_symbols is None:
             common_symbols = set()
+
+        base_symbols = common_symbols or union_symbols
 
         try:
             volume_rows = await self._fetch_json(session, "https://api.binance.com/api/v3/ticker/24hr")
@@ -127,7 +180,7 @@ class ArbScanner:
         ranked: List[tuple[str, float]] = []
         for row in volume_rows:
             symbol = self.normalize_symbol(row.get("symbol", ""))
-            if symbol not in common_symbols:
+            if symbol not in base_symbols:
                 continue
             try:
                 qv = float(row.get("quoteVolume", 0.0) or 0.0)
@@ -139,7 +192,7 @@ class ArbScanner:
             ranked.sort(key=lambda x: x[1], reverse=True)
             symbols = [s for s, _ in ranked]
         else:
-            symbols = sorted(common_symbols)
+            symbols = sorted(base_symbols)
 
         symbols = [s for s in symbols if s.endswith("USDT") and s not in self.exclude_symbols]
         self.cached_symbols = symbols[: self.top_symbols_limit]
@@ -151,24 +204,57 @@ class ArbScanner:
         started_ms = int(time.time() * 1000)
         async with aiohttp.ClientSession() as session:
             symbols = await self._refresh_symbols(session)
+            self._ensure_ws_tasks(symbols)
             raw = await asyncio.gather(
                 self._fetch_binance(session),
                 self._fetch_okx(session),
                 self._fetch_bybit(session),
                 self._fetch_kucoin(session),
                 self._fetch_gate(session),
+                self.mexc_rest_fetch_all_bookticker(session),
+                self.bitget_rest_fetch_all_tickers(session),
+                self.bingx_rest_fetch_all_24hr(session),
                 return_exceptions=True,
             )
 
         quotes: Dict[str, Dict[str, Dict[str, float]]] = {}
+        exchange_meta: Dict[str, Dict[str, Any]] = {}
         exchanges_ok = 0
         for payload in raw:
             if isinstance(payload, Exception):
                 api_errors += 1
                 continue
             exchanges_ok += 1
-            for exchange, ex_quotes in payload.items():
+            for exchange, ex_payload in payload.items():
+                ex_quotes = ex_payload.get("quotes", {}) if isinstance(ex_payload, dict) else {}
                 quotes.setdefault(exchange, {}).update(ex_quotes)
+                exchange_meta[exchange] = {
+                    "status": "OK" if ex_quotes else "ERROR",
+                    "latency_ms": int(ex_payload.get("latency_ms", 0) or 0),
+                    "received_symbols_count": len(ex_quotes),
+                    "last_error": str(ex_payload.get("last_error", "") or ""),
+                    "last_ws_update_age_sec": None,
+                }
+
+        now_s = time.time()
+        for exchange in ("HTX", "BitMart"):
+            ws_quotes = dict(self._ws_cache.get(exchange, {}))
+            quotes.setdefault(exchange, {}).update(ws_quotes)
+            age = None
+            if self._ws_last_message_ts.get(exchange):
+                age = max(0.0, now_s - self._ws_last_message_ts[exchange])
+            ws_ok = bool(ws_quotes)
+            exchange_meta[exchange] = {
+                "status": "OK" if ws_ok else "ERROR",
+                "latency_ms": 0,
+                "received_symbols_count": len(ws_quotes),
+                "last_error": self._ws_last_error.get(exchange, ""),
+                "last_ws_update_age_sec": age,
+            }
+            if ws_ok:
+                exchanges_ok += 1
+            else:
+                api_errors += 1
 
         now_ms = int(time.time() * 1000)
         fees_total = fees_buy_pct + fees_sell_pct
@@ -230,6 +316,8 @@ class ArbScanner:
         ended_ms = int(time.time() * 1000)
         return {
             "exchanges_polled": exchanges_ok,
+            "total_exchanges_active": exchanges_ok,
+            "exchange_stats": exchange_meta,
             "symbols_collected": len(symbols),
             "candidates_gross": candidates_gross,
             "qualified": qualified,
@@ -237,6 +325,13 @@ class ArbScanner:
             "api_errors": api_errors,
             "cycle_ms": max(0, ended_ms - started_ms),
         }
+
+    def _ensure_ws_tasks(self, symbols: List[str]) -> None:
+        for ex_name, worker in (("HTX", self.htx_ws_bbo_collector), ("BitMart", self.bitmart_ws_ticker_collector)):
+            task = self._ws_tasks.get(ex_name)
+            if task and not task.done():
+                continue
+            self._ws_tasks[ex_name] = asyncio.create_task(worker(symbols))
 
     async def collect_opportunities(self) -> List[Dict[str, Any]]:
         details = await self.collect_opportunities_details(
@@ -247,62 +342,234 @@ class ArbScanner:
         )
         return details["all_opportunities"]
 
+    async def _fetch_cached_rest(self, exchange: str, loader):
+        now = time.time()
+        cached = self._rest_cache.get(exchange)
+        if cached and now - cached.get("updated_at", 0.0) < self.rest_refresh_sec:
+            return {exchange: cached["payload"]}
+        started = time.perf_counter()
+        try:
+            quotes = await loader()
+            payload = {
+                "quotes": quotes,
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "last_error": "",
+            }
+        except Exception as exc:
+            payload = {
+                "quotes": cached["payload"]["quotes"] if cached else {},
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "last_error": str(exc),
+            }
+        self._rest_cache[exchange] = {"updated_at": now, "payload": payload}
+        return {exchange: payload}
+
     async def _fetch_binance(self, session: aiohttp.ClientSession) -> Dict[str, Dict[str, Dict[str, float]]]:
-        data = await self._fetch_json(session, "https://api.binance.com/api/v3/ticker/bookTicker")
-        out: Dict[str, Dict[str, float]] = {}
-        now_ms = int(time.time() * 1000)
-        for row in data:
-            symbol = self.normalize_symbol(row.get("symbol", ""))
-            if not symbol.endswith("USDT"):
-                continue
-            out[symbol] = {"ask": float(row.get("askPrice", 0.0) or 0.0), "bid": float(row.get("bidPrice", 0.0) or 0.0), "ts": now_ms}
-        return {"Binance": out}
+        async def _load() -> Dict[str, Dict[str, float]]:
+            data = await self._fetch_json(session, "https://api.binance.com/api/v3/ticker/bookTicker")
+            out: Dict[str, Dict[str, float]] = {}
+            now_ms = int(time.time() * 1000)
+            for row in data:
+                symbol = self.normalize_symbol(row.get("symbol", ""))
+                if not symbol.endswith("USDT"):
+                    continue
+                out[symbol] = {"ask": self._to_float(row.get("askPrice")), "bid": self._to_float(row.get("bidPrice")), "ts": now_ms}
+            return out
+
+        return await self._fetch_cached_rest("Binance", _load)
 
     async def _fetch_okx(self, session: aiohttp.ClientSession) -> Dict[str, Dict[str, Dict[str, float]]]:
-        data = await self._fetch_json(session, "https://www.okx.com/api/v5/market/tickers?instType=SPOT")
-        out: Dict[str, Dict[str, float]] = {}
-        for row in data.get("data", []):
-            symbol = self.normalize_symbol(row.get("instId", ""))
-            if not symbol.endswith("USDT"):
-                continue
-            out[symbol] = {"ask": float(row.get("askPx", 0.0) or 0.0), "bid": float(row.get("bidPx", 0.0) or 0.0), "ts": int(float(row.get("ts", 0.0) or 0.0))}
-        return {"OKX": out}
+        async def _load() -> Dict[str, Dict[str, float]]:
+            data = await self._fetch_json(session, "https://www.okx.com/api/v5/market/tickers?instType=SPOT")
+            out: Dict[str, Dict[str, float]] = {}
+            now_ms = int(time.time() * 1000)
+            for row in data.get("data", []):
+                symbol = self.normalize_symbol(row.get("instId", ""))
+                if not symbol.endswith("USDT"):
+                    continue
+                out[symbol] = {"ask": self._to_float(row.get("askPx")), "bid": self._to_float(row.get("bidPx")), "ts": self._to_int(row.get("ts"), now_ms)}
+            return out
+
+        return await self._fetch_cached_rest("OKX", _load)
 
     async def _fetch_bybit(self, session: aiohttp.ClientSession) -> Dict[str, Dict[str, Dict[str, float]]]:
-        data = await self._fetch_json(session, "https://api.bybit.com/v5/market/tickers?category=spot")
-        out: Dict[str, Dict[str, float]] = {}
-        now_ms = int(time.time() * 1000)
-        for row in data.get("result", {}).get("list", []):
-            symbol = self.normalize_symbol(row.get("symbol", ""))
-            if not symbol.endswith("USDT"):
-                continue
-            out[symbol] = {"ask": float(row.get("ask1Price", 0.0) or 0.0), "bid": float(row.get("bid1Price", 0.0) or 0.0), "ts": now_ms}
-        return {"Bybit": out}
+        async def _load() -> Dict[str, Dict[str, float]]:
+            data = await self._fetch_json(session, "https://api.bybit.com/v5/market/tickers?category=spot")
+            out: Dict[str, Dict[str, float]] = {}
+            now_ms = int(time.time() * 1000)
+            for row in data.get("result", {}).get("list", []):
+                symbol = self.normalize_symbol(row.get("symbol", ""))
+                if not symbol.endswith("USDT"):
+                    continue
+                out[symbol] = {"ask": self._to_float(row.get("ask1Price")), "bid": self._to_float(row.get("bid1Price")), "ts": now_ms}
+            return out
+
+        return await self._fetch_cached_rest("Bybit", _load)
 
     async def _fetch_kucoin(self, session: aiohttp.ClientSession) -> Dict[str, Dict[str, Dict[str, float]]]:
-        data = await self._fetch_json(session, "https://api.kucoin.com/api/v1/market/allTickers")
-        out: Dict[str, Dict[str, float]] = {}
-        ts = int(data.get("data", {}).get("time", 0) or 0)
-        for row in data.get("data", {}).get("ticker", []):
-            symbol = self.normalize_symbol(row.get("symbol", ""))
-            if not symbol.endswith("USDT"):
-                continue
-            out[symbol] = {"ask": float(row.get("sell", 0.0) or 0.0), "bid": float(row.get("buy", 0.0) or 0.0), "ts": ts}
-        return {"KuCoin": out}
+        async def _load() -> Dict[str, Dict[str, float]]:
+            data = await self._fetch_json(session, "https://api.kucoin.com/api/v1/market/allTickers")
+            out: Dict[str, Dict[str, float]] = {}
+            now_ms = int(time.time() * 1000)
+            ts = self._to_int(data.get("data", {}).get("time"), now_ms)
+            for row in data.get("data", {}).get("ticker", []):
+                symbol = self.normalize_symbol(row.get("symbol", ""))
+                if not symbol.endswith("USDT"):
+                    continue
+                out[symbol] = {"ask": self._to_float(row.get("sell")), "bid": self._to_float(row.get("buy")), "ts": ts}
+            return out
+
+        return await self._fetch_cached_rest("KuCoin", _load)
 
     async def _fetch_gate(self, session: aiohttp.ClientSession) -> Dict[str, Dict[str, Dict[str, float]]]:
-        urls = ("https://api.gateio.ws/api/v4/spot/tickers", "https://api.gate.us/api/v4/spot/tickers")
-        out: Dict[str, Dict[str, float]] = {}
-        for url in urls:
+        async def _load() -> Dict[str, Dict[str, float]]:
+            urls = ("https://api.gateio.ws/api/v4/spot/tickers", "https://api.gate.us/api/v4/spot/tickers")
+            for url in urls:
+                try:
+                    data = await self._fetch_json(session, url)
+                    now_ms = int(time.time() * 1000)
+                    out: Dict[str, Dict[str, float]] = {}
+                    for row in data:
+                        symbol = self.normalize_symbol(row.get("currency_pair", ""))
+                        if not symbol.endswith("USDT"):
+                            continue
+                        out[symbol] = {"ask": self._to_float(row.get("lowest_ask")), "bid": self._to_float(row.get("highest_bid")), "ts": now_ms}
+                    return out
+                except Exception:
+                    continue
+            return {}
+
+        return await self._fetch_cached_rest("Gate.io", _load)
+
+    async def mexc_rest_fetch_all_bookticker(self, session: aiohttp.ClientSession) -> Dict[str, Dict[str, Dict[str, float]]]:
+        async def _load() -> Dict[str, Dict[str, float]]:
+            data = await self._fetch_json(session, "https://api.mexc.com/api/v3/ticker/bookTicker")
+            out: Dict[str, Dict[str, float]] = {}
+            now_ms = int(time.time() * 1000)
+            for row in data:
+                symbol = self.normalize_symbol(row.get("symbol", ""))
+                if symbol.endswith("USDT"):
+                    out[symbol] = {"ask": self._to_float(row.get("askPrice")), "bid": self._to_float(row.get("bidPrice")), "ts": now_ms}
+            return out
+
+        return await self._fetch_cached_rest("MEXC", _load)
+
+    async def bitget_rest_fetch_all_tickers(self, session: aiohttp.ClientSession) -> Dict[str, Dict[str, Dict[str, float]]]:
+        async def _load() -> Dict[str, Dict[str, float]]:
+            data = await self._fetch_json(session, "https://api.bitget.com/api/v2/spot/market/tickers")
+            out: Dict[str, Dict[str, float]] = {}
+            now_ms = int(time.time() * 1000)
+            for row in data.get("data", []):
+                symbol = self.normalize_symbol(row.get("symbol", ""))
+                if symbol.endswith("USDT"):
+                    out[symbol] = {"ask": self._to_float(row.get("askPr")), "bid": self._to_float(row.get("bidPr")), "ts": self._to_int(row.get("ts"), now_ms)}
+            return out
+
+        return await self._fetch_cached_rest("Bitget", _load)
+
+    async def bingx_rest_fetch_all_24hr(self, session: aiohttp.ClientSession) -> Dict[str, Dict[str, Dict[str, float]]]:
+        async def _load() -> Dict[str, Dict[str, float]]:
+            now_ms = int(time.time() * 1000)
+            data = await self._fetch_json(session, "https://open-api.bingx.com/openApi/spot/v1/ticker/24hr")
+            rows = data.get("data", data if isinstance(data, list) else [])
+            out: Dict[str, Dict[str, float]] = {}
+            for row in rows:
+                symbol = self.normalize_symbol(row.get("symbol", ""))
+                if not symbol.endswith("USDT"):
+                    continue
+                bid = self._to_float(row.get("bidPrice") or row.get("bid") or row.get("bestBid"))
+                ask = self._to_float(row.get("askPrice") or row.get("ask") or row.get("bestAsk"))
+                if bid > 0 and ask > 0:
+                    out[symbol] = {"ask": ask, "bid": bid, "ts": now_ms}
+            if out:
+                return out
+            depth = await self._fetch_json(session, "https://open-api.bingx.com/openApi/spot/v1/ticker/bookTicker")
+            rows = depth.get("data", depth if isinstance(depth, list) else [])
+            for row in rows:
+                symbol = self.normalize_symbol(row.get("symbol", ""))
+                if symbol.endswith("USDT"):
+                    out[symbol] = {"ask": self._to_float(row.get("askPrice") or row.get("ask")), "bid": self._to_float(row.get("bidPrice") or row.get("bid")), "ts": now_ms}
+            return out
+
+        return await self._fetch_cached_rest("BingX", _load)
+
+    async def htx_ws_bbo_collector(self, symbols: List[str]) -> None:
+        ws_symbols = [s.lower() for s in symbols[: min(80, len(symbols))]]
+        while True:
             try:
-                data = await self._fetch_json(session, url)
-                now_ms = int(time.time() * 1000)
-                for row in data:
-                    symbol = self.normalize_symbol(row.get("currency_pair", ""))
-                    if not symbol.endswith("USDT"):
-                        continue
-                    out[symbol] = {"ask": float(row.get("lowest_ask", 0.0) or 0.0), "bid": float(row.get("highest_bid", 0.0) or 0.0), "ts": now_ms}
-                break
-            except Exception:
-                continue
-        return {"Gate.io": out}
+                async with aiohttp.ClientSession() as session:
+                    async with session.ws_connect("wss://api-aws.huobi.pro/ws", heartbeat=20) as ws:
+                        for symbol in ws_symbols:
+                            await ws.send_json({"sub": f"market.{symbol}.bbo", "id": f"arb-{symbol}"})
+                        async for msg in ws:
+                            payload = msg.data
+                            if isinstance(payload, (bytes, bytearray)):
+                                try:
+                                    payload = gzip.decompress(payload).decode("utf-8", "ignore")
+                                except Exception:
+                                    continue
+                            if not isinstance(payload, str):
+                                continue
+                            try:
+                                data = json.loads(payload)
+                            except Exception:
+                                continue
+                            if "ping" in data:
+                                await ws.send_json({"pong": data["ping"]})
+                                continue
+                            ch = str(data.get("ch", ""))
+                            tick = data.get("tick", {})
+                            if ".bbo" not in ch:
+                                continue
+                            raw_symbol = ch.split(".")[1] if "." in ch else ""
+                            symbol = self.normalize_symbol(raw_symbol)
+                            bids = tick.get("bids") or []
+                            asks = tick.get("asks") or []
+                            if not bids or not asks:
+                                continue
+                            bid = self._to_float(bids[0][0] if isinstance(bids[0], list) else 0)
+                            ask = self._to_float(asks[0][0] if isinstance(asks[0], list) else 0)
+                            ts = self._to_int(tick.get("ts") or data.get("ts"), int(time.time() * 1000))
+                            self._ws_cache["HTX"][symbol] = {"bid": bid, "ask": ask, "ts": ts}
+                            self._ws_last_message_ts["HTX"] = time.time()
+                            self._ws_last_error["HTX"] = ""
+            except Exception as exc:
+                self._ws_last_error["HTX"] = str(exc)
+                await asyncio.sleep(2)
+
+    async def bitmart_ws_ticker_collector(self, symbols: List[str]) -> None:
+        ws_symbols = [f"{s[:-4]}_USDT" for s in symbols if s.endswith("USDT")][: min(80, len(symbols))]
+        while True:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.ws_connect("wss://ws-manager-compress.bitmart.com/api?protocol=1.1", heartbeat=20) as ws:
+                        if ws_symbols:
+                            await ws.send_json({"op": "subscribe", "args": [f"spot/ticker:{symbol}" for symbol in ws_symbols]})
+                        async for msg in ws:
+                            if msg.type not in (aiohttp.WSMsgType.TEXT, aiohttp.WSMsgType.BINARY):
+                                continue
+                            payload = msg.data
+                            if isinstance(payload, (bytes, bytearray)):
+                                try:
+                                    payload = gzip.decompress(payload).decode("utf-8", "ignore")
+                                except Exception:
+                                    continue
+                            data = json.loads(payload)
+                            if data.get("event") == "ping":
+                                await ws.send_json({"event": "pong"})
+                                continue
+                            table = str(data.get("table", ""))
+                            if not table.startswith("spot/ticker"):
+                                continue
+                            for row in data.get("data", []):
+                                symbol = self.normalize_symbol(row.get("symbol", ""))
+                                bid = self._to_float(row.get("best_bid") or row.get("bestBid") or row.get("bid"))
+                                ask = self._to_float(row.get("best_ask") or row.get("bestAsk") or row.get("ask"))
+                                ts = self._to_int(row.get("ms_t") or row.get("ts"), int(time.time() * 1000))
+                                if symbol.endswith("USDT") and bid > 0 and ask > 0:
+                                    self._ws_cache["BitMart"][symbol] = {"bid": bid, "ask": ask, "ts": ts}
+                                    self._ws_last_message_ts["BitMart"] = time.time()
+                                    self._ws_last_error["BitMart"] = ""
+            except Exception as exc:
+                self._ws_last_error["BitMart"] = str(exc)
+                await asyncio.sleep(2)
