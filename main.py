@@ -5578,6 +5578,12 @@ def _build_user_card(user_id: int, lang: str) -> tuple[str, InlineKeyboardMarkup
             [lock_button],
             [
                 InlineKeyboardButton(
+                    text=i18n.t(lang, "USER_BTN_TRIAL_48H"),
+                    callback_data=f"user_trial48:{user_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text=i18n.t(lang, "USER_BTN_DELETE"),
                     callback_data=f"user_del_confirm:{user_id}",
                 )
@@ -5771,6 +5777,37 @@ async def user_unlock_callback(callback: CallbackQuery):
         _log_throttled(
             "tg_send_fail_user_unlock",
             "[tg_send_fail] user_id=%s action=user_unlock_notice err=%s",
+            user_id,
+            exc,
+            exc=exc,
+        )
+
+
+@dp.callback_query(F.data.regexp(r"^user_trial48:\d+$"))
+async def user_trial_48h_callback(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
+        return
+    if callback.message is None:
+        return
+    user_id = int(callback.data.split(":", 1)[1])
+    set_user_pref(user_id, "user_locked", 0)
+    now = int(time.time())
+    old_sub_until = get_user_pref(user_id, "sub_until", 0)
+    new_sub_until = max(old_sub_until, now) + 48 * 3600
+    set_user_pref(user_id, "sub_until", new_sub_until)
+    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+    text, markup = _build_user_card(user_id, lang or "ru")
+    await callback.answer(i18n.t(lang or "ru", "USER_TRIAL_48H_ALERT", user_id=user_id))
+    await callback.message.edit_text(text, reply_markup=markup)
+    try:
+        await callback.message.bot.send_message(
+            user_id,
+            i18n.t(get_user_lang(user_id) or "ru", "USER_TRIAL_48H_NOTICE"),
+        )
+    except Exception as exc:
+        _log_throttled(
+            "tg_send_fail_user_trial48",
+            "[tg_send_fail] user_id=%s action=user_trial48_notice err=%s",
             user_id,
             exc,
             exc=exc,

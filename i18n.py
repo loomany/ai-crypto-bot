@@ -544,6 +544,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "USER_CARD_LAST_SEEN": "last_seen: {date}",
         "USER_BTN_UNLOCK": "🔓 Разблокировать",
         "USER_BTN_LOCK": "🔒 Заблокировать",
+        "USER_BTN_TRIAL_48H": "🎁 Дать доступ 48ч",
         "USER_BTN_DELETE": "🗑 Удалить",
         "USER_DELETE_CONFIRM": (
             "⚠️ Удалить пользователя {user_id}?\n\n"
@@ -554,6 +555,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "USER_DELETED_NOTICE": "Ваш аккаунт удалён администратором.",
         "USER_DELETED_PREFIX": "✅ Пользователь удалён: {user_id}",
         "USER_DELETED_ALERT": "✅ Пользователь удалён: {user_id}",
+        "USER_TRIAL_48H_NOTICE": (
+            "🎁 Вам предоставлен полный доступ на 48 часов для оценки бота и сигналов.\n"
+            "После завершения периода доступ к сигналам вернётся к ограничениям бесплатного тарифа."
+        ),
+        "USER_TRIAL_48H_PREFIX": "✅ Выдан тестовый доступ 48ч: {user_id}",
+        "USER_TRIAL_48H_ALERT": "✅ Доступ 48ч выдан пользователю {user_id}",
         "USER_LOCKED_NOTICE": (
             "⛔ Подписка приостановлена\n\n"
             "Доступ к сигналам временно отключён администратором.\n"
@@ -1456,6 +1463,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "USER_CARD_LAST_SEEN": "last_seen: {date}",
         "USER_BTN_UNLOCK": "🔓 Unblock",
         "USER_BTN_LOCK": "🔒 Block",
+        "USER_BTN_TRIAL_48H": "🎁 Grant 48h access",
         "USER_BTN_DELETE": "🗑 Delete",
         "USER_DELETE_CONFIRM": (
             "⚠️ Delete user {user_id}?\n\n"
@@ -1466,6 +1474,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "USER_DELETED_NOTICE": "Your account was deleted by an administrator.",
         "USER_DELETED_PREFIX": "✅ User deleted: {user_id}",
         "USER_DELETED_ALERT": "✅ User deleted: {user_id}",
+        "USER_TRIAL_48H_NOTICE": (
+            "🎁 You have been granted full access for 48 hours to evaluate the bot and signals.\n"
+            "After the period ends, signal access returns to free-tier limits."
+        ),
+        "USER_TRIAL_48H_PREFIX": "✅ 48h trial access granted: {user_id}",
+        "USER_TRIAL_48H_ALERT": "✅ 48h access granted to user {user_id}",
         "USER_LOCKED_NOTICE": (
             "⛔ Subscription paused\n\n"
             "Access to signals has been temporarily disabled by the administrator.\n"
