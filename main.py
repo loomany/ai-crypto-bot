@@ -1661,12 +1661,67 @@ def _history_row_icon(row: dict[str, Any]) -> str:
 
 
 
+def _is_true_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return False
+        return normalized in {"1", "true", "yes", "y", "on"}
+    return False
+
+
+def _be_reached_tp(row: dict[str, Any]) -> bool:
+    if _is_true_flag(row.get("tp2_hit")) or _is_true_flag(row.get("tp1_hit")):
+        return True
+
+    try:
+        max_profit_pct = float(row.get("max_profit_pct") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if max_profit_pct <= 0:
+        return False
+
+    try:
+        entry_price = float(row.get("entry_price") or 0.0)
+    except (TypeError, ValueError):
+        entry_price = 0.0
+
+    if entry_price <= 0:
+        try:
+            poi_low = float(row.get("poi_low") or 0.0)
+            poi_high = float(row.get("poi_high") or 0.0)
+            if poi_low > 0 and poi_high > 0:
+                entry_price = (poi_low + poi_high) / 2.0
+        except (TypeError, ValueError):
+            entry_price = 0.0
+
+    try:
+        tp1_price = float(row.get("tp1") or 0.0)
+    except (TypeError, ValueError):
+        tp1_price = 0.0
+
+    if entry_price <= 0 or tp1_price <= 0:
+        return False
+
+    side = _signal_side_label(row.get("side"))
+    if side == "SHORT":
+        tp1_target_pct = ((entry_price - tp1_price) / entry_price) * 100.0
+    else:
+        tp1_target_pct = ((tp1_price - entry_price) / entry_price) * 100.0
+
+    return tp1_target_pct > 0 and max_profit_pct >= tp1_target_pct
+
+
 def _signal_list_status_label(row: dict[str, Any]) -> str:
     normalized = _normalize_signal_status(str(row.get("result") or row.get("status") or ""))
     if normalized in {"TP1", "TP2", "TP"}:
         return "TP"
     if normalized == "BE":
-        if bool(row.get("tp1_hit")) or bool(row.get("tp2_hit")):
+        if _be_reached_tp(row):
             # BE after TP1/TP2 is counted as TP in summary stats,
             # keep list label consistent with aggregate block.
             return "TP"
