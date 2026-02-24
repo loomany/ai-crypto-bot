@@ -1132,6 +1132,7 @@ def get_signal_history(
     include_legacy: bool = False,
     module: str | None = None,
 ) -> list[sqlite3.Row]:
+    duplicate_window_sec = 24 * 60 * 60
     since_ts = _history_since_ts(time_window)
     conn = get_conn()
     try:
@@ -1157,13 +1158,23 @@ def get_signal_history(
         _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
-        params.extend([int(limit), int(offset)])
         dedup_subquery = f"""
-            SELECT MAX(id) AS id
-            FROM signal_events
+            SELECT MAX(base.id) AS id
+            FROM signal_events base
             WHERE {where_clause}
-            GROUP BY module, symbol, ts
+              AND NOT EXISTS (
+                SELECT 1
+                FROM signal_events newer
+                WHERE newer.module = base.module
+                  AND UPPER(newer.symbol) = UPPER(base.symbol)
+                  AND newer.ts > base.ts
+                  AND (newer.ts - base.ts) < ?
+                  AND newer.id > base.id
+              )
+            GROUP BY base.module, UPPER(base.symbol), base.ts
         """
+        params.append(int(duplicate_window_sec))
+        params.extend([int(limit), int(offset)])
         cur = conn.execute(
             f"""
             SELECT
@@ -1212,6 +1223,7 @@ def count_signal_history(
     include_legacy: bool = False,
     module: str | None = None,
 ) -> int:
+    duplicate_window_sec = 24 * 60 * 60
     since_ts = _history_since_ts(time_window)
     conn = get_conn()
     try:
@@ -1240,14 +1252,24 @@ def count_signal_history(
         _append_cutoff_filter(clauses, params, include_legacy=include_legacy)
         _append_blocked_symbols_filter(clauses, params)
         where_clause = " AND ".join(clauses)
+        params.append(int(duplicate_window_sec))
         cur = conn.execute(
             f"""
             SELECT COUNT(*) AS cnt
             FROM (
                 SELECT 1
-                FROM signal_events
+                FROM signal_events base
                 WHERE {where_clause}
-                GROUP BY module, symbol, ts
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM signal_events newer
+                    WHERE newer.module = base.module
+                      AND UPPER(newer.symbol) = UPPER(base.symbol)
+                      AND newer.ts > base.ts
+                      AND (newer.ts - base.ts) < ?
+                      AND newer.id > base.id
+                  )
+                GROUP BY base.module, UPPER(base.symbol), base.ts
             ) uniq
             """,
             params,
@@ -1264,6 +1286,7 @@ def get_history_winrate_summary(
     include_legacy: bool = False,
     module: str | None = None,
 ) -> dict[str, object]:
+    duplicate_window_sec = 24 * 60 * 60
     since_ts = _history_since_ts(time_window)
     conn = get_conn()
     try:
@@ -1291,11 +1314,21 @@ def get_history_winrate_summary(
         where_clause = " AND ".join(clauses)
 
         dedup_subquery = f"""
-            SELECT MAX(id) AS id
-            FROM signal_events
+            SELECT MAX(base.id) AS id
+            FROM signal_events base
             WHERE {where_clause}
-            GROUP BY module, symbol, ts
+              AND NOT EXISTS (
+                SELECT 1
+                FROM signal_events newer
+                WHERE newer.module = base.module
+                  AND UPPER(newer.symbol) = UPPER(base.symbol)
+                  AND newer.ts > base.ts
+                  AND (newer.ts - base.ts) < ?
+                  AND newer.id > base.id
+              )
+            GROUP BY base.module, UPPER(base.symbol), base.ts
         """
+        params.append(int(duplicate_window_sec))
         cur = conn.execute(
             f"""
             SELECT
