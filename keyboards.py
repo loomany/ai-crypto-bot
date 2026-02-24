@@ -14,6 +14,7 @@ def build_main_menu_kb(lang: str, is_admin: bool = False) -> ReplyKeyboardMarkup
             KeyboardButton(text=i18n.t(lang, "MENU_AI")),
             KeyboardButton(text=i18n.t(lang, "MENU_PD")),
         ],
+        [KeyboardButton(text=i18n.t(lang, "MENU_ARB"))],
         [
             KeyboardButton(text=i18n.t(lang, "MENU_STATS")),
             KeyboardButton(text=i18n.t(lang, "MENU_SYSTEM")),
@@ -108,6 +109,25 @@ def ai_signals_inline_kb(lang: str) -> InlineKeyboardMarkup:
         ]
     )
 
+
+
+def arbitrage_inline_kb(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "BTN_ARB_ON"),
+                    callback_data="arb_notify_on",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "BTN_ARB_OFF"),
+                    callback_data="arb_notify_off",
+                )
+            ],
+        ]
+    )
 
 def pumpdump_inline_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
