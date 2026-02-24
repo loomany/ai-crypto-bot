@@ -191,7 +191,6 @@ from arb_scanner import ArbScanner
 from arb_db import (
     can_send_arb_notification,
     count_arb_notifications_sent_since,
-    get_arb_max_metrics_since,
     get_arb_notify_enabled,
     get_arb_opportunities_page,
     insert_arb_opportunities,
@@ -284,12 +283,12 @@ PD_ARCHIVE_UNLOCK_DELAY_SEC = 60 * 60
 
 ARB_ENABLED = os.getenv("ARB_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 ARB_SCAN_INTERVAL_SEC = int(os.getenv("ARB_SCAN_INTERVAL_SEC", "8") or 8)
-ARB_MIN_NET_PCT = float(os.getenv("ARB_MIN_NET_PCT", "0.5") or 0.5)
+ARB_MIN_NET_PCT = float(os.getenv("ARB_MIN_NET_PCT", "0.7") or 0.7)
 ARB_USER_COOLDOWN_SEC = int(os.getenv("ARB_USER_COOLDOWN_SEC", "300") or 300)
 ARB_DEDUP_TTL_SEC = int(os.getenv("ARB_DEDUP_TTL_SEC", "1800") or 1800)
 FEE_TAKER_BUY_PCT = float(os.getenv("FEE_TAKER_BUY_PCT", "0.10") or 0.10)
 FEE_TAKER_SELL_PCT = float(os.getenv("FEE_TAKER_SELL_PCT", "0.10") or 0.10)
-SLIPPAGE_PCT = float(os.getenv("SLIPPAGE_PCT", "0.10") or 0.10)
+SLIPPAGE_PCT = float(os.getenv("SLIPPAGE_PCT", "0.15") or 0.15)
 
 _arb_scanner = ArbScanner()
 
@@ -5119,9 +5118,6 @@ def _format_arb_section(st, now: float, lang: str) -> str:
     sent_24h = count_arb_notifications_sent_since(since_24h)
     details.append(i18n.t(lang, "DIAG_ARB_API_ERRORS_24H", count=api_errors_24h))
     details.append(i18n.t(lang, "DIAG_ARB_SENT_24H", count=sent_24h))
-    max_metrics_24h = get_arb_max_metrics_since(since_24h)
-    details.append(i18n.t(lang, "DIAG_ARB_MAX_NET_24H", value=f"{float(max_metrics_24h.get('max_net', 0.0) or 0.0):.2f}"))
-    details.append(i18n.t(lang, "DIAG_ARB_MAX_GROSS_24H", value=f"{float(max_metrics_24h.get('max_gross', 0.0) or 0.0):.2f}"))
     if api_errors_24h >= 20:
         details.append(i18n.t(lang, "DIAG_ARB_WARN"))
     if st.last_error:
@@ -8412,10 +8408,7 @@ async def _run_admin_arb_test(lang: str) -> str:
         fees_sell_pct=FEE_TAKER_SELL_PCT,
         slippage_pct=SLIPPAGE_PCT,
     )
-    all_opportunities = details.get("all_opportunities", [])
-    top_by_net = all_opportunities[:5]
-    max_gross = max((float(item.get("gross_pct", 0.0) or 0.0) for item in all_opportunities), default=0.0)
-    max_net = max((float(item.get("net_pct", 0.0) or 0.0) for item in all_opportunities), default=0.0)
+    top = details.get("qualified", [])[:5]
     lines = [
         i18n.t(lang, "ARB_TEST_TITLE"),
         i18n.t(
@@ -8427,22 +8420,17 @@ async def _run_admin_arb_test(lang: str) -> str:
             min_net=f"{ARB_MIN_NET_PCT:.1f}",
             qualified=len(details.get("qualified", [])),
         ),
-        i18n.t(lang, "ARB_TEST_MAX_GROSS_CYCLE", value=f"{max_gross:.2f}"),
-        i18n.t(lang, "ARB_TEST_MAX_NET_CYCLE", value=f"{max_net:.2f}"),
         "",
     ]
-    if not top_by_net:
+    if not top:
         lines.append(i18n.t(lang, "ARB_TEST_EMPTY"))
     else:
         lines.append(i18n.t(lang, "ARB_TEST_TOP_HEADER"))
-        for idx, item in enumerate(top_by_net, start=1):
+        for idx, item in enumerate(top, start=1):
             breakdown = item.get("breakdown") if isinstance(item.get("breakdown"), dict) else {}
-            net_value = float(item.get("net_pct", 0.0) or 0.0)
-            below_threshold = net_value < ARB_MIN_NET_PCT
-            status = i18n.t(lang, "ARB_TEST_BELOW_THRESHOLD") if below_threshold else i18n.t(lang, "ARB_TEST_ABOVE_THRESHOLD")
             lines.append(
                 f"{idx}) {item.get('symbol','')} {item.get('buy_exchange','')}→{item.get('sell_exchange','')} "
-                f"NET {net_value:.2f}% (Gross {float(item.get('gross_pct',0.0) or 0.0):.2f}%) — {status}"
+                f"NET {float(item.get('net_pct',0.0) or 0.0):.2f}% (Gross {float(item.get('gross_pct',0.0) or 0.0):.2f}%)"
             )
             lines.append(
                 f"   fees {float(breakdown.get('trading_fees',0.0) or 0.0):.2f}% / slip {float(breakdown.get('slippage',0.0) or 0.0):.2f}%"
@@ -8480,8 +8468,7 @@ async def arbitrage_scan_once(bot: Bot) -> None:
         slippage_pct=SLIPPAGE_PCT,
     )
     qualified = details.get("qualified", [])
-    all_opportunities = details.get("all_opportunities", [])
-    insert_arb_opportunities(all_opportunities, limit=20)
+    insert_arb_opportunities(qualified, limit=30)
 
     st = MODULES.get("arbitrage")
     if st is not None:

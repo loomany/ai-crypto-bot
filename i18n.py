@@ -47,7 +47,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "ARBITRAGE_TEXT": (
             "⚡️ Межбиржевой арбитраж (SPOT, 5 бирж)\n\n"
             "Бот автоматически сканирует Binance, OKX, Bybit, KuCoin и Gate.io по публичным API.\n"
-            "Уведомление приходит только если чистая прибыль (NET) после всех вычетов >= 0.5%.\n\n"
+            "Уведомление приходит только если чистая прибыль (NET) после всех вычетов >= 0.7%.\n\n"
             "Формула: NET = Gross − комиссии − slippage.\n"
             "Анти-спам: cooldown + дедуп одинаковых окон.\n\n"
             "🔔 Управление уведомлениями кнопками ниже."
@@ -391,12 +391,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Кандидатов (gross>0): {gross}\n"
             "Прошло NET≥{min_net}%: {qualified}"
         ),
-        "ARB_TEST_TOP_HEADER": "Топ-5 по NET (включая ниже порога):",
-        "ARB_TEST_EMPTY": "Возможности не найдены.",
-        "ARB_TEST_MAX_GROSS_CYCLE": "Max Gross% за цикл: {value}%",
-        "ARB_TEST_MAX_NET_CYCLE": "Max NET% за цикл: {value}%",
-        "ARB_TEST_BELOW_THRESHOLD": "below threshold",
-        "ARB_TEST_ABOVE_THRESHOLD": "ok",
+        "ARB_TEST_TOP_HEADER": "Топ-5 возможностей:",
+        "ARB_TEST_EMPTY": "Подходящих возможностей не найдено.",
         "ARB_ALERT_RU": (
             "⚡️ Межбиржевой арбитраж (NET ≥ {min_net}%)\n"
             "Монета: {symbol}\n"
@@ -871,8 +867,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "DIAG_ARB_NET_FOUND": "• Прошло NET≥{min_net}%: {count}",
         "DIAG_ARB_API_ERRORS_24H": "• Ошибки API за 24ч: {count}",
         "DIAG_ARB_SENT_24H": "• Отправлено уведомлений за 24ч: {count}",
-        "DIAG_ARB_MAX_NET_24H": "• Max NET за 24ч: {value}%",
-        "DIAG_ARB_MAX_GROSS_24H": "• Max Gross за 24ч: {value}%",
         "DIAG_ARB_WARN": "• WARN: повышенный уровень ошибок API",
         "DIAG_STATUS_WORKING": "работает",
         "DIAG_STATUS_NOT_STARTED": "не запускался",
@@ -1036,7 +1030,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "ARBITRAGE_TEXT": (
             "⚡️ Inter-exchange arbitrage (SPOT, 5 exchanges)\n\n"
             "The bot scans Binance, OKX, Bybit, KuCoin, and Gate.io via public APIs.\n"
-            "It notifies only when net profit (NET) after all deductions is >= 0.5%.\n\n"
+            "It notifies only when net profit (NET) after all deductions is >= 0.7%.\n\n"
             "Formula: NET = Gross − fees − slippage.\n"
             "Anti-spam: per-user cooldown + dedup for identical windows.\n\n"
             "🔔 Use buttons below to manage notifications."
@@ -1386,12 +1380,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Candidates (gross>0): {gross}\n"
             "Passed NET≥{min_net}%: {qualified}"
         ),
-        "ARB_TEST_TOP_HEADER": "Top-5 by NET (including below threshold):",
-        "ARB_TEST_EMPTY": "No opportunities found.",
-        "ARB_TEST_MAX_GROSS_CYCLE": "Max Gross% per cycle: {value}%",
-        "ARB_TEST_MAX_NET_CYCLE": "Max NET% per cycle: {value}%",
-        "ARB_TEST_BELOW_THRESHOLD": "below threshold",
-        "ARB_TEST_ABOVE_THRESHOLD": "ok",
+        "ARB_TEST_TOP_HEADER": "Top-5 opportunities:",
+        "ARB_TEST_EMPTY": "No opportunities passed threshold.",
         "ARB_ALERT_EN": (
             "⚡️ Inter-exchange arbitrage (NET ≥ {min_net}%)\n"
             "Symbol: {symbol}\n"
@@ -1856,8 +1846,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "DIAG_ARB_NET_FOUND": "• Passed NET≥{min_net}%: {count}",
         "DIAG_ARB_API_ERRORS_24H": "• API errors in 24h: {count}",
         "DIAG_ARB_SENT_24H": "• Notifications sent in 24h: {count}",
-        "DIAG_ARB_MAX_NET_24H": "• Max NET in 24h: {value}%",
-        "DIAG_ARB_MAX_GROSS_24H": "• Max Gross in 24h: {value}%",
         "DIAG_ARB_WARN": "• WARN: high API error level",
         "DIAG_STATUS_WORKING": "running",
         "DIAG_STATUS_NOT_STARTED": "not started",
