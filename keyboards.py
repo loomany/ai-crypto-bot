@@ -70,6 +70,10 @@ def build_admin_diagnostics_kb(lang: str) -> ReplyKeyboardMarkup:
             KeyboardButton(text=i18n.t(lang, "SYS_TEST_AI")),
             KeyboardButton(text=i18n.t(lang, "SYS_TEST_PD")),
         ],
+        [
+            KeyboardButton(text=i18n.t(lang, "SYS_ARB_HISTORY_ADMIN")),
+            KeyboardButton(text=i18n.t(lang, "SYS_ARB_TEST_ADMIN")),
+        ],
         [KeyboardButton(text=i18n.t(lang, "MENU_BACK"))],
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
@@ -111,23 +115,25 @@ def ai_signals_inline_kb(lang: str) -> InlineKeyboardMarkup:
 
 
 
-def arbitrage_inline_kb(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=i18n.t(lang, "BTN_ARB_ON"),
-                    callback_data="arb_notify_on",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=i18n.t(lang, "BTN_ARB_OFF"),
-                    callback_data="arb_notify_off",
-                )
-            ],
-        ]
-    )
+def arbitrage_inline_kb(lang: str, is_admin: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=i18n.t(lang, "BTN_ARB_ON"),
+                callback_data="arb_notify_on",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=i18n.t(lang, "BTN_ARB_OFF"),
+                callback_data="arb_notify_off",
+            )
+        ],
+    ]
+    if is_admin:
+        rows.append([InlineKeyboardButton(text=i18n.t(lang, "SYS_ARB_HISTORY_ADMIN"), callback_data="admin:arb:history:1")])
+        rows.append([InlineKeyboardButton(text=i18n.t(lang, "SYS_ARB_TEST_ADMIN"), callback_data="admin:arb:test")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def pumpdump_inline_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(

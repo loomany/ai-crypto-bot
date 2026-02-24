@@ -28,30 +28,13 @@ class ArbScanner:
     def normalize_symbol(raw: str) -> str:
         return str(raw or "").upper().replace("-", "").replace("_", "")
 
-    @staticmethod
-    def to_dash_symbol(symbol: str) -> str:
-        normalized = ArbScanner.normalize_symbol(symbol)
-        if not normalized.endswith("USDT"):
-            return normalized
-        return f"{normalized[:-4]}-USDT"
-
-    @staticmethod
-    def to_gate_symbol(symbol: str) -> str:
-        normalized = ArbScanner.normalize_symbol(symbol)
-        if not normalized.endswith("USDT"):
-            return normalized
-        return f"{normalized[:-4]}_USDT"
-
     async def _fetch_json(self, session: aiohttp.ClientSession, url: str) -> Any:
         async with session.get(url, timeout=12) as resp:
             resp.raise_for_status()
             return await resp.json()
 
     async def _fetch_symbols_binance(self, session: aiohttp.ClientSession) -> Set[str]:
-        data = await self._fetch_json(
-            session,
-            "https://api.binance.com/api/v3/exchangeInfo?permissions=SPOT",
-        )
+        data = await self._fetch_json(session, "https://api.binance.com/api/v3/exchangeInfo?permissions=SPOT")
         symbols: Set[str] = set()
         for row in data.get("symbols", []):
             symbol = self.normalize_symbol(row.get("symbol", ""))
@@ -136,11 +119,11 @@ class ArbScanner:
         if common_symbols is None:
             common_symbols = set()
 
-        # Optional ranking by Binance quote volume, keeping exact symbol universe from public list endpoints.
         try:
             volume_rows = await self._fetch_json(session, "https://api.binance.com/api/v3/ticker/24hr")
         except Exception:
             volume_rows = []
+
         ranked: List[tuple[str, float]] = []
         for row in volume_rows:
             symbol = self.normalize_symbol(row.get("symbol", ""))
@@ -163,7 +146,9 @@ class ArbScanner:
         self.last_symbols_refresh = now
         return self.cached_symbols
 
-    async def collect_opportunities(self) -> List[Dict[str, Any]]:
+    async def collect_opportunities_details(self, *, min_net_pct: float, fees_buy_pct: float, fees_sell_pct: float, slippage_pct: float, withdraw_pct: float, risk_buffer_pct: float) -> Dict[str, Any]:
+        api_errors = 0
+        started_ms = int(time.time() * 1000)
         async with aiohttp.ClientSession() as session:
             symbols = await self._refresh_symbols(session)
             raw = await asyncio.gather(
@@ -176,13 +161,18 @@ class ArbScanner:
             )
 
         quotes: Dict[str, Dict[str, Dict[str, float]]] = {}
+        exchanges_ok = 0
         for payload in raw:
             if isinstance(payload, Exception):
+                api_errors += 1
                 continue
+            exchanges_ok += 1
             for exchange, ex_quotes in payload.items():
                 quotes.setdefault(exchange, {}).update(ex_quotes)
 
         now_ms = int(time.time() * 1000)
+        fees_total = fees_buy_pct + fees_sell_pct
+        candidates_gross = 0
         opportunities: List[Dict[str, Any]] = []
         for symbol in symbols:
             best_buy = None
@@ -211,21 +201,55 @@ class ArbScanner:
                 continue
 
             gross_pct = (best_sell["price"] - best_buy["price"]) / best_buy["price"] * 100.0
+            if gross_pct > 0:
+                candidates_gross += 1
+            net_pct = gross_pct - fees_total - slippage_pct - withdraw_pct - risk_buffer_pct
             age_sec = max(0.0, (now_ms - min(best_buy["ts"], best_sell["ts"])) / 1000.0)
+            breakdown = {
+                "trading_fees": fees_total,
+                "slippage": slippage_pct,
+                "withdraw_est": withdraw_pct,
+                "risk_buf": risk_buffer_pct,
+            }
             opportunities.append(
                 {
+                    "ts": int(time.time()),
                     "symbol": symbol,
                     "buy_exchange": best_buy["exchange"],
                     "sell_exchange": best_sell["exchange"],
                     "ask": best_buy["price"],
                     "bid": best_sell["price"],
                     "gross_pct": gross_pct,
-                    "age_sec": age_sec,
+                    "net_pct": net_pct,
+                    "breakdown": breakdown,
+                    "age_sec": int(age_sec),
+                    "dedup_key": f"{symbol}|{best_buy['exchange']}->{best_sell['exchange']}|{net_pct:.2f}",
                 }
             )
 
-        opportunities.sort(key=lambda x: x["gross_pct"], reverse=True)
-        return opportunities
+        opportunities.sort(key=lambda x: x["net_pct"], reverse=True)
+        qualified = [item for item in opportunities if item["net_pct"] >= min_net_pct]
+        ended_ms = int(time.time() * 1000)
+        return {
+            "exchanges_polled": exchanges_ok,
+            "symbols_collected": len(symbols),
+            "candidates_gross": candidates_gross,
+            "qualified": qualified,
+            "all_opportunities": opportunities,
+            "api_errors": api_errors,
+            "cycle_ms": max(0, ended_ms - started_ms),
+        }
+
+    async def collect_opportunities(self) -> List[Dict[str, Any]]:
+        details = await self.collect_opportunities_details(
+            min_net_pct=float(os.getenv("ARB_MIN_NET_PCT", "0.7") or 0.7),
+            fees_buy_pct=float(os.getenv("FEE_TAKER_BUY_PCT", "0.10") or 0.10),
+            fees_sell_pct=float(os.getenv("FEE_TAKER_SELL_PCT", "0.10") or 0.10),
+            slippage_pct=float(os.getenv("SLIPPAGE_PCT", "0.15") or 0.15),
+            withdraw_pct=float(os.getenv("WITHDRAW_COST_PCT_EST", "0.25") or 0.25),
+            risk_buffer_pct=float(os.getenv("RISK_BUFFER_PCT", "0.15") or 0.15),
+        )
+        return details["all_opportunities"]
 
     async def _fetch_binance(self, session: aiohttp.ClientSession) -> Dict[str, Dict[str, Dict[str, float]]]:
         data = await self._fetch_json(session, "https://api.binance.com/api/v3/ticker/bookTicker")
@@ -235,11 +259,7 @@ class ArbScanner:
             symbol = self.normalize_symbol(row.get("symbol", ""))
             if not symbol.endswith("USDT"):
                 continue
-            out[symbol] = {
-                "ask": float(row.get("askPrice", 0.0) or 0.0),
-                "bid": float(row.get("bidPrice", 0.0) or 0.0),
-                "ts": now_ms,
-            }
+            out[symbol] = {"ask": float(row.get("askPrice", 0.0) or 0.0), "bid": float(row.get("bidPrice", 0.0) or 0.0), "ts": now_ms}
         return {"Binance": out}
 
     async def _fetch_okx(self, session: aiohttp.ClientSession) -> Dict[str, Dict[str, Dict[str, float]]]:
@@ -249,11 +269,7 @@ class ArbScanner:
             symbol = self.normalize_symbol(row.get("instId", ""))
             if not symbol.endswith("USDT"):
                 continue
-            out[symbol] = {
-                "ask": float(row.get("askPx", 0.0) or 0.0),
-                "bid": float(row.get("bidPx", 0.0) or 0.0),
-                "ts": int(float(row.get("ts", 0.0) or 0.0)),
-            }
+            out[symbol] = {"ask": float(row.get("askPx", 0.0) or 0.0), "bid": float(row.get("bidPx", 0.0) or 0.0), "ts": int(float(row.get("ts", 0.0) or 0.0))}
         return {"OKX": out}
 
     async def _fetch_bybit(self, session: aiohttp.ClientSession) -> Dict[str, Dict[str, Dict[str, float]]]:
@@ -264,11 +280,7 @@ class ArbScanner:
             symbol = self.normalize_symbol(row.get("symbol", ""))
             if not symbol.endswith("USDT"):
                 continue
-            out[symbol] = {
-                "ask": float(row.get("ask1Price", 0.0) or 0.0),
-                "bid": float(row.get("bid1Price", 0.0) or 0.0),
-                "ts": now_ms,
-            }
+            out[symbol] = {"ask": float(row.get("ask1Price", 0.0) or 0.0), "bid": float(row.get("bid1Price", 0.0) or 0.0), "ts": now_ms}
         return {"Bybit": out}
 
     async def _fetch_kucoin(self, session: aiohttp.ClientSession) -> Dict[str, Dict[str, Dict[str, float]]]:
@@ -279,18 +291,11 @@ class ArbScanner:
             symbol = self.normalize_symbol(row.get("symbol", ""))
             if not symbol.endswith("USDT"):
                 continue
-            out[symbol] = {
-                "ask": float(row.get("sell", 0.0) or 0.0),
-                "bid": float(row.get("buy", 0.0) or 0.0),
-                "ts": ts,
-            }
+            out[symbol] = {"ask": float(row.get("sell", 0.0) or 0.0), "bid": float(row.get("buy", 0.0) or 0.0), "ts": ts}
         return {"KuCoin": out}
 
     async def _fetch_gate(self, session: aiohttp.ClientSession) -> Dict[str, Dict[str, Dict[str, float]]]:
-        urls = (
-            "https://api.gateio.ws/api/v4/spot/tickers",
-            "https://api.gate.us/api/v4/spot/tickers",
-        )
+        urls = ("https://api.gateio.ws/api/v4/spot/tickers", "https://api.gate.us/api/v4/spot/tickers")
         out: Dict[str, Dict[str, float]] = {}
         for url in urls:
             try:
@@ -300,11 +305,7 @@ class ArbScanner:
                     symbol = self.normalize_symbol(row.get("currency_pair", ""))
                     if not symbol.endswith("USDT"):
                         continue
-                    out[symbol] = {
-                        "ask": float(row.get("lowest_ask", 0.0) or 0.0),
-                        "bid": float(row.get("highest_bid", 0.0) or 0.0),
-                        "ts": now_ms,
-                    }
+                    out[symbol] = {"ask": float(row.get("lowest_ask", 0.0) or 0.0), "bid": float(row.get("highest_bid", 0.0) or 0.0), "ts": now_ms}
                 break
             except Exception:
                 continue
