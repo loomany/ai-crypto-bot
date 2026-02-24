@@ -45,8 +45,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "🔔 Авто-сигналы включаются кнопками ниже."
         ),
         "ARBITRAGE_TEXT": (
-            "⚡️ Межбиржевой арбитраж (SPOT, 10 бирж)\n\n"
-            "Бот автоматически сканирует Binance, OKX, Bybit, KuCoin, Gate.io, MEXC, Bitget, HTX, BingX и BitMart по публичным API.\n"
+            "⚡️ Межбиржевой арбитраж (SPOT, 5 бирж)\n\n"
+            "Бот автоматически сканирует Binance, OKX, Bybit, KuCoin и Gate.io по публичным API.\n"
             "Уведомление приходит только если чистая прибыль (NET) после всех вычетов >= 0.5%.\n\n"
             "Формула: NET = Gross − комиссии − slippage.\n"
             "Анти-спам: cooldown + дедуп одинаковых окон.\n\n"
@@ -874,9 +874,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "DIAG_ARB_MAX_NET_24H": "• Max NET за 24ч: {value}%",
         "DIAG_ARB_MAX_GROSS_24H": "• Max Gross за 24ч: {value}%",
         "DIAG_ARB_WARN": "• WARN: повышенный уровень ошибок API",
-        "DIAG_ARB_EXCHANGE_LINE": "• {exchange}: {status} | latency {latency}ms | ws_age {ws_age}s | symbols {symbols} | error {error}",
-        "ARB_TEST_EXCHANGE_HEADER": "Биржи (received_symbols_count / last_error):",
-        "ARB_TEST_EXCHANGE_LINE": "• {exchange}: symbols={symbols}, last_error={error}",
         "DIAG_STATUS_WORKING": "работает",
         "DIAG_STATUS_NOT_STARTED": "не запускался",
         "DIAG_STATUS_ISSUES": "есть проблемы",
@@ -1037,8 +1034,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "🔔 Auto-signals are enabled with the buttons below."
         ),
         "ARBITRAGE_TEXT": (
-            "⚡️ Inter-exchange arbitrage (SPOT, 10 exchanges)\n\n"
-            "The bot scans Binance, OKX, Bybit, KuCoin, Gate.io, MEXC, Bitget, HTX, BingX, and BitMart via public APIs.\n"
+            "⚡️ Inter-exchange arbitrage (SPOT, 5 exchanges)\n\n"
+            "The bot scans Binance, OKX, Bybit, KuCoin, and Gate.io via public APIs.\n"
             "It notifies only when net profit (NET) after all deductions is >= 0.5%.\n\n"
             "Formula: NET = Gross − fees − slippage.\n"
             "Anti-spam: per-user cooldown + dedup for identical windows.\n\n"
@@ -1862,9 +1859,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "DIAG_ARB_MAX_NET_24H": "• Max NET in 24h: {value}%",
         "DIAG_ARB_MAX_GROSS_24H": "• Max Gross in 24h: {value}%",
         "DIAG_ARB_WARN": "• WARN: high API error level",
-        "DIAG_ARB_EXCHANGE_LINE": "• {exchange}: {status} | latency {latency}ms | ws_age {ws_age}s | symbols {symbols} | error {error}",
-        "ARB_TEST_EXCHANGE_HEADER": "Exchanges (received_symbols_count / last_error):",
-        "ARB_TEST_EXCHANGE_LINE": "• {exchange}: symbols={symbols}, last_error={error}",
         "DIAG_STATUS_WORKING": "running",
         "DIAG_STATUS_NOT_STARTED": "not started",
         "DIAG_STATUS_ISSUES": "issues detected",
