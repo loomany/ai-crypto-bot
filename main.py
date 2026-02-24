@@ -611,6 +611,48 @@ async def _ai_public_on_be_triggered(signal: dict) -> tuple[bool, str]:
     return True, "ok" if fix_events else "no_events"
 
 
+def _ai_public_coin_yield_pct(signal: dict, result: dict, *, final_status: str) -> float:
+    side = str(signal.get("direction") or "").upper()
+    side_mult = 1.0 if side in {"LONG", "BUY"} else -1.0
+    leverage = float(AI_PUBLIC_LEVERAGE or 1.0)
+
+    entry_price = float(signal.get("entry_price") or 0.0)
+    if entry_price <= 0:
+        entry_from = float(signal.get("entry_from") or signal.get("entry_low") or 0.0)
+        entry_to = float(signal.get("entry_to") or signal.get("entry_high") or 0.0)
+        if entry_from > 0 and entry_to > 0:
+            entry_price = (entry_from + entry_to) / 2.0
+        else:
+            entry_price = entry_from or entry_to
+    if entry_price <= 0:
+        return 0.0
+
+    outcome = str(result.get("outcome") or final_status or "").upper()
+    if outcome == "TP1":
+        exit_price = float(signal.get("tp1") or 0.0)
+    elif outcome in {"TP2", "TP"}:
+        exit_price = float(signal.get("tp2") or signal.get("tp1") or 0.0)
+    elif outcome == "SL":
+        exit_price = float(signal.get("sl") or 0.0)
+    elif outcome == "BE":
+        exit_price = float(result.get("be_trigger_price") or signal.get("be_trigger_price") or entry_price)
+    else:
+        exit_price = 0.0
+
+    if exit_price <= 0:
+        pnl_pct = 0.0
+    else:
+        pnl_pct = ((exit_price - entry_price) / entry_price) * 100.0 * side_mult * leverage
+
+    # For BE we must show that coin had profit before returning to break-even.
+    if outcome == "BE":
+        max_profit_pct = float(result.get("max_profit_pct") or signal.get("max_profit_pct") or 0.0)
+        if max_profit_pct > pnl_pct:
+            pnl_pct = max_profit_pct
+
+    return float(pnl_pct)
+
+
 async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, str]:
     if not _ai_public_ready():
         return False, "disabled" if not AI_PUBLIC_ENABLED else "no_channel_id"
@@ -630,13 +672,14 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
     emoji = {"TP": "🎯", "SL": "🛑", "BE": "🟦"}.get(final_status, "ℹ️")
     pnl_rest = float(closed.get("pnl_rest") or 0.0)
     pnl_total = float(closed.get("pnl_usd") or 0.0)
+    coin_yield_pct = _ai_public_coin_yield_pct(signal, result, final_status=final_status)
     trade_id = int(closed.get("id") or 0)
     lines = [
         _ai_public_header(trade_id),
         "",
         f"{emoji} AI ВЫХОД | x{int(AI_PUBLIC_LEVERAGE)}",
         f"{closed['symbol']} — {final_status}",
-        f"Доходность: {closed['roi_pct']:+.2f}%",
+        f"Доходность монеты: {coin_yield_pct:+.2f}%",
     ]
     if final_status == "TP":
         lines.append(f"PnL остатка (TP1=3R): ${pnl_rest:+.2f}")
@@ -2337,8 +2380,8 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
     if normalized not in {"BE_ACTIVATED"}:
         return False
 
-    if normalized == "BE_ACTIVATED":
-        _ = await _ai_public_on_be_triggered(signal)
+    # Public channel posts only entry + final exit messages.
+    # Intermediate BE progress updates stay in private user notifications.
 
     module = str(signal.get("module", ""))
     symbol = str(signal.get("symbol", ""))
