@@ -1438,11 +1438,13 @@ def _dedupe_signals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         symbol = str(row.get("symbol") or "").strip().upper()
         side = _signal_side_label(row.get("side"))
         module = str(row.get("module") or "ai_signals").strip().lower()
+        status_group = _signal_status_group(row)
 
         # В истории пользователю важен последний сигнал по инструменту/направлению,
-        # поэтому схлопываем повторы и оставляем самую свежую запись.
+        # но сигналы с разным жизненным статусом (например, EXP и новый IN_PROGRESS)
+        # должны отображаться отдельно, чтобы не создавать путаницу.
         if symbol:
-            key = f"{module}:{symbol}:{side}"
+            key = f"{module}:{symbol}:{side}:{status_group}"
         else:
             row_id = _safe_int(row.get("id"), 0)
             if row_id > 0:
