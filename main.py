@@ -6600,6 +6600,8 @@ async def send_signal_to_all(
         skipped_no_subs += 1
         print("[ai_signals] deliver: subs=0 (admin fallback may still receive message)")
 
+    dedup_key = f"{symbol}:24h"
+
     lifecycle_ts_raw = signal_dict.get("created_at")
     try:
         lifecycle_ts = int(float(lifecycle_ts_raw))
@@ -6626,11 +6628,6 @@ async def send_signal_to_all(
     except (TypeError, ValueError):
         entry_low, entry_high = 0.0, 0.0
     direction = str(signal_dict.get("direction") or "").lower()
-    signal_id_raw = str(signal_dict.get("signal_id") or "").strip()
-    if signal_id_raw:
-        dedup_key = f"{symbol}:{signal_id_raw}"
-    else:
-        dedup_key = f"{symbol}:{direction}:{sent_at // 300}"
 
     admin_chat_id = ADMIN_CHAT_ID or ADMIN_USER_ID
     recipients = list(dict.fromkeys(subscribers + ([admin_chat_id] if admin_chat_id else [])))
