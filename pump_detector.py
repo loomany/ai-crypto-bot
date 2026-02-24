@@ -27,8 +27,10 @@ PUMPDUMP_5M_LIMIT = int(
     os.getenv("PUMP_LIMIT_5M", os.getenv("PUMPDUMP_5M_LIMIT", "120"))
 )
 PUMP_1M_THRESHOLD = float(os.getenv("PUMP_1M_THRESHOLD", "1.6"))
+PUMP_2M_THRESHOLD = float(os.getenv("PUMP_2M_THRESHOLD", "2.0"))
 PUMP_5M_THRESHOLD = float(os.getenv("PUMP_5M_THRESHOLD", "3.2"))
 DUMP_1M_THRESHOLD = float(os.getenv("DUMP_1M_THRESHOLD", "-1.6"))
+DUMP_2M_THRESHOLD = float(os.getenv("DUMP_2M_THRESHOLD", "-2.0"))
 DUMP_5M_THRESHOLD = float(os.getenv("DUMP_5M_THRESHOLD", "-3.2"))
 PUMP_VOLUME_MUL = float(os.getenv("PUMP_VOLUME_MUL", "1.8"))
 COOLDOWN_SEC = 60
@@ -405,6 +407,147 @@ async def scan_pumps_chunk(
     next_idx = end_idx if end_idx < len(symbols) else 0
     if return_stats:
         return results, stats, next_idx
+    return results, stats, next_idx
+
+
+
+
+def calc_momentum_snapshot(
+    klines_1m: list[list[str]] | list[Candle],
+) -> tuple[Dict[str, float] | None, str]:
+    if not isinstance(klines_1m, list) or len(klines_1m) < 6:
+        return None, "fail_short_1m_series"
+
+    if isinstance(klines_1m[0], Candle):
+        closes_1m = [float(k.close) for k in klines_1m]
+        volumes_1m = [float(k.volume) for k in klines_1m]
+    else:
+        closes_1m = [float(k[4]) for k in klines_1m]
+        volumes_1m = [float(k[5]) for k in klines_1m]
+
+    last_price = closes_1m[-1]
+    if last_price < MIN_PRICE_USDT:
+        return None, "fail_min_price"
+
+    price_1m_prev = closes_1m[-2]
+    price_2m_prev = closes_1m[-3]
+    change_1m = (last_price / price_1m_prev - 1) * 100
+    change_2m = (last_price / price_2m_prev - 1) * 100
+
+    volume_5m = sum(volumes_1m[-5:])
+    volume_5m_usdt = volume_5m * last_price
+    if volume_5m_usdt < MIN_VOLUME_5M_USDT:
+        return None, "fail_min_volume_5m_usdt"
+
+    avg_volume_1m = sum(volumes_1m[-6:-1]) / 5
+    if avg_volume_1m <= 0:
+        return None, "fail_avg_volume"
+    volume_mul = volumes_1m[-1] / avg_volume_1m
+    if volume_mul < PUMP_VOLUME_MUL:
+        return None, "fail_volume_mul"
+
+    return {
+        "price": last_price,
+        "change_1m": change_1m,
+        "change_2m": change_2m,
+        "volume_5m_usdt": volume_5m_usdt,
+        "volume_mul": volume_mul,
+    }, "ok"
+def _calc_staged_signal_with_reason(
+    symbol: str,
+    klines_1m: list[list[str]] | list[Candle],
+) -> tuple[Dict[str, Any] | None, str]:
+    snapshot, reason = calc_momentum_snapshot(klines_1m)
+    if not snapshot:
+        return None, reason
+
+    last_price = float(snapshot["price"])
+    change_1m = float(snapshot["change_1m"])
+    change_2m = float(snapshot["change_2m"])
+    volume_5m_usdt = float(snapshot["volume_5m_usdt"])
+    volume_mul = float(snapshot["volume_mul"])
+
+    sig_type = None
+    if change_1m >= PUMP_1M_THRESHOLD:
+        sig_type = "pump"
+    elif change_1m <= DUMP_1M_THRESHOLD:
+        sig_type = "dump"
+    if not sig_type:
+        return None, "fail_no_early_trigger"
+
+    signal = {
+        "symbol": symbol,
+        "price": last_price,
+        "change_1m": round(change_1m, 2),
+        "change_2m": round(change_2m, 2),
+        "change_5m": round(change_2m, 2),
+        "volume_5m_usdt": round(volume_5m_usdt, 2),
+        "volume_mul": round(volume_mul, 2),
+        "type": sig_type,
+        "detected_at": time.time(),
+        "strength": abs(change_2m),
+    }
+    return signal, "ok"
+
+
+async def scan_pumps_chunk_staged(
+    symbols: list[str],
+    *,
+    start_idx: int = 0,
+    batch_size: int = BATCH_SIZE,
+    max_symbols: int = PUMP_CHUNK_SIZE,
+    time_budget_sec: int | None = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+    return_stats: bool = False,
+) -> Tuple[List[Dict[str, Any]], Dict[str, int], int]:
+    results: list[Dict[str, Any]] = []
+    checked = 0
+    fails: dict[str, int] = {}
+    if not symbols:
+        return results, {"checked": 0, "found": 0, "fails": fails}, start_idx
+
+    end_idx = min(start_idx + max_symbols, len(symbols))
+    start_ts = time.time()
+    rate_limit_enabled = PUMP_RATE_LIMIT_ENABLED and PUMP_MAX_SYMBOLS_PER_SEC > 0
+    target_dt = 1.0 / PUMP_MAX_SYMBOLS_PER_SEC if rate_limit_enabled else 0.0
+
+    for i in range(start_idx, end_idx, batch_size):
+        if time_budget_sec is not None and time.time() - start_ts >= time_budget_sec:
+            break
+        batch = symbols[i : i + batch_size]
+        tasks = [
+            asyncio.create_task(get_shared_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT))
+            for symbol in batch
+        ]
+        klines_list = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for symbol, klines in zip(batch, klines_list):
+            if time_budget_sec is not None and time.time() - start_ts >= time_budget_sec:
+                break
+            symbol_start = time.perf_counter()
+            try:
+                if progress_cb:
+                    progress_cb(symbol)
+                checked += 1
+                if isinstance(klines, BaseException) or isinstance(klines, asyncio.CancelledError):
+                    fails["fail_klines_exception"] = fails.get("fail_klines_exception", 0) + 1
+                    continue
+                if klines:
+                    _inc_pump_fallback_direct()
+                signal, reason = _calc_staged_signal_with_reason(symbol, klines if isinstance(klines, list) else [])
+                if signal:
+                    results.append(signal)
+                else:
+                    fails[reason] = fails.get(reason, 0) + 1
+            finally:
+                if rate_limit_enabled:
+                    elapsed = time.perf_counter() - symbol_start
+                    sleep_for = target_dt - elapsed
+                    if sleep_for > 0:
+                        await asyncio.sleep(sleep_for)
+
+    stats = {"checked": checked, "found": len(results), "fails": fails}
+    next_idx = end_idx if end_idx < len(symbols) else 0
     return results, stats, next_idx
 
 
