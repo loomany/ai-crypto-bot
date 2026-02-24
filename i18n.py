@@ -44,14 +44,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "• цели движения\n\n"
             "🔔 Авто-сигналы включаются кнопками ниже."
         ),
-        "ARBITRAGE_TEXT": (
-            "⚡️ Межбиржевой арбитраж (SPOT, 5 бирж)\n\n"
-            "Бот автоматически сканирует Binance, OKX, Bybit, KuCoin и Gate.io по публичным API.\n"
-            "Уведомление приходит только если чистая прибыль (NET) после всех вычетов >= 0.7%.\n\n"
-            "Формула: NET = Gross − комиссии − slippage − перевод/вывод (оценка) − risk buffer.\n"
-            "Анти-спам: cooldown + дедуп одинаковых окон.\n\n"
-            "🔔 Управление уведомлениями кнопками ниже."
-        ),
         "PUMPDUMP_TEXT": (
             "⚡ Pump/Dump — это быстрые алерты о резких движениях цены и объёма.\n\n"
             "Как бот находит импульсы:\n"
@@ -70,7 +62,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "MENU_AI": "🎯 AI-сигналы",
         "MENU_PD": "⚡ Pump / Dump",
-        "MENU_ARB": "⚡️ Межбиржевой арбитраж",
         "MENU_STATS": "📊 Статистика",
         "MENU_SYSTEM": "ℹ️ О системе",
         "MENU_BACK": "◀️ Назад",
@@ -173,8 +164,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "BTN_AI_OFF": "🚫 Отключить AI-уведомления",
         "BTN_PD_ON": "🔔 Включить Pump/Dump-уведомления",
         "BTN_PD_OFF": "🚫 Отключить Pump/Dump-уведомления",
-        "BTN_ARB_ON": "🔔 Включить уведомления",
-        "BTN_ARB_OFF": "🔕 Отключить уведомления",
         "PERIOD_1D": "1 день",
         "PERIOD_7D": "7 дней",
         "PERIOD_30D": "30 дней",
@@ -367,24 +356,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Теперь бот будет присылать алерты при резких движениях рынка."
         ),
         "PD_OFF_OK": "🚫 Pump/Dump уведомления отключены.",
-        "ARB_ON_OK": "✅ Уведомления по межбиржевому арбитражу включены.",
-        "ARB_OFF_OK": "🔕 Уведомления по межбиржевому арбитражу отключены.",
-        "ARB_ALREADY_ON": "Уведомления по арбитражу уже включены.",
-        "ARB_ALREADY_OFF": "Уведомления по арбитражу уже отключены.",
-        "ARB_ALERT_RU": (
-            "⚡️ Межбиржевой арбитраж (NET ≥ {min_net}%)\n"
-            "Монета: {symbol}\n"
-            "BUY: {buy_ex} @ {ask}\n"
-            "SELL: {sell_ex} @ {bid}\n\n"
-            "Gross: {gross}%\n"
-            "− Комиссии (buy+sell): {fees}%\n"
-            "− Slippage: {slippage}%\n"
-            "− Перевод/вывод (оценка): {withdraw}%\n"
-            "− Risk buffer: {risk}%\n\n"
-            "✅ NET: {net}%\n"
-            "⏱ Обновлено: {age}s назад\n\n"
-            "ℹ️ Описание: бот сканирует 5 бирж по публичным API и присылает только когда чистая прибыль ≥ {min_net}%. Значения комиссий/перевода в MVP оценочные (консервативные)."
-        ),
         "NO_ACCESS": "⛔ Нет доступа",
         "SIGNAL_NOT_FOUND": "Сигнал не найден.",
         "CONTACT_ADMIN_BLOCK": (
@@ -996,14 +967,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "• targets\n\n"
             "🔔 Auto-signals are enabled with the buttons below."
         ),
-        "ARBITRAGE_TEXT": (
-            "⚡️ Inter-exchange arbitrage (SPOT, 5 exchanges)\n\n"
-            "The bot scans Binance, OKX, Bybit, KuCoin, and Gate.io via public APIs.\n"
-            "It notifies only when net profit (NET) after all deductions is >= 0.7%.\n\n"
-            "Formula: NET = Gross − fees − slippage − transfer/withdraw (est.) − risk buffer.\n"
-            "Anti-spam: per-user cooldown + dedup for identical windows.\n\n"
-            "🔔 Use buttons below to manage notifications."
-        ),
         "PUMPDUMP_TEXT": (
             "⚡ Pump/Dump are fast alerts about sharp price and volume moves.\n\n"
             "How the bot finds impulses:\n"
@@ -1022,7 +985,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "MENU_AI": "🎯 AI signals",
         "MENU_PD": "⚡ Pump / Dump",
-        "MENU_ARB": "⚡️ Inter-exchange arbitrage",
         "MENU_STATS": "📊 Stats",
         "MENU_SYSTEM": "ℹ️ System",
         "MENU_BACK": "◀️ Back",
@@ -1096,8 +1058,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "BTN_AI_OFF": "🚫 Disable AI notifications",
         "BTN_PD_ON": "🔔 Enable Pump/Dump notifications",
         "BTN_PD_OFF": "🚫 Disable Pump/Dump notifications",
-        "BTN_ARB_ON": "🔔 Enable notifications",
-        "BTN_ARB_OFF": "🔕 Disable notifications",
         "PERIOD_1D": "1 day",
         "PERIOD_7D": "7 days",
         "PERIOD_30D": "30 days",
@@ -1325,24 +1285,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "The bot will now send alerts on sharp market moves."
         ),
         "PD_OFF_OK": "🚫 Pump/Dump notifications disabled.",
-        "ARB_ON_OK": "✅ Inter-exchange arbitrage notifications enabled.",
-        "ARB_OFF_OK": "🔕 Inter-exchange arbitrage notifications disabled.",
-        "ARB_ALREADY_ON": "Arbitrage notifications are already enabled.",
-        "ARB_ALREADY_OFF": "Arbitrage notifications are already disabled.",
-        "ARB_ALERT_EN": (
-            "⚡️ Inter-exchange arbitrage (NET ≥ {min_net}%)\n"
-            "Symbol: {symbol}\n"
-            "BUY: {buy_ex} @ {ask}\n"
-            "SELL: {sell_ex} @ {bid}\n\n"
-            "Gross: {gross}%\n"
-            "− Fees (buy+sell): {fees}%\n"
-            "− Slippage: {slippage}%\n"
-            "− Transfer/withdraw (est.): {withdraw}%\n"
-            "− Risk buffer: {risk}%\n\n"
-            "✅ NET: {net}%\n"
-            "⏱ Updated: {age}s ago\n\n"
-            "ℹ️ Info: the bot scans 5 exchanges via public APIs and notifies only when net profit ≥ {min_net}%. Fees/transfer are conservative estimates in MVP."
-        ),
         "NO_ACCESS": "⛔ Access denied",
         "SIGNAL_NOT_FOUND": "Signal not found.",
         "CONTACT_ADMIN_BLOCK": (

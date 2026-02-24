@@ -52,27 +52,6 @@ def init_db() -> None:
         )
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS arb_notify_settings (
-                user_id INTEGER PRIMARY KEY,
-                enabled INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS arb_sent_log (
-                user_id INTEGER NOT NULL,
-                dedup_key TEXT NOT NULL,
-                sent_at INTEGER NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_arb_sent_log_user_dedup ON arb_sent_log(user_id, dedup_key)"
-        )
-        conn.execute(
-            """
             CREATE TABLE IF NOT EXISTS signal_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts INTEGER NOT NULL,

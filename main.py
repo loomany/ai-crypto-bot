@@ -181,20 +181,11 @@ from keyboards import (
     build_payment_inline_kb,
     build_system_menu_kb,
     pumpdump_inline_kb,
-    arbitrage_inline_kb,
     stats_inline_kb,
     stats_period_inline_kb,
 )
 from settings import SIGNAL_TTL_SECONDS
 from signal_inversion import apply_inversion
-from arb_scanner import ArbScanner
-from arb_db import (
-    can_send_arb_notification,
-    get_arb_notify_enabled,
-    list_arb_enabled_users,
-    record_arb_notification_sent,
-    set_arb_notify_enabled,
-)
 
 logger = logging.getLogger(__name__)
 DEFAULT_LANG = "ru"
@@ -277,19 +268,6 @@ SUB_SOURCE_AI = 2
 SUB_SOURCE_PUMP = 3
 SIGNAL_DELAY_NON_SUB_HOURS = int(os.getenv("SIGNAL_DELAY_NON_SUB_HOURS", "12"))
 PD_ARCHIVE_UNLOCK_DELAY_SEC = 60 * 60
-
-ARB_ENABLED = os.getenv("ARB_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
-ARB_SCAN_INTERVAL_SEC = int(os.getenv("ARB_SCAN_INTERVAL_SEC", "8") or 8)
-ARB_MIN_NET_PCT = float(os.getenv("ARB_MIN_NET_PCT", "0.7") or 0.7)
-ARB_USER_COOLDOWN_SEC = int(os.getenv("ARB_USER_COOLDOWN_SEC", "300") or 300)
-ARB_DEDUP_TTL_SEC = int(os.getenv("ARB_DEDUP_TTL_SEC", "1800") or 1800)
-FEE_TAKER_BUY_PCT = float(os.getenv("FEE_TAKER_BUY_PCT", "0.10") or 0.10)
-FEE_TAKER_SELL_PCT = float(os.getenv("FEE_TAKER_SELL_PCT", "0.10") or 0.10)
-SLIPPAGE_PCT = float(os.getenv("SLIPPAGE_PCT", "0.15") or 0.15)
-WITHDRAW_COST_PCT_EST = float(os.getenv("WITHDRAW_COST_PCT_EST", "0.25") or 0.25)
-RISK_BUFFER_PCT = float(os.getenv("RISK_BUFFER_PCT", "0.15") or 0.15)
-
-_arb_scanner = ArbScanner()
 
 
 def _env_bool(name: str, default: str = "0") -> bool:
@@ -1300,16 +1278,6 @@ async def ai_signals_menu(message: Message):
     )
 
 
-
-
-@dp.message(F.text.in_(i18n.all_labels("MENU_ARB")))
-async def arbitrage_menu(message: Message):
-    lang = _resolve_user_lang(message.chat.id)
-    status = i18n.t(lang, "STATUS_ON") if get_arb_notify_enabled(message.chat.id) else i18n.t(lang, "STATUS_OFF")
-    await message.answer(
-        f"{i18n.t(lang, 'ARBITRAGE_TEXT')}\n\n{i18n.t(lang, 'STATUS_LABEL')}: {status}",
-        reply_markup=arbitrage_inline_kb(lang),
-    )
 @dp.message(F.text.in_(i18n.all_labels("MENU_PD")))
 async def pumpdump_menu(message: Message):
     lang = _resolve_user_lang(message.chat.id)
@@ -3941,40 +3909,6 @@ async def pumpdump_notify_off(callback: CallbackQuery):
         await callback.message.answer(i18n.t(lang, "PD_OFF_OK"))
 
 
-
-
-@dp.callback_query(F.data == "arb_notify_on")
-async def arb_notify_on(callback: CallbackQuery):
-    if callback.from_user is None:
-        return
-    user_id = callback.from_user.id
-    lang = _resolve_user_lang(user_id)
-    if get_arb_notify_enabled(user_id):
-        await callback.answer(i18n.t(lang, "ALREADY_ON"))
-        if callback.message:
-            await callback.message.answer(i18n.t(lang, "ARB_ALREADY_ON"))
-        return
-    set_arb_notify_enabled(user_id, True)
-    await callback.answer()
-    if callback.message:
-        await callback.message.answer(i18n.t(lang, "ARB_ON_OK"))
-
-
-@dp.callback_query(F.data == "arb_notify_off")
-async def arb_notify_off(callback: CallbackQuery):
-    if callback.from_user is None:
-        return
-    user_id = callback.from_user.id
-    lang = _resolve_user_lang(user_id)
-    if not get_arb_notify_enabled(user_id):
-        await callback.answer(i18n.t(lang, "ALREADY_OFF"))
-        if callback.message:
-            await callback.message.answer(i18n.t(lang, "ARB_ALREADY_OFF"))
-        return
-    set_arb_notify_enabled(user_id, False)
-    await callback.answer()
-    if callback.message:
-        await callback.message.answer(i18n.t(lang, "ARB_OFF_OK"))
 @dp.callback_query(F.data.regexp(r"^pump_toggle:-?\d+:\d+$"))
 async def pump_toggle_callback(callback: CallbackQuery):
     if callback.from_user is None or callback.message is None:
@@ -8266,76 +8200,6 @@ async def ai_scan_once() -> None:
         print("[AI] scan_once end")
 
 
-
-
-def _format_arb_alert(lang: str, item: dict, net_pct: float) -> str:
-    tpl = "ARB_ALERT_RU" if lang == "ru" else "ARB_ALERT_EN"
-    return i18n.t(
-        lang,
-        tpl,
-        min_net=f"{ARB_MIN_NET_PCT:.1f}",
-        symbol=item["symbol"],
-        buy_ex=item["buy_exchange"],
-        sell_ex=item["sell_exchange"],
-        ask=f"{item['ask']:.8f}",
-        bid=f"{item['bid']:.8f}",
-        gross=f"{item['gross_pct']:.2f}",
-        fees=f"{(FEE_TAKER_BUY_PCT + FEE_TAKER_SELL_PCT):.2f}",
-        slippage=f"{SLIPPAGE_PCT:.2f}",
-        withdraw=f"{WITHDRAW_COST_PCT_EST:.2f}",
-        risk=f"{RISK_BUFFER_PCT:.2f}",
-        net=f"{net_pct:.2f}",
-        age=str(int(item.get("age_sec", 0) or 0)),
-    )
-
-
-async def arbitrage_scan_once(bot: Bot) -> None:
-    if not ARB_ENABLED:
-        return
-    mark_tick("arbitrage")
-    users = list_arb_enabled_users()
-    if not users:
-        mark_ok("arbitrage", extra="enabled_users=0")
-        return
-
-    opportunities = await _arb_scanner.collect_opportunities()
-    sent = 0
-    for item in opportunities:
-        trading_fees_pct = FEE_TAKER_BUY_PCT + FEE_TAKER_SELL_PCT
-        net_pct = item["gross_pct"] - trading_fees_pct - SLIPPAGE_PCT - WITHDRAW_COST_PCT_EST - RISK_BUFFER_PCT
-        if net_pct < ARB_MIN_NET_PCT:
-            continue
-        rounded_net = f"{net_pct:.2f}"
-        dedup_key = f"{item['symbol']}:{item['buy_exchange']}:{item['sell_exchange']}:{rounded_net}"
-        for user_id in users:
-            if not can_send_arb_notification(
-                user_id,
-                dedup_key,
-                cooldown_sec=ARB_USER_COOLDOWN_SEC,
-                dedup_ttl_sec=ARB_DEDUP_TTL_SEC,
-            ):
-                continue
-            lang = _resolve_user_lang(user_id)
-            text_key_lang = lang if lang in ("ru", "en") else "en"
-            msg = _format_arb_alert(text_key_lang, item, net_pct)
-            try:
-                await bot.send_message(user_id, msg)
-                record_arb_notification_sent(user_id, dedup_key)
-                sent += 1
-            except Exception:
-                logger.exception("[arb] failed send user_id=%s symbol=%s", user_id, item.get("symbol"))
-    mark_ok("arbitrage", extra=f"enabled_users={len(users)} opportunities={len(opportunities)} sent={sent}")
-
-
-async def arbitrage_worker_loop(bot: Bot) -> None:
-    while True:
-        try:
-            await arbitrage_scan_once(bot)
-        except Exception as exc:
-            mark_error("arbitrage", str(exc))
-            logger.exception("[arb] cycle crash: %s", exc)
-        await asyncio.sleep(max(3, ARB_SCAN_INTERVAL_SEC))
-
 # ===== ТОЧКА ВХОДА =====
 
 async def main():
@@ -8364,7 +8228,6 @@ async def main():
         _delayed_task(12, safe_worker_loop("ai_signals", ai_scan_once))
     )
     audit_task = asyncio.create_task(_delayed_task(18, signal_audit_worker_loop()))
-    arb_task = asyncio.create_task(_delayed_task(10, arbitrage_worker_loop(bot)))
     watchdog_task = asyncio.create_task(watchdog())
     try:
         await dp.start_polling(bot)
@@ -8378,9 +8241,6 @@ async def main():
         audit_task.cancel()
         with suppress(asyncio.CancelledError):
             await audit_task
-        arb_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await arb_task
         watchdog_task.cancel()
         with suppress(asyncio.CancelledError):
             await watchdog_task
