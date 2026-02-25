@@ -39,6 +39,35 @@ DEFAULT_BLOCKED_SYMBOLS = {
 
 _spot_cache: dict[str, Any] = {"updated_at": 0.0, "symbols": []}
 _futures_cache: dict[str, Any] = {"updated_at": 0.0, "symbols": []}
+_spot_price_precision_cache: dict[str, int] = {}
+
+
+def _precision_from_tick_size(tick_size_raw: Any) -> int | None:
+    raw = str(tick_size_raw or "").strip()
+    if not raw:
+        return None
+    if "." not in raw:
+        return 0
+    fraction = raw.split(".", 1)[1].rstrip("0")
+    return len(fraction)
+
+
+def get_cached_price_precision(symbol: str) -> int | None:
+    normalized = str(symbol or "").upper().strip()
+    if not normalized:
+        return None
+    return _spot_price_precision_cache.get(normalized)
+
+
+async def get_symbol_price_precision(symbol: str, session: aiohttp.ClientSession | None = None) -> int | None:
+    normalized = str(symbol or "").upper().strip()
+    if not normalized:
+        return None
+    cached = _spot_price_precision_cache.get(normalized)
+    if cached is not None:
+        return cached
+    await get_spot_usdt_symbols(session=session)
+    return _spot_price_precision_cache.get(normalized)
 
 
 def get_blocked_symbols() -> set[str]:
@@ -116,6 +145,13 @@ async def get_spot_usdt_symbols(session: aiohttp.ClientSession | None = None) ->
             symbol = symbol_info.get("symbol")
             if not symbol or not is_tradeable_symbol(symbol):
                 continue
+            precision_value = None
+            for flt in symbol_info.get("filters", []):
+                if flt.get("filterType") == "PRICE_FILTER":
+                    precision_value = _precision_from_tick_size(flt.get("tickSize"))
+                    break
+            if precision_value is not None:
+                _spot_price_precision_cache[symbol] = precision_value
             symbols.append(symbol)
 
     _spot_cache["symbols"] = symbols
