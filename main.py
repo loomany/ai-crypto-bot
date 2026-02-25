@@ -701,11 +701,12 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
 
     symbol_pair = _format_symbol_pair(str(closed.get("symbol") or ""))
 
+    status_label = f"BE (+12%)" if final_status == "BE" else final_status
     lines = [
         _ai_public_header(trade_id),
         "",
         f"{emoji} AI ВЫХОД | x{int(AI_PUBLIC_LEVERAGE)}",
-        f"{symbol_pair} — {final_status}",
+        f"{symbol_pair} — {status_label}",
         f"{coin_yield_label}: {coin_yield_pct:+.2f}%",
     ]
     if final_status == "TP":
