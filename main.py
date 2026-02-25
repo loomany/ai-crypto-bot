@@ -901,6 +901,43 @@ def _public_ai_channel_kb(*, lang: str, chat_id: int, message_id: int, expanded:
     )
 
 
+def _public_ai_channel_lead_kb(*, lang: str) -> InlineKeyboardMarkup:
+    free_url = AI_PUBLIC_FREE_SIGNAL_URL or "https://t.me"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="забрать сигнал бесплатно",
+                    url=free_url,
+                )
+            ]
+        ]
+    )
+
+
+def _format_channel_blurred_ai_signal(signal: Dict[str, Any], lang: str) -> str:
+    score = max(0, min(100, int(signal.get("score", 0) or 0)))
+    symbol_text = _signal_symbol_text(str(signal.get("symbol") or ""))
+    side = "LONG" if str(signal.get("direction") or "").lower() == "long" else "SHORT"
+    scenario_tf = str(signal.get("tf") or signal.get("timeframe") or "1H").strip().upper() or "1H"
+    entry_tf = str(signal.get("entry_tf") or signal.get("confirm_tf") or "5-15m").strip() or "5-15m"
+
+    return "\n".join(
+        [
+            "🔥 Сигнал 90+",
+            "",
+            i18n.t(lang, "SIGNAL_SHORT_SYMBOL_SIDE_LINE", symbol=symbol_text, side=side),
+            i18n.t(lang, "SIGNAL_SHORT_80_89_META_LINE", side=side, timeframe=scenario_tf, entry_tf=entry_tf),
+            f"Score: {score}",
+            "",
+            "POI: ••• – •••",
+            "SL: •••",
+            "TP1: •••",
+            "TP2: •••",
+        ]
+    )
+
+
 def _public_ai_state_cleanup(now_ts: int | None = None) -> None:
     now = int(time.time()) if now_ts is None else int(now_ts)
     expired_keys = [
@@ -960,8 +997,6 @@ async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str =
         return False, "no_channel_id"
 
     score = int(round(float(signal.get("score", 0) or 0)))
-    if score > CHANNEL_FREE_AI_MAX_SCORE:
-        return False, "score_cap"
 
     allow, reason = _channel_take_slot(
         kind="ai",
@@ -970,6 +1005,17 @@ async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str =
     )
     if not allow:
         return False, reason
+
+    if score > CHANNEL_FREE_AI_MAX_SCORE:
+        blurred_text = _format_channel_blurred_ai_signal(signal, lang)
+        await bot.send_message(
+            TELEGRAM_CHANNEL_ID,
+            blurred_text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=_public_ai_channel_lead_kb(lang=lang),
+        )
+        return True, "sent"
 
     collapsed_text, expanded_text = _build_signal_text_variants(signal, lang, is_admin_user=False)
     sent = await bot.send_message(
