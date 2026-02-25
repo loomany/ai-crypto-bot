@@ -34,9 +34,7 @@ from binance_rest import (
     fetch_klines,
 )
 from pump_detector import (
-    DUMP_2M_THRESHOLD,
     MIN_VOLUME_5M_USDT,
-    PUMP_2M_THRESHOLD,
     PUMP_CHUNK_SIZE,
     PUMP_MAX_SYMBOLS_PER_SEC,
     PUMP_RATE_LIMIT_ENABLED,
@@ -45,11 +43,9 @@ from pump_detector import (
     PUMPDUMP_1M_LIMIT,
     PUMPDUMP_5M_INTERVAL,
     PUMPDUMP_5M_LIMIT,
-    calc_momentum_snapshot,
     format_pump_message,
     get_candidate_symbols,
-    get_shared_klines,
-    scan_pumps_chunk_staged,
+    scan_pumps_chunk,
 )
 from signals import (
     scan_market,
@@ -254,9 +250,6 @@ AI_PUBLIC_LEVERAGE = float(os.getenv("AI_PUBLIC_LEVERAGE", "10") or 10)
 PUMP_COOLDOWN_SYMBOL_SEC = int(os.getenv("PUMP_COOLDOWN_SYMBOL_SEC", "86400"))  # 24h
 PUMP_COOLDOWN_GLOBAL_SEC = int(os.getenv("PUMP_COOLDOWN_GLOBAL_SEC", "3600"))  # 1h
 PUMP_DAILY_LIMIT = int(os.getenv("PUMP_DAILY_LIMIT", "6"))
-PUMP_REQUIRE_CONFIRM_2M = os.getenv("PUMP_REQUIRE_CONFIRM_2M", "1").strip().lower() in ("1", "true", "yes", "on")
-PUMP_SEND_EARLY_TO_ADMIN = os.getenv("PUMP_SEND_EARLY_TO_ADMIN", "1").strip().lower() in ("1", "true", "yes", "on")
-PUMP_SEND_CONFIRMED_TO_CHANNEL = os.getenv("PUMP_SEND_CONFIRMED_TO_CHANNEL", "1").strip().lower() in ("1", "true", "yes", "on")
 CHANNEL_FREE_AI_ENABLED = os.getenv("CHANNEL_FREE_AI_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 CHANNEL_FREE_AI_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_AI_DAILY_LIMIT", "2") or 2)
 CHANNEL_FREE_AI_MAX_SCORE = int(os.getenv("CHANNEL_FREE_AI_MAX_SCORE", "89") or 89)
@@ -5216,13 +5209,6 @@ def _format_pump_section(st, now: float, lang: str) -> str:
         details.append(i18n.t(lang, "DIAG_INFLIGHT", count=inflight))
     if ticker_req:
         details.append(i18n.t(lang, "DIAG_TICKER_REQ", count=ticker_req))
-    early_total = extra.get("early_total")
-    confirmed_total = extra.get("confirmed_total")
-    expired_early_total = extra.get("expired_early_total")
-    if early_total is not None or confirmed_total is not None or expired_early_total is not None:
-        details.append(
-            f"• Staged stats: early={early_total or 0} confirmed={confirmed_total or 0} expired={expired_early_total or 0}"
-        )
     return _format_section(i18n.t(lang, "DIAG_SECTION_PUMPDUMP"), status_label, details, lang)
 
 
@@ -7677,18 +7663,6 @@ async def _deliver_pumpdump_signal_stats(
             lang = get_user_lang(chat_id) or "ru"
             collapsed_text = format_pump_message(signal, lang, expanded=False)
             expanded_text = format_pump_message(signal, lang, expanded=True)
-            if str(signal.get("stage") or "") == "confirmed_2m":
-                head = "🚀 PUMP CONFIRMED (2m)" if str(signal.get("type") or "") == "pump" else "🔻 DUMP CONFIRMED (2m)"
-                move_1m = float(signal.get("change_1m") or 0.0)
-                move_2m = float(signal.get("change_2m") or 0.0)
-                confirm_block = (
-                    f"{head}\n"
-                    f"{signal.get('symbol')}\n"
-                    f"Move 1m: {move_1m:+.2f}%\n"
-                    f"Move 2m: {move_2m:+.2f}%\n\n"
-                )
-                collapsed_text = confirm_block + collapsed_text
-                expanded_text = confirm_block + expanded_text
             if prefix_key:
                 prefix_text = i18n.t(lang, prefix_key)
                 collapsed_text = f"{prefix_text}{collapsed_text}"
@@ -7838,41 +7812,6 @@ async def _deliver_pumpdump_signal(
     return stats["sent"] - stats["paywall"], stats["recipient_count"]
 
 
-def _format_early_admin_message(signal: Dict[str, Any]) -> str:
-    side = "PUMP" if signal.get("type") == "pump" else "DUMP"
-    icon = "⚡"
-    move = float(signal.get("change_1m") or 0.0)
-    volx = float(signal.get("volume_mul") or 0.0)
-    return (
-        f"{icon} EARLY {side} 1m\n"
-        f"SYMBOL: {signal.get('symbol')}\n"
-        f"Move: {move:+.2f}%\n"
-        f"Vol x: {volx:.2f}\n"
-        "TTL: 2m confirm"
-    )
-
-
-def _format_confirmed_admin_message(signal: Dict[str, Any]) -> str:
-    side = "PUMP" if signal.get("type") == "pump" else "DUMP"
-    icon = "🚀" if side == "PUMP" else "🔻"
-    move_1m = float(signal.get("change_1m") or 0.0)
-    move_2m = float(signal.get("change_2m") or 0.0)
-    return (
-        f"{icon} {side} CONFIRMED (2m)\n"
-        f"{signal.get('symbol')}\n"
-        f"Move 1m: {move_1m:+.2f}%\n"
-        f"Move 2m: {move_2m:+.2f}%"
-    )
-
-
-async def _send_admin_pd_message(bot: Bot, admin_ids: set[int], text: str) -> None:
-    for chat_id in admin_ids:
-        try:
-            await bot.send_message(chat_id, text)
-        except Exception:
-            continue
-
-
 async def pump_scan_once(bot: Bot) -> None:
     start = time.time()
     BUDGET = 35
@@ -7881,26 +7820,19 @@ async def pump_scan_once(bot: Bot) -> None:
     if not hasattr(pump_scan_once, "state"):
         pump_scan_once.state = {
             "last_sent": {},
-            "early_events": {},
-            "early_count_total": 0,
-            "confirmed_count_total": 0,
-            "expired_early_total": 0,
         }
 
     try:
         state = pump_scan_once.state
 
         subscribers = get_pumpdump_subscribers()
-        admin_ids = {cid for cid in (ADMIN_CHAT_ID, ADMIN_USER_ID) if int(cid or 0) > 0}
-        admin_ids.update(chat_id for chat_id in subscribers if is_admin(chat_id))
-        regular_subscribers = [chat_id for chat_id in subscribers if chat_id not in admin_ids]
 
         if log_level >= 1:
             print(f"[pumpdump] subs: notify={len(subscribers)}")
 
         mark_tick("pumpdump", extra=f"подписчиков: {len(subscribers)}")
 
-        if not subscribers and not admin_ids:
+        if not subscribers:
             if log_level >= 1:
                 print("[pumpdump] no notify subscribers -> skip")
             return
@@ -7988,7 +7920,7 @@ async def pump_scan_once(bot: Bot) -> None:
         cycle_start = time.time()
         try:
             signals, stats, next_cursor = await asyncio.wait_for(
-                scan_pumps_chunk_staged(
+                scan_pumps_chunk(
                     candidates,
                     start_idx=cursor,
                     time_budget_sec=BUDGET,
@@ -8014,7 +7946,7 @@ async def pump_scan_once(bot: Bot) -> None:
                     f"[pumpdump] candidate {s.get('symbol')} "
                     f"type={s.get('type')} "
                     f"1m={s.get('change_1m')}% "
-                    f"2m={s.get('change_2m')}% "
+                    f"5m={s.get('change_5m')}% "
                     f"volx={s.get('volume_mul')}"
                 )
         checked = stats.get("checked", 0)
@@ -8026,90 +7958,28 @@ async def pump_scan_once(bot: Bot) -> None:
             checked_last_cycle=checked,
         )
 
-        now_ts = int(time.time())
-        now_min = int(now_ts // 60)
+        now_min = int(time.time() // 60)
         sent_count = 0
         last_sent: dict[str, int] = state["last_sent"]
-        early_events: dict[str, Dict[str, Any]] = state["early_events"]
 
-        signals_map = {str(sig.get("symbol") or ""): sig for sig in signals if sig.get("symbol")}
-        for symbol, sig in signals_map.items():
-            if symbol in early_events:
-                continue
-            early_events[symbol] = {
-                "status": "early",
-                "ts": now_ts,
-                "type": sig.get("type"),
-                "pct_1m": float(sig.get("change_1m") or 0.0),
-            }
-            state["early_count_total"] = int(state.get("early_count_total", 0) or 0) + 1
-            if PUMP_SEND_EARLY_TO_ADMIN and admin_ids:
-                await _send_admin_pd_message(bot, admin_ids, _format_early_admin_message(sig))
-
-        confirmed_signals: list[Dict[str, Any]] = []
-        expired_symbols: list[str] = []
-        for symbol, early in list(early_events.items()):
-            age_sec = now_ts - int(early.get("ts") or now_ts)
-            if age_sec > 120:
-                expired_symbols.append(symbol)
-                state["expired_early_total"] = int(state.get("expired_early_total", 0) or 0) + 1
-                continue
-            if age_sec < 60 and PUMP_REQUIRE_CONFIRM_2M:
-                continue
-
-            sig = signals_map.get(symbol)
-            if not sig:
-                klines_1m = await get_shared_klines(symbol, PUMPDUMP_1M_INTERVAL, PUMPDUMP_1M_LIMIT)
-                snapshot, _ = calc_momentum_snapshot(klines_1m if isinstance(klines_1m, list) else [])
-                if not snapshot:
-                    continue
-                sig = {
-                    "symbol": symbol,
-                    "type": early.get("type"),
-                    "price": float(snapshot.get("price") or 0.0),
-                    "change_1m": round(float(snapshot.get("change_1m") or 0.0), 2),
-                    "change_2m": round(float(snapshot.get("change_2m") or 0.0), 2),
-                    "change_5m": round(float(snapshot.get("change_2m") or 0.0), 2),
-                    "volume_5m_usdt": round(float(snapshot.get("volume_5m_usdt") or 0.0), 2),
-                    "volume_mul": round(float(snapshot.get("volume_mul") or 0.0), 2),
-                    "detected_at": time.time(),
-                }
-
-            is_pump = str(early.get("type") or "") == "pump"
-            pct_2m = float(sig.get("change_2m") or 0.0)
-            is_confirmed = pct_2m >= PUMP_2M_THRESHOLD if is_pump else pct_2m <= DUMP_2M_THRESHOLD
-            if is_confirmed:
-                sig["change_1m"] = round(float(early.get("pct_1m") or sig.get("change_1m") or 0.0), 2)
-                sig["change_5m"] = round(float(sig.get("change_2m") or 0.0), 2)
-                sig["stage"] = "confirmed_2m"
-                confirmed_signals.append(sig)
-                expired_symbols.append(symbol)
-
-        for symbol in expired_symbols:
-            early_events.pop(symbol, None)
-
-        for sig in confirmed_signals:
+        for sig in signals:
             if time.time() - start > BUDGET:
                 print("[PUMP] budget exceeded, stopping early")
                 break
             symbol = sig["symbol"]
             update_current_symbol("pumpdump", symbol)
+
             if last_sent.get(symbol) == now_min:
                 continue
 
             last_sent[symbol] = now_min
-            state["confirmed_count_total"] = int(state.get("confirmed_count_total", 0) or 0) + 1
-            if admin_ids:
-                await _send_admin_pd_message(bot, admin_ids, _format_confirmed_admin_message(sig))
-            sent_delta = 0
-            if PUMP_SEND_CONFIRMED_TO_CHANNEL and regular_subscribers:
-                sent_delta, _ = await _deliver_pumpdump_signal(
-                    bot=bot,
-                    signal=sig,
-                    symbol=symbol,
-                    subscribers=regular_subscribers,
-                    allow_admin_bypass=False,
-                )
+            sent_delta, _ = await _deliver_pumpdump_signal(
+                bot=bot,
+                signal=sig,
+                symbol=symbol,
+                subscribers=subscribers,
+                allow_admin_bypass=True,
+            )
             sent_count += sent_delta
             if sent_delta > 0:
                 with suppress(Exception):
@@ -8124,7 +7994,7 @@ async def pump_scan_once(bot: Bot) -> None:
                         "symbol": symbol,
                         "ts": int(time.time()),
                         "direction": direction,
-                        "change_5m": sig.get("change_2m"),
+                        "change_5m": sig.get("change_5m"),
                     }
                 )
 
@@ -8162,9 +8032,6 @@ async def pump_scan_once(bot: Bot) -> None:
                 f"klines_limit_1m={PUMPDUMP_1M_LIMIT} "
                 f"klines_limit_5m={PUMPDUMP_5M_LIMIT} "
                 f"ticker_req={ticker_count} fails={fails_str} "
-                f"early_total={state.get('early_count_total', 0)} "
-                f"confirmed_total={state.get('confirmed_count_total', 0)} "
-                f"expired_early_total={state.get('expired_early_total', 0)} "
                 f"rotation={'on' if rotation_enabled else 'off'} "
                 f"rotation_n={rotation_n} rotation_cursor={rotation_cursor}/{rotation_total} "
                 f"rotation_slice={len(rotation_slice)} universe_size={len(symbols)} "
