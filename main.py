@@ -685,12 +685,17 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
     pnl_total = float(closed.get("pnl_usd") or 0.0)
     coin_yield_pct = _ai_public_coin_yield_pct(signal, result, final_status=final_status)
     trade_id = int(closed.get("id") or 0)
+    if final_status == "BE":
+        coin_yield_label = "Макс доходность монеты"
+    else:
+        coin_yield_label = "Доходность монеты"
+
     lines = [
         _ai_public_header(trade_id),
         "",
         f"{emoji} AI ВЫХОД | x{int(AI_PUBLIC_LEVERAGE)}",
         f"{closed['symbol']} — {final_status}",
-        f"Доходность монеты: {coin_yield_pct:+.2f}%",
+        f"{coin_yield_label}: {coin_yield_pct:+.2f}%",
     ]
     if final_status == "TP":
         lines.append(f"PnL остатка (TP1=3R): ${pnl_rest:+.2f}")
