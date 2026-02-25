@@ -255,6 +255,10 @@ CHANNEL_FREE_AI_ENABLED = os.getenv("CHANNEL_FREE_AI_ENABLED", "1").strip().lowe
 CHANNEL_FREE_AI_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_AI_DAILY_LIMIT", "2") or 2)
 CHANNEL_FREE_AI_MAX_SCORE = int(os.getenv("CHANNEL_FREE_AI_MAX_SCORE", "89") or 89)
 CHANNEL_FREE_AI_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_MIN_GAP_SEC", str(5 * 60 * 60)) or 18000)
+CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT = int(
+    os.getenv("CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT", str(CHANNEL_FREE_AI_DAILY_LIMIT)) or CHANNEL_FREE_AI_DAILY_LIMIT
+)
+CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC", "0") or 0)
 CHANNEL_FREE_PD_ENABLED = os.getenv("CHANNEL_FREE_PD_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 CHANNEL_FREE_PD_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_PD_DAILY_LIMIT", "1") or 1)
 SUB_DAYS = 30
@@ -998,16 +1002,21 @@ async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str =
         return False, "no_channel_id"
 
     score = int(round(float(signal.get("score", 0) or 0)))
+    is_blurred = score > CHANNEL_FREE_AI_MAX_SCORE
+
+    slot_kind = "ai_blurred" if is_blurred else "ai"
+    daily_limit = CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT if is_blurred else CHANNEL_FREE_AI_DAILY_LIMIT
+    min_gap_sec = CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC if is_blurred else CHANNEL_FREE_AI_MIN_GAP_SEC
 
     allow, reason = _channel_take_slot(
-        kind="ai",
-        daily_limit=CHANNEL_FREE_AI_DAILY_LIMIT,
-        min_gap_sec=CHANNEL_FREE_AI_MIN_GAP_SEC,
+        kind=slot_kind,
+        daily_limit=daily_limit,
+        min_gap_sec=min_gap_sec,
     )
     if not allow:
         return False, reason
 
-    if score > CHANNEL_FREE_AI_MAX_SCORE:
+    if is_blurred:
         blurred_text = _format_channel_blurred_ai_signal(signal, lang)
         await bot.send_message(
             TELEGRAM_CHANNEL_ID,
