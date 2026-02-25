@@ -1795,50 +1795,14 @@ def _is_true_flag(value: Any) -> bool:
 
 
 def _be_reached_tp(row: dict[str, Any]) -> bool:
+    """Return True only when TP hit flags were explicitly recorded.
+
+    NOTE: ``max_profit_pct`` may reflect leveraged ROI and must not be used
+    to infer raw-price TP hits; otherwise BE closes can be misclassified as TP.
+    """
     tp2_hit = _is_true_flag(row.get("tp2_hit"))
     tp1_hit = _is_true_flag(row.get("tp1_hit"))
-
-    try:
-        max_profit_pct = float(row.get("max_profit_pct") or 0.0)
-    except (TypeError, ValueError):
-        return False
-    if max_profit_pct <= 0:
-        return tp1_hit or tp2_hit
-
-    try:
-        entry_price = float(row.get("entry_price") or 0.0)
-    except (TypeError, ValueError):
-        entry_price = 0.0
-
-    if entry_price <= 0:
-        try:
-            poi_low = float(row.get("poi_low") or 0.0)
-            poi_high = float(row.get("poi_high") or 0.0)
-            if poi_low > 0 and poi_high > 0:
-                entry_price = (poi_low + poi_high) / 2.0
-        except (TypeError, ValueError):
-            entry_price = 0.0
-
-    try:
-        tp1_price = float(row.get("tp1") or 0.0)
-    except (TypeError, ValueError):
-        tp1_price = 0.0
-
-    if entry_price <= 0 or tp1_price <= 0:
-        return tp1_hit or tp2_hit
-
-    side = _signal_side_label(row.get("side"))
-    if side == "SHORT":
-        tp1_target_pct = ((entry_price - tp1_price) / entry_price) * 100.0
-    else:
-        tp1_target_pct = ((tp1_price - entry_price) / entry_price) * 100.0
-
-    if tp1_target_pct <= 0:
-        return tp1_hit or tp2_hit
-
-    # Max profit is the most reliable source for distinguishing BE from TP
-    # in archived rows where historical tp*_hit flags may be inconsistent.
-    return max_profit_pct >= tp1_target_pct
+    return tp1_hit or tp2_hit
 
 
 def _signal_list_status_label(row: dict[str, Any]) -> str:
