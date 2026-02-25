@@ -737,8 +737,35 @@ def increment_pumpdump_daily_count(chat_id: int, date_key: str) -> None:
 
 
 _PUMP_TOGGLE_TTL_SEC = 24 * 60 * 60
+_PUMP_TOGGLE_STATE_KEY_PREFIX = "pump_toggle_state:v1"
+_PUBLIC_AI_TOGGLE_STATE_KEY_PREFIX = "public_ai_toggle_state:v1"
 _PUMP_MESSAGE_STATE: dict[tuple[int, int], dict[str, Any]] = {}
 _PUBLIC_AI_MESSAGE_STATE: dict[tuple[int, int], dict[str, Any]] = {}
+
+
+def _toggle_state_key(prefix: str, chat_id: int, message_id: int) -> str:
+    return f"{prefix}:{int(chat_id)}:{int(message_id)}"
+
+
+def _persist_toggle_state(*, prefix: str, chat_id: int, message_id: int, state: dict[str, Any]) -> None:
+    try:
+        set_state(
+            _toggle_state_key(prefix, chat_id, message_id),
+            json.dumps(state, ensure_ascii=False, separators=(",", ":")),
+        )
+    except Exception as exc:
+        logger.warning("toggle_state_persist_failed key=%s:%s err=%s", chat_id, message_id, exc)
+
+
+def _load_toggle_state(prefix: str, chat_id: int, message_id: int) -> dict[str, Any] | None:
+    raw = get_state(_toggle_state_key(prefix, chat_id, message_id), None)
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _pump_state_cleanup(now_ts: int | None = None) -> None:
@@ -760,7 +787,7 @@ def _save_pump_message_state(
     symbol: str,
 ) -> None:
     _pump_state_cleanup()
-    _PUMP_MESSAGE_STATE[(int(chat_id), int(message_id))] = {
+    state = {
         "ts": int(time.time()),
         "collapsed": collapsed_text,
         "expanded": expanded_text,
@@ -768,13 +795,23 @@ def _save_pump_message_state(
         "lang": lang,
         "symbol": str(symbol or ""),
     }
+    _PUMP_MESSAGE_STATE[(int(chat_id), int(message_id))] = state
+    _persist_toggle_state(
+        prefix=_PUMP_TOGGLE_STATE_KEY_PREFIX,
+        chat_id=chat_id,
+        message_id=message_id,
+        state=state,
+    )
 
 
 def _get_pump_message_state(chat_id: int, message_id: int) -> dict[str, Any] | None:
     _pump_state_cleanup()
     state = _PUMP_MESSAGE_STATE.get((int(chat_id), int(message_id)))
     if state is None:
-        return None
+        state = _load_toggle_state(_PUMP_TOGGLE_STATE_KEY_PREFIX, chat_id, message_id)
+        if state is None:
+            return None
+        _PUMP_MESSAGE_STATE[(int(chat_id), int(message_id))] = state
     if int(time.time()) - int(state.get("ts", 0)) > _PUMP_TOGGLE_TTL_SEC:
         _PUMP_MESSAGE_STATE.pop((int(chat_id), int(message_id)), None)
         return None
@@ -877,7 +914,7 @@ def _save_public_ai_message_state(
     symbol: str,
 ) -> None:
     _public_ai_state_cleanup()
-    _PUBLIC_AI_MESSAGE_STATE[(int(chat_id), int(message_id))] = {
+    state = {
         "ts": int(time.time()),
         "collapsed": collapsed_text,
         "expanded": expanded_text,
@@ -885,13 +922,23 @@ def _save_public_ai_message_state(
         "lang": lang,
         "symbol": str(symbol or ""),
     }
+    _PUBLIC_AI_MESSAGE_STATE[(int(chat_id), int(message_id))] = state
+    _persist_toggle_state(
+        prefix=_PUBLIC_AI_TOGGLE_STATE_KEY_PREFIX,
+        chat_id=chat_id,
+        message_id=message_id,
+        state=state,
+    )
 
 
 def _get_public_ai_message_state(chat_id: int, message_id: int) -> dict[str, Any] | None:
     _public_ai_state_cleanup()
     state = _PUBLIC_AI_MESSAGE_STATE.get((int(chat_id), int(message_id)))
     if state is None:
-        return None
+        state = _load_toggle_state(_PUBLIC_AI_TOGGLE_STATE_KEY_PREFIX, chat_id, message_id)
+        if state is None:
+            return None
+        _PUBLIC_AI_MESSAGE_STATE[(int(chat_id), int(message_id))] = state
     if int(time.time()) - int(state.get("ts", 0)) > _PUMP_TOGGLE_TTL_SEC:
         _PUBLIC_AI_MESSAGE_STATE.pop((int(chat_id), int(message_id)), None)
         return None
@@ -4087,6 +4134,12 @@ async def pump_toggle_callback(callback: CallbackQuery):
 
     state["is_expanded"] = next_expanded
     state["ts"] = int(time.time())
+    _persist_toggle_state(
+        prefix=_PUMP_TOGGLE_STATE_KEY_PREFIX,
+        chat_id=chat_id,
+        message_id=message_id,
+        state=state,
+    )
 
     await callback.message.edit_text(
         next_text,
@@ -4137,6 +4190,12 @@ async def public_ai_toggle_callback(callback: CallbackQuery):
 
     state["is_expanded"] = next_expanded
     state["ts"] = int(time.time())
+    _persist_toggle_state(
+        prefix=_PUBLIC_AI_TOGGLE_STATE_KEY_PREFIX,
+        chat_id=chat_id,
+        message_id=message_id,
+        state=state,
+    )
 
     await callback.message.edit_text(
         next_text,
