@@ -3328,23 +3328,25 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
     status_key = get_signal_status_key(event)
     status_line = _history_status_label(status_key, lang)
     status_with_side_line = f"{status_line} | {side}"
+    header_line = f"📌 {symbol_pair} | Score {score}"
 
     status_raw = _normalize_signal_status(str(event.get("result") or event.get("status") or ""))
     if status_raw == "BE":
         if _be_reached_tp(event):
             status_line = "🟢 TP"
+            status_with_side_line = f"{status_line} | {side}"
         else:
-            status_line = (
-                f"🟢 BE (+{float(event.get('be_level_pct') or 8.0):.0f}%)"
-            )
-        status_with_side_line = f"{status_line} | {side}"
+            be_level = float(event.get("be_level_pct") or 8.0)
+            status_line = f"🟢 BE +{be_level:.0f}% К депозиту | {int(AI_PUBLIC_LEVERAGE)}"
+            header_line = f"📌 {symbol_pair} | {side}"
+            status_with_side_line = status_line
     ttl_hours = max(1, int(round(float(event.get("ttl_minutes", SIGNAL_TTL_SECONDS // 60)) / 60)))
 
     if access_level == "PREVIEW":
         lines = [
             i18n.t(lang, "ARCHIVE_DETAIL_PREVIEW_TITLE"),
             "",
-            f"📌 {symbol_pair} | Score {score}",
+            header_line,
             status_with_side_line,
             f"🕒 {_format_event_time(int(event.get('ts', 0)))}",
             "",
@@ -3364,7 +3366,7 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
 
     breakdown_lines = _signal_breakdown_lines(event, lang)
     lines = [
-        f"📌 {symbol_pair} | Score {score}",
+        header_line,
         status_with_side_line,
         f"🕒 {_format_event_time(int(event.get('ts', 0)))}",
         "",
