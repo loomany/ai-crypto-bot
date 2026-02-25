@@ -1838,6 +1838,57 @@ def _signal_list_status_label(row: dict[str, Any]) -> str:
     return "…"
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_signal_pnl_pct(row: dict[str, Any]) -> float | None:
+    pnl_pct = _safe_float(row.get("pnl_pct"))
+    if pnl_pct is not None:
+        return pnl_pct
+
+    status = _normalize_signal_status(str(row.get("result") or row.get("status") or ""))
+    side = _signal_side_label(row.get("side"))
+    side_mult = 1.0 if side == "LONG" else -1.0
+
+    entry_price = float(row.get("entry_price") or 0.0)
+    if entry_price <= 0:
+        return None
+
+    exit_price = 0.0
+    if status in {"TP", "TP1", "TP2"}:
+        if _is_true_flag(row.get("tp2_hit")):
+            exit_price = float(row.get("tp2") or 0.0)
+        elif _is_true_flag(row.get("tp1_hit")):
+            exit_price = float(row.get("tp1") or 0.0)
+        else:
+            exit_price = float(row.get("tp1") or row.get("tp2") or row.get("exit_price") or 0.0)
+    elif status == "SL":
+        exit_price = float(row.get("exit_price") or row.get("sl") or 0.0)
+    elif status == "BE":
+        exit_price = float(row.get("be_trigger_price") or row.get("entry_price") or row.get("exit_price") or 0.0)
+
+    if exit_price <= 0:
+        return None
+    return ((exit_price - entry_price) / entry_price) * 100.0 * side_mult
+
+
+def _signal_list_status_display(row: dict[str, Any]) -> str:
+    status_label = _signal_list_status_label(row)
+    if status_label == "BE":
+        be_level_pct = float(row.get("be_level_pct") or 8.0)
+        return f"BE (+{be_level_pct:.0f}%)"
+    if status_label not in {"TP", "SL"}:
+        return status_label
+    pnl_pct = _resolve_signal_pnl_pct(row)
+    if pnl_pct is None:
+        return status_label
+    return f"{status_label} ({pnl_pct:+.1f}%)"
+
+
 def _dedupe_signals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     unique: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -2018,7 +2069,7 @@ def _format_history_item(row: dict[str, Any], lang: str, *, access_level: str = 
         score=row.get("score"),
         symbol=row.get("symbol"),
         created_at=row.get("created_at") or row.get("ts"),
-        status_label=_signal_list_status_label(row),
+        status_label=_signal_list_status_display(row),
         access_level=access_level,
     )
 
@@ -3375,6 +3426,9 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
         "",
         i18n.t(lang, "ARCHIVE_DETAIL_LIFETIME", hours=ttl_hours),
     ]
+    pnl_pct = _resolve_signal_pnl_pct(event)
+    if status_raw in {"TP1", "TP2", "TP", "BE", "SL"} and pnl_pct is not None:
+        lines.append(f"📊 PnL: {pnl_pct:+.1f}%")
     max_profit_pct = float(event.get('max_profit_pct') or 0.0)
     if status_raw in {"TP1", "TP2", "TP", "BE", "SL"} and max_profit_pct > 0:
         lines.append(f"📈 Max PnL: +{max_profit_pct:.1f}%")
@@ -3579,7 +3633,7 @@ def _archive_inline_kb(
                         score=event.get("score"),
                         symbol=event.get("symbol"),
                         created_at=event.get("created_at") or event.get("ts"),
-                        status_label=_signal_list_status_label(event),
+                        status_label=_signal_list_status_display(event),
                         access_level=get_event_access_level(viewer_user_id, event),
                     ),
                     callback_data=f"history_open:{event.get('id')}",
