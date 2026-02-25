@@ -693,31 +693,39 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
     )
     if closed is None:
         return False, "trade_not_found"
-    emoji = {"TP": "🟢", "SL": "🔴", "BE": "🟢"}.get(final_status, "ℹ️")
-    pnl_rest = float(closed.get("pnl_rest") or 0.0)
     pnl_total = float(closed.get("pnl_usd") or 0.0)
     trade_roi_pct = float(closed.get("roi_pct") or 0.0)
-    coin_yield_pct = _ai_public_coin_yield_pct(signal, result, final_status=final_status)
     trade_id = int(closed.get("id") or 0)
-    if final_status == "BE":
-        coin_yield_label = "Макс доходность монеты"
-    else:
-        coin_yield_label = "Доходность монеты"
 
-    symbol_pair = _format_symbol_pair(str(closed.get("symbol") or ""))
-
-    status_label = (
-        f"BE (+{max(8.0, be_level_pct):.0f}%)" if final_status == "BE" else final_status
+    message_status = outcome if outcome in {"TP1", "TP2", "BE", "SL"} else (
+        "TP2" if final_status == "TP" else final_status
     )
+    event_payload = {
+        "result": message_status,
+        "status": message_status,
+        "symbol": str(closed.get("symbol") or signal.get("symbol") or ""),
+        "side": str(closed.get("side") or signal.get("direction") or "").upper(),
+        "score": int(signal.get("score") or 0),
+        "entry_price": float(signal.get("entry_price") or 0.0),
+        "poi_low": float(signal.get("entry_from") or signal.get("entry_low") or 0.0),
+        "poi_high": float(signal.get("entry_to") or signal.get("entry_high") or 0.0),
+        "sl": float(signal.get("sl") or 0.0),
+        "tp1": float(signal.get("tp1") or 0.0),
+        "tp2": float(signal.get("tp2") or 0.0),
+        "be_level_pct": float(result.get("be_level_pct") or signal.get("be_level_pct") or 0.0),
+        "be_trigger_price": float(result.get("be_trigger_price") or signal.get("be_trigger_price") or 0.0),
+        "max_profit_pct": float(result.get("max_profit_pct") or signal.get("max_profit_pct") or 0.0),
+    }
+    close_block = _format_short_result_message(event_payload, "ru")
+    if not close_block:
+        return False, "invalid_close_message"
+
     lines = [
         _ai_public_header(trade_id),
         "",
-        f"{emoji} AI ВЫХОД | x{int(AI_PUBLIC_LEVERAGE)}",
-        f"{symbol_pair} — {status_label}",
-        f"{coin_yield_label}: {coin_yield_pct:+.2f}%",
+        close_block,
+        "",
     ]
-    if final_status == "TP":
-        lines.append(f"PnL остатка (TP1=3R): ${pnl_rest:+.2f}")
     lines.append(f"Итого PnL: ${pnl_total:+.2f}")
     lines.append(f"Доходность сделки: {trade_roi_pct:+.2f}%")
     lines.append(f"Баланс: ${_format_usd(float(closed['balance_after']))}")
