@@ -682,9 +682,14 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
     final_status = "TP" if outcome in {"TP1", "TP2"} else outcome
     if final_status not in {"TP", "SL", "BE"}:
         return False, "invalid_final_status"
+    be_level_pct = 0.0
+    if final_status == "BE":
+        be_level_pct = float(result.get("be_level_pct") or signal.get("be_level_pct") or 0.0)
+
     closed = close_ai_public_trade(
         signal_id=signal_id,
         final_status=final_status,
+        be_level_pct=be_level_pct,
     )
     if closed is None:
         return False, "trade_not_found"
@@ -701,7 +706,9 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
 
     symbol_pair = _format_symbol_pair(str(closed.get("symbol") or ""))
 
-    status_label = f"BE (+12%)" if final_status == "BE" else final_status
+    status_label = (
+        f"BE (+{max(8.0, be_level_pct):.0f}%)" if final_status == "BE" else final_status
+    )
     lines = [
         _ai_public_header(trade_id),
         "",

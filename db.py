@@ -401,7 +401,7 @@ def apply_ai_public_partial_fix(*, signal_id: str, be_level_pct: float) -> list[
         conn.close()
 
 
-def close_ai_public_trade(*, signal_id: str, final_status: str) -> dict | None:
+def close_ai_public_trade(*, signal_id: str, final_status: str, be_level_pct: float = 0.0) -> dict | None:
     conn = get_conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -431,9 +431,12 @@ def close_ai_public_trade(*, signal_id: str, final_status: str) -> dict | None:
         if final_status == "SL":
             pnl_total = realized_usd - (risk_usd * (remaining_pct / 100.0))
         elif final_status == "BE":
-            # Channel model requirement: BE closes must still add positive result
-            # (current level is communicated as BE 12%).
-            be_floor_usd = risk_usd * 0.12
+            # Channel model requirement: BE closes should reflect reached BE level
+            # in Telegram channel (8% / 10% / 12%) and stay positive.
+            level = float(be_level_pct or 0.0)
+            if level < 8.0:
+                level = 8.0
+            be_floor_usd = risk_usd * (level / 100.0)
             pnl_total = max(realized_usd, be_floor_usd)
         else:
             pnl_rest = risk_usd * 3.0 * (remaining_pct / 100.0)
