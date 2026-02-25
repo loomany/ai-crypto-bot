@@ -970,6 +970,46 @@ def update_signal_events_status(
         conn.close()
 
 
+def update_signal_events_tp_hits(
+    *,
+    module: str,
+    symbol: str,
+    ts: int,
+    tp1_hit: bool | None = None,
+    tp2_hit: bool | None = None,
+) -> int:
+    """Persist TP touch flags for deduped history/statistics reclassification."""
+    updates: list[str] = []
+    params: list[object] = []
+    if tp1_hit is not None:
+        updates.append("tp1_hit = ?")
+        params.append(1 if tp1_hit else 0)
+    if tp2_hit is not None:
+        updates.append("tp2_hit = ?")
+        params.append(1 if tp2_hit else 0)
+    if not updates:
+        return 0
+
+    updates.append("updated_at = ?")
+    params.append(int(time.time()))
+    params.extend([module, symbol, int(ts)])
+
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            f"""
+            UPDATE signal_events
+            SET {', '.join(updates)}
+            WHERE module = ? AND symbol = ? AND ts = ?
+            """,
+            params,
+        )
+        conn.commit()
+        return cur.rowcount if cur.rowcount is not None else 0
+    finally:
+        conn.close()
+
+
 def update_signal_events_be_tracking(
     *,
     module: str,
