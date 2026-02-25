@@ -683,6 +683,7 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
     emoji = {"TP": "🎯", "SL": "🛑", "BE": "🟦"}.get(final_status, "ℹ️")
     pnl_rest = float(closed.get("pnl_rest") or 0.0)
     pnl_total = float(closed.get("pnl_usd") or 0.0)
+    trade_roi_pct = float(closed.get("roi_pct") or 0.0)
     coin_yield_pct = _ai_public_coin_yield_pct(signal, result, final_status=final_status)
     trade_id = int(closed.get("id") or 0)
     if final_status == "BE":
@@ -700,6 +701,7 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
     if final_status == "TP":
         lines.append(f"PnL остатка (TP1=3R): ${pnl_rest:+.2f}")
     lines.append(f"Итого PnL: ${pnl_total:+.2f}")
+    lines.append(f"Доходность сделки: {trade_roi_pct:+.2f}%")
     lines.append(f"Баланс: ${_format_usd(float(closed['balance_after']))}")
     text = "\n".join(lines)
     return await _ai_public_send_channel_message(text, reply_markup=_ai_public_entry_kb(str(closed.get("symbol") or "")))
