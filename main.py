@@ -547,6 +547,13 @@ async def _ai_public_send_channel_message(
     return ok, reason
 
 
+def _format_symbol_pair(symbol: str) -> str:
+    symbol_raw = str(symbol or "").upper().replace(" ", "")
+    if symbol_raw.endswith("USDT"):
+        return f"{symbol_raw[:-4]}/USDT"
+    return symbol_raw
+
+
 async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
     if not _ai_public_ready():
         return False, "disabled" if not AI_PUBLIC_ENABLED else "no_channel_id"
@@ -569,10 +576,11 @@ async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
     risk_pct = float(state.get("risk_pct") or AI_PUBLIC_RISK_PCT)
     risk_usd = balance * (risk_pct / 100.0)
     class_label = _ai_public_signal_class(score)
+    symbol_pair = _format_symbol_pair(symbol)
     text = (
         f"{_ai_public_header(trade_id)}\n\n"
         f"⚡️ AI ВХОД\n"
-        f"{symbol} | {side}\n\n"
+        f"{symbol_pair} - {side}\n\n"
         f"📊 Оценка сигнала: {score} / 100\n"
         f"⚠️ Класс: {class_label}\n\n"
         f"💼 Вход: {risk_pct:.1f}% риска (${_format_usd(risk_usd)})\n"
@@ -592,6 +600,7 @@ async def _ai_public_on_be_triggered(signal: dict) -> tuple[bool, str]:
     be_level_pct = float(signal.get("be_level_pct") or 0.0)
     if not symbol or not signal_id:
         return False, "invalid_signal"
+    symbol_pair = _format_symbol_pair(symbol)
 
     fix_events = apply_ai_public_partial_fix(
         signal_id=signal_id,
@@ -608,7 +617,7 @@ async def _ai_public_on_be_triggered(signal: dict) -> tuple[bool, str]:
         text = (
             f"{_ai_public_header(trade_id)}\n\n"
             f"🟢 ФИКСАЦИЯ +{level_text}% | x{int(AI_PUBLIC_LEVERAGE)}\n"
-            f"{symbol} | {side}\n"
+            f"{symbol_pair} - {side}\n"
             f"Закрыто {'ещё ' if level >= 10.0 else ''}{closed_pct:.0f}% позиции\n"
             f"PnL: +${_format_usd(delta_usd)}\n"
             f"Баланс: ${_format_usd(balance_preview)}\n"
@@ -690,11 +699,7 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
     else:
         coin_yield_label = "Доходность монеты"
 
-    symbol_raw = str(closed.get("symbol") or "").upper().replace(" ", "")
-    if symbol_raw.endswith("USDT"):
-        symbol_pair = f"{symbol_raw[:-4]}/USDT"
-    else:
-        symbol_pair = symbol_raw
+    symbol_pair = _format_symbol_pair(str(closed.get("symbol") or ""))
 
     lines = [
         _ai_public_header(trade_id),
