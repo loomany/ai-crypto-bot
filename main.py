@@ -568,7 +568,7 @@ async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
     text = (
         f"{_ai_public_header(trade_id)}\n\n"
         f"⚡️ AI ВХОД\n"
-        f"{symbol} — {side}\n\n"
+        f"{symbol} | {side}\n\n"
         f"📊 Оценка сигнала: {score} / 100\n"
         f"⚠️ Класс: {class_label}\n\n"
         f"💼 Вход: {risk_pct:.1f}% риска (${_format_usd(risk_usd)})\n"
@@ -604,7 +604,7 @@ async def _ai_public_on_be_triggered(signal: dict) -> tuple[bool, str]:
         text = (
             f"{_ai_public_header(trade_id)}\n\n"
             f"🟢 ФИКСАЦИЯ +{level_text}% | x{int(AI_PUBLIC_LEVERAGE)}\n"
-            f"{symbol} — {side}\n"
+            f"{symbol} | {side}\n"
             f"Закрыто {'ещё ' if level >= 10.0 else ''}{closed_pct:.0f}% позиции\n"
             f"PnL: +${_format_usd(delta_usd)}\n"
             f"Баланс: ${_format_usd(balance_preview)}\n"
