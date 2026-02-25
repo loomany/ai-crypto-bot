@@ -2468,6 +2468,8 @@ def _status_toggle_inline_kb(*, lang: str, score: int, enabled: bool) -> InlineK
 def _format_short_result_message(event: dict, lang: str) -> str | None:
     status_raw = str(event.get("result") or event.get("status") or "OPEN")
     status = _normalize_signal_status(status_raw)
+    if status == "BE" and _be_reached_tp(event):
+        status = "TP2" if _is_true_flag(event.get("tp2_hit")) else "TP1"
     symbol = ui_symbol(str(event.get("symbol", "")).upper())
     side = str(event.get("side", "")).upper()
     score = int(event.get("score", 0))
