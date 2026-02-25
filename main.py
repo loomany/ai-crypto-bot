@@ -674,7 +674,7 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
     )
     if closed is None:
         return False, "trade_not_found"
-    emoji = {"TP": "🎯", "SL": "🛑", "BE": "🟦"}.get(final_status, "ℹ️")
+    emoji = {"TP": "🟢", "SL": "🔴", "BE": "🟢"}.get(final_status, "ℹ️")
     pnl_rest = float(closed.get("pnl_rest") or 0.0)
     pnl_total = float(closed.get("pnl_usd") or 0.0)
     trade_roi_pct = float(closed.get("roi_pct") or 0.0)
@@ -685,11 +685,17 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
     else:
         coin_yield_label = "Доходность монеты"
 
+    symbol_raw = str(closed.get("symbol") or "").upper().replace(" ", "")
+    if symbol_raw.endswith("USDT"):
+        symbol_pair = f"{symbol_raw[:-4]}/USDT"
+    else:
+        symbol_pair = symbol_raw
+
     lines = [
         _ai_public_header(trade_id),
         "",
         f"{emoji} AI ВЫХОД | x{int(AI_PUBLIC_LEVERAGE)}",
-        f"{closed['symbol']} — {final_status}",
+        f"{symbol_pair} — {final_status}",
         f"{coin_yield_label}: {coin_yield_pct:+.2f}%",
     ]
     if final_status == "TP":
