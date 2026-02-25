@@ -70,6 +70,7 @@ from symbol_cache import (
     get_all_usdt_symbols,
     get_blocked_symbols,
     get_top_usdt_symbols_by_volume,
+    get_cached_price_precision,
 )
 from health import (
     MODULES,
@@ -2344,12 +2345,12 @@ def _price_precision(value: float, *, min_decimals: int = 4, max_decimals: int =
     return decimals
 
 
-def _format_price(value: float) -> str:
+def _format_price(value: float, precision: int | None = None) -> str:
     if value == 0:
         return "0"
     if abs(value) >= 100:
         return f"{value:,.2f}".replace(",", " ")
-    decimals = _price_precision(value)
+    decimals = int(precision) if precision is not None else _price_precision(value)
     return f"{value:.{decimals}f}"
 
 
@@ -6709,7 +6710,9 @@ def _format_signal(signal: Dict[str, Any], lang: str) -> str:
 
     signal_levels = [entry_low, entry_high, float(signal["sl"]), float(signal["tp1"]), float(signal["tp2"])]
     price_levels_non_zero = [float(level) for level in signal_levels if float(level) > 0]
-    price_precision = max((_price_precision(level) for level in price_levels_non_zero), default=4)
+    symbol_precision = get_cached_price_precision(symbol)
+    fallback_precision = max((_price_precision(level) for level in price_levels_non_zero), default=4)
+    price_precision = symbol_precision if symbol_precision is not None else fallback_precision
 
     text = format_scenario_message(
         lang=lang,
@@ -6747,6 +6750,8 @@ def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
     entry_low, entry_high = signal.get("entry_zone", (0.0, 0.0))
     scenario_tf = str(signal.get("tf") or signal.get("timeframe") or "1H").strip().upper() or "1H"
     entry_tf = str(signal.get("entry_tf") or signal.get("confirm_tf") or "5-15m").strip() or "5-15m"
+    symbol = str(signal.get("symbol") or "")
+    compact_price_precision = get_cached_price_precision(symbol)
 
     if score >= 90:
         header = i18n.t(lang, "SIGNAL_QUALITY_RECOMMENDED")
@@ -6760,10 +6765,10 @@ def _format_compact_signal(signal: Dict[str, Any], lang: str) -> str:
         "",
         i18n.t(lang, "SIGNAL_SHORT_SYMBOL_SIDE_LINE", symbol=symbol_text, side=side),
         i18n.t(lang, "SIGNAL_SHORT_80_89_META_LINE", side=side, timeframe=scenario_tf, entry_tf=entry_tf),
-        f"POI: {_format_price(float(entry_low or 0.0))}–{_format_price(float(entry_high or 0.0))}",
-        f"SL: {_format_price(float(signal.get('sl') or 0.0))}",
-        f"TP1: {_format_price(float(signal.get('tp1') or 0.0))}",
-        f"TP2: {_format_price(float(signal.get('tp2') or 0.0))}",
+        f"POI: {_format_price(float(entry_low or 0.0), precision=compact_price_precision)}–{_format_price(float(entry_high or 0.0), precision=compact_price_precision)}",
+        f"SL: {_format_price(float(signal.get('sl') or 0.0), precision=compact_price_precision)}",
+        f"TP1: {_format_price(float(signal.get('tp1') or 0.0), precision=compact_price_precision)}",
+        f"TP2: {_format_price(float(signal.get('tp2') or 0.0), precision=compact_price_precision)}",
         f"Score: {score}",
         i18n.t(lang, "SIGNAL_SHORT_80_89_TTL_LINE", minutes=max(1, int(signal.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60))),
     ]
