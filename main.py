@@ -254,13 +254,14 @@ PUMP_DAILY_LIMIT = int(os.getenv("PUMP_DAILY_LIMIT", "6"))
 CHANNEL_FREE_AI_ENABLED = os.getenv("CHANNEL_FREE_AI_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 CHANNEL_FREE_AI_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_AI_DAILY_LIMIT", "2") or 2)
 CHANNEL_FREE_AI_MAX_SCORE = int(os.getenv("CHANNEL_FREE_AI_MAX_SCORE", "89") or 89)
-CHANNEL_FREE_AI_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_MIN_GAP_SEC", str(5 * 60 * 60)) or 18000)
+CHANNEL_FREE_AI_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_MIN_GAP_SEC", str(6 * 60 * 60)) or 21600)
 CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT = int(
     os.getenv("CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT", str(CHANNEL_FREE_AI_DAILY_LIMIT)) or CHANNEL_FREE_AI_DAILY_LIMIT
 )
 CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC", "0") or 0)
 CHANNEL_FREE_PD_ENABLED = os.getenv("CHANNEL_FREE_PD_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 CHANNEL_FREE_PD_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_PD_DAILY_LIMIT", "1") or 1)
+CHANNEL_FREE_PD_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_PD_MIN_GAP_SEC", str(24 * 60 * 60)) or 86400)
 SUB_DAYS = 30
 SUB_PRICE_USD = 39
 PAY_WALLET_TRX = "TGnSveNVrBHytZyA5AfqAj3hDK3FbFCtBY"
@@ -1092,7 +1093,11 @@ async def _send_free_pumpdump_to_channel(signal: Dict[str, Any], *, symbol: str,
     if TELEGRAM_CHANNEL_ID == 0:
         return False, "no_channel_id"
 
-    allow, reason = _channel_take_slot(kind="pump", daily_limit=CHANNEL_FREE_PD_DAILY_LIMIT, min_gap_sec=0)
+    allow, reason = _channel_take_slot(
+        kind="pump",
+        daily_limit=CHANNEL_FREE_PD_DAILY_LIMIT,
+        min_gap_sec=CHANNEL_FREE_PD_MIN_GAP_SEC,
+    )
     if not allow:
         return False, reason
 
@@ -8186,8 +8191,9 @@ async def ai_scan_once() -> None:
                 await send_signal_to_all(signal)
                 with suppress(Exception):
                     ok_channel, reason_channel = await _send_free_ai_signal_to_channel(signal, lang="ru")
+                    channel_score = int(round(float(signal.get("score", 0) or 0)))
                     if ok_channel:
-                        logger.info("[channel_free] ai sent symbol=%s score=%s", signal.get("symbol"), score)
+                        logger.info("[channel_free] ai sent symbol=%s score=%s", signal.get("symbol"), channel_score)
                     else:
                         logger.info("[channel_free] ai skipped symbol=%s reason=%s", signal.get("symbol"), reason_channel)
                 meta = signal.get("meta") if isinstance(signal, dict) else None
@@ -8411,6 +8417,12 @@ async def ai_scan_once() -> None:
                 update_current_symbol("ai_signals", signal.get("symbol", ""))
                 print(f"[ai_signals] DIRECT SEND {signal['symbol']} {signal['direction']} score={score} confirm_strict={bool(signal.get('confirm_strict', False))}")
                 await send_signal_to_all(signal)
+                with suppress(Exception):
+                    ok_channel, reason_channel = await _send_free_ai_signal_to_channel(signal, lang="ru")
+                    if ok_channel:
+                        logger.info("[channel_free] ai sent symbol=%s score=%s", signal.get("symbol"), score)
+                    else:
+                        logger.info("[channel_free] ai skipped symbol=%s reason=%s", signal.get("symbol"), reason_channel)
                 meta = signal.get("meta") if isinstance(signal, dict) else None
                 setup_id = meta.get("setup_id") if isinstance(meta, dict) else None
                 if setup_id:
