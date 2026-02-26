@@ -1113,48 +1113,48 @@ async def _send_free_pumpdump_to_channel(signal: Dict[str, Any], *, symbol: str,
     if TELEGRAM_CHANNEL_ID == 0:
         return False, "no_channel_id"
 
-    allow, reason = _channel_take_slot(
-        kind="pump",
-        daily_limit=CHANNEL_FREE_PD_DAILY_LIMIT,
-        min_gap_sec=CHANNEL_FREE_PD_MIN_GAP_SEC,
+    allow_unblurred, reason = _channel_take_slot(
+        kind="pump_unblurred",
+        daily_limit=1,
+        min_gap_sec=24 * 60 * 60,
     )
-    if not allow:
-        blurred_text = _format_channel_blurred_pumpdump_signal(signal, symbol=symbol, lang=lang)
-        await bot.send_message(
-            TELEGRAM_CHANNEL_ID,
-            blurred_text,
-            parse_mode="Markdown",
-            reply_markup=_public_ai_channel_lead_kb(lang=lang),
-        )
-        return True, f"sent_blurred:{reason}"
 
-    collapsed_text = format_pump_message(signal, lang, expanded=False)
-    expanded_text = format_pump_message(signal, lang, expanded=True)
-    sent = await bot.send_message(
-        TELEGRAM_CHANNEL_ID,
-        collapsed_text,
-        parse_mode="Markdown",
-    )
-    _save_pump_message_state(
-        chat_id=TELEGRAM_CHANNEL_ID,
-        message_id=int(sent.message_id),
-        collapsed_text=collapsed_text,
-        expanded_text=expanded_text,
-        lang=lang,
-        symbol=symbol,
-    )
-    await bot.edit_message_reply_markup(
-        chat_id=TELEGRAM_CHANNEL_ID,
-        message_id=int(sent.message_id),
-        reply_markup=_pump_toggle_inline_kb(
-            lang=lang,
+    if allow_unblurred:
+        collapsed_text = format_pump_message(signal, lang, expanded=False)
+        expanded_text = format_pump_message(signal, lang, expanded=True)
+        sent = await bot.send_message(
+            TELEGRAM_CHANNEL_ID,
+            collapsed_text,
+            parse_mode="Markdown",
+        )
+        _save_pump_message_state(
             chat_id=TELEGRAM_CHANNEL_ID,
             message_id=int(sent.message_id),
-            expanded=False,
+            collapsed_text=collapsed_text,
+            expanded_text=expanded_text,
+            lang=lang,
             symbol=symbol,
-        ),
+        )
+        await bot.edit_message_reply_markup(
+            chat_id=TELEGRAM_CHANNEL_ID,
+            message_id=int(sent.message_id),
+            reply_markup=_pump_toggle_inline_kb(
+                lang=lang,
+                chat_id=TELEGRAM_CHANNEL_ID,
+                message_id=int(sent.message_id),
+                expanded=False,
+                symbol=symbol,
+            ),
+        )
+        return True, "sent_unblurred"
+
+    blurred_text = _format_channel_blurred_pumpdump_signal(signal, symbol=symbol, lang=lang)
+    await bot.send_message(
+        TELEGRAM_CHANNEL_ID,
+        blurred_text,
+        reply_markup=_public_ai_channel_lead_kb(lang=lang),
     )
-    return True, "sent"
+    return True, f"sent_blurred:{reason}"
 
 
 def _clean_lang(lang: str | None) -> str | None:
@@ -7995,12 +7995,14 @@ async def pump_scan_once(bot: Bot) -> None:
                 allow_admin_bypass=True,
             )
             sent_count += sent_delta
-            with suppress(Exception):
+            try:
                 ok_channel, reason_channel = await _send_free_pumpdump_to_channel(sig, symbol=symbol, lang="ru")
                 if ok_channel:
                     logger.info("[channel_free] pump sent symbol=%s", symbol)
                 else:
                     logger.info("[channel_free] pump skipped symbol=%s reason=%s", symbol, reason_channel)
+            except Exception:
+                logger.exception("[channel_free] pump send failed symbol=%s", symbol)
 
             if sent_delta > 0:
                 direction = "PUMP" if sig.get("type") == "pump" else "DUMP"
