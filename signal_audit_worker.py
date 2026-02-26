@@ -18,7 +18,6 @@ from db import (
     mark_signal_events_be_finalised,
     update_signal_events_be_tracking,
     update_signal_events_status,
-    update_signal_events_tp_hits,
 )
 from signal_audit_db import (
     claim_signal_notification,
@@ -544,12 +543,6 @@ async def evaluate_open_signals(
                         ts=ts_value,
                         status="TP1",
                     )
-                    update_signal_events_tp_hits(
-                        module=module,
-                        symbol=symbol,
-                        ts=ts_value,
-                        tp1_hit=True,
-                    )
                 continue
 
             logger.info(
@@ -595,14 +588,6 @@ async def evaluate_open_signals(
                 module = str(signal.get("module", ""))
                 symbol = str(signal.get("symbol", ""))
                 ts_value = int(signal.get("sent_at", 0))
-                if status_value in {"TP1", "TP2"}:
-                    update_signal_events_tp_hits(
-                        module=module,
-                        symbol=symbol,
-                        ts=ts_value,
-                        tp1_hit=True,
-                        tp2_hit=(status_value == "TP2"),
-                    )
                 if status_value == "BE":
                     mark_be_finalised(str(signal["signal_id"]))
                     mark_signal_events_be_finalised(module=module, symbol=symbol, ts=ts_value)
