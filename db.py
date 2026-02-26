@@ -42,12 +42,8 @@ def _recalculate_tp_zone_archive(conn: sqlite3.Connection) -> None:
                     WHEN COALESCE(tp2_hit, 0) = 1 THEN 'TP2'
                     ELSE 'TP1'
                 END
-            END,
-            final_status = CASE
-                WHEN COALESCE(tp2_hit, 0) = 1 THEN 'TP2'
-                ELSE 'TP1'
             END
-        WHERE (COALESCE(tp1_hit, 0) = 1 OR COALESCE(tp2_hit, 0) = 1)
+        WHERE COALESCE(tp1_hit, 0) = 1
           AND COALESCE(result, status, '') NOT IN ('TP1', 'TP2');
         """
     )
