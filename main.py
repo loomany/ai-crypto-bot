@@ -254,13 +254,14 @@ PUMP_DAILY_LIMIT = int(os.getenv("PUMP_DAILY_LIMIT", "6"))
 CHANNEL_FREE_AI_ENABLED = os.getenv("CHANNEL_FREE_AI_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 CHANNEL_FREE_AI_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_AI_DAILY_LIMIT", "2") or 2)
 CHANNEL_FREE_AI_MAX_SCORE = int(os.getenv("CHANNEL_FREE_AI_MAX_SCORE", "89") or 89)
-CHANNEL_FREE_AI_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_MIN_GAP_SEC", str(5 * 60 * 60)) or 18000)
+CHANNEL_FREE_AI_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_MIN_GAP_SEC", str(6 * 60 * 60)) or 21600)
 CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT = int(
     os.getenv("CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT", str(CHANNEL_FREE_AI_DAILY_LIMIT)) or CHANNEL_FREE_AI_DAILY_LIMIT
 )
 CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC", "0") or 0)
 CHANNEL_FREE_PD_ENABLED = os.getenv("CHANNEL_FREE_PD_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 CHANNEL_FREE_PD_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_PD_DAILY_LIMIT", "1") or 1)
+CHANNEL_FREE_PD_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_PD_MIN_GAP_SEC", str(24 * 60 * 60)) or 86400)
 SUB_DAYS = 30
 SUB_PRICE_USD = 39
 PAY_WALLET_TRX = "TGnSveNVrBHytZyA5AfqAj3hDK3FbFCtBY"
@@ -1092,7 +1093,11 @@ async def _send_free_pumpdump_to_channel(signal: Dict[str, Any], *, symbol: str,
     if TELEGRAM_CHANNEL_ID == 0:
         return False, "no_channel_id"
 
-    allow, reason = _channel_take_slot(kind="pump", daily_limit=CHANNEL_FREE_PD_DAILY_LIMIT, min_gap_sec=0)
+    allow, reason = _channel_take_slot(
+        kind="pump",
+        daily_limit=CHANNEL_FREE_PD_DAILY_LIMIT,
+        min_gap_sec=CHANNEL_FREE_PD_MIN_GAP_SEC,
+    )
     if not allow:
         return False, reason
 
