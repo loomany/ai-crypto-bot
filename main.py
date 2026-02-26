@@ -700,6 +700,11 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
     message_status = outcome if outcome in {"TP1", "TP2", "BE", "SL"} else (
         "TP2" if final_status == "TP" else final_status
     )
+    tp1_hit = bool(result.get("tp1_hit") or signal.get("tp1_hit"))
+    tp2_hit = bool(result.get("tp2_hit") or signal.get("tp2_hit"))
+    if message_status == "BE" and (tp1_hit or tp2_hit):
+        message_status = "TP2" if tp2_hit else "TP1"
+
     event_payload = {
         "result": message_status,
         "status": message_status,
@@ -715,6 +720,8 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
         "be_level_pct": float(result.get("be_level_pct") or signal.get("be_level_pct") or 0.0),
         "be_trigger_price": float(result.get("be_trigger_price") or signal.get("be_trigger_price") or 0.0),
         "max_profit_pct": float(result.get("max_profit_pct") or signal.get("max_profit_pct") or 0.0),
+        "tp1_hit": tp1_hit,
+        "tp2_hit": tp2_hit,
     }
     close_block = _format_short_result_message(event_payload, "ru")
     if not close_block:
