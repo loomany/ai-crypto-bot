@@ -700,6 +700,11 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
     message_status = outcome if outcome in {"TP1", "TP2", "BE", "SL"} else (
         "TP2" if final_status == "TP" else final_status
     )
+    tp1_hit = bool(result.get("tp1_hit") or signal.get("tp1_hit"))
+    tp2_hit = bool(result.get("tp2_hit") or signal.get("tp2_hit"))
+    if message_status == "BE" and (tp1_hit or tp2_hit):
+        message_status = "TP2" if tp2_hit else "TP1"
+
     event_payload = {
         "result": message_status,
         "status": message_status,
@@ -715,6 +720,8 @@ async def _ai_public_on_final_close(signal: dict, result: dict) -> tuple[bool, s
         "be_level_pct": float(result.get("be_level_pct") or signal.get("be_level_pct") or 0.0),
         "be_trigger_price": float(result.get("be_trigger_price") or signal.get("be_trigger_price") or 0.0),
         "max_profit_pct": float(result.get("max_profit_pct") or signal.get("max_profit_pct") or 0.0),
+        "tp1_hit": tp1_hit,
+        "tp2_hit": tp2_hit,
     }
     close_block = _format_short_result_message(event_payload, "ru")
     if not close_block:
@@ -1810,11 +1817,11 @@ def _is_true_flag(value: Any) -> bool:
     return False
 
 
-def _be_reached_tp(row: dict[str, Any]) -> bool:
+def _tp_zone_reached(row: dict[str, Any]) -> bool:
     """Return True only when TP hit flags were explicitly recorded.
 
     NOTE: ``max_profit_pct`` may reflect leveraged ROI and must not be used
-    to infer raw-price TP hits; otherwise BE closes can be misclassified as TP.
+    to infer raw-price TP hits.
     """
     tp2_hit = _is_true_flag(row.get("tp2_hit"))
     tp1_hit = _is_true_flag(row.get("tp1_hit"))
@@ -1825,11 +1832,11 @@ def _signal_list_status_label(row: dict[str, Any]) -> str:
     normalized = _normalize_signal_status(str(row.get("result") or row.get("status") or ""))
     if normalized in {"TP1", "TP2", "TP"}:
         return "TP"
+    if _tp_zone_reached(row):
+        # Any signal that entered TP zone must be reported as TP in archive
+        # even if later state changed to BE or SL.
+        return "TP"
     if normalized == "BE":
-        if _be_reached_tp(row):
-            # BE after TP1/TP2 is counted as TP in summary stats,
-            # keep list label consistent with aggregate block.
-            return "TP"
         return "BE"
     if normalized == "SL":
         return "SL"
@@ -2448,7 +2455,7 @@ def _status_toggle_inline_kb(*, lang: str, score: int, enabled: bool) -> InlineK
 def _format_short_result_message(event: dict, lang: str) -> str | None:
     status_raw = str(event.get("result") or event.get("status") or "OPEN")
     status = _normalize_signal_status(status_raw)
-    if status == "BE" and _be_reached_tp(event):
+    if status == "BE" and _tp_zone_reached(event):
         status = "TP2" if _is_true_flag(event.get("tp2_hit")) else "TP1"
     symbol = ui_symbol(str(event.get("symbol", "")).upper())
     side = str(event.get("side", "")).upper()
@@ -3332,7 +3339,7 @@ def _format_archive_detail(event: dict, lang: str, *, access_level: str) -> str:
 
     status_raw = _normalize_signal_status(str(event.get("result") or event.get("status") or ""))
     if status_raw == "BE":
-        if _be_reached_tp(event):
+        if _tp_zone_reached(event):
             status_line = "🟢 TP"
             status_with_side_line = f"{status_line} | {side}"
         else:

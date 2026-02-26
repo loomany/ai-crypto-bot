@@ -326,6 +326,19 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
                 "be_level_pct": be_level_pct,
             }
 
+        if sl_hit and tp1_hit:
+            return {
+                "outcome": "TP1",
+                "pnl_r": tp1_r,
+                "filled_at": filled_at,
+                "notes": "tp_zone_reached_before_sl",
+                "max_profit_pct": max_profit_pct,
+                "be_triggered": be_triggered,
+                "be_trigger_price": be_trigger_price,
+                "be_trigger_event": be_trigger_event,
+                "be_level_pct": be_level_pct,
+            }
+
         if be_triggered and not tp1_hit and sl_hit:
             return {
                 "outcome": "BE",
@@ -343,19 +356,6 @@ def _evaluate_signal(signal: Dict[str, Any], candles: list[Dict[str, float]]) ->
             return {
                 "outcome": "SL",
                 "pnl_r": -1.0,
-                "filled_at": filled_at,
-                "notes": None,
-                "max_profit_pct": max_profit_pct,
-                "be_triggered": be_triggered,
-                "be_trigger_price": be_trigger_price,
-                "be_trigger_event": be_trigger_event,
-                "be_level_pct": be_level_pct,
-            }
-
-        if tp1_hit and be_hit:
-            return {
-                "outcome": "BE",
-                "pnl_r": 0.5 * tp1_r,
                 "filled_at": filled_at,
                 "notes": None,
                 "max_profit_pct": max_profit_pct,
