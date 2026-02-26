@@ -7995,13 +7995,14 @@ async def pump_scan_once(bot: Bot) -> None:
                 allow_admin_bypass=True,
             )
             sent_count += sent_delta
+            with suppress(Exception):
+                ok_channel, reason_channel = await _send_free_pumpdump_to_channel(sig, symbol=symbol, lang="ru")
+                if ok_channel:
+                    logger.info("[channel_free] pump sent symbol=%s", symbol)
+                else:
+                    logger.info("[channel_free] pump skipped symbol=%s reason=%s", symbol, reason_channel)
+
             if sent_delta > 0:
-                with suppress(Exception):
-                    ok_channel, reason_channel = await _send_free_pumpdump_to_channel(sig, symbol=symbol, lang="ru")
-                    if ok_channel:
-                        logger.info("[channel_free] pump sent symbol=%s", symbol)
-                    else:
-                        logger.info("[channel_free] pump skipped symbol=%s reason=%s", symbol, reason_channel)
                 direction = "PUMP" if sig.get("type") == "pump" else "DUMP"
                 set_last_pumpdump_signal(
                     {
