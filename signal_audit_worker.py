@@ -176,6 +176,17 @@ def _find_activation_from_candles(signal: Dict[str, Any], candles: list[Dict[str
     return None
 
 
+def _find_poi_touch_ts(signal: Dict[str, Any], candles: list[Dict[str, float]]) -> int | None:
+    if not candles:
+        return None
+    poi_from = min(float(signal["entry_from"]), float(signal["entry_to"]))
+    poi_to = max(float(signal["entry_from"]), float(signal["entry_to"]))
+    for candle in candles:
+        if _entry_filled(candle, poi_from, poi_to):
+            return int(candle["open_time"] / 1000)
+    return None
+
+
 def _check_hits(
     candle: Dict[str, float],
     direction: str,
@@ -437,18 +448,17 @@ async def evaluate_open_signals(
                 continue
 
             if state == "WAITING_ENTRY":
-                last_price = float(candles[-1]["close"])
-                if _price_inside_poi(last_price, float(signal["entry_from"]), float(signal["entry_to"])):
-                    touched_at = int(time.time())
+                touched_at = _find_poi_touch_ts(signal, candles)
+                if touched_at is not None:
                     marked = mark_signal_state(
                         str(signal["signal_id"]),
                         from_states=("WAITING_ENTRY",),
                         to_state="POI_TOUCHED",
-                        poi_touched_at=touched_at,
+                        poi_touched_at=int(touched_at),
                     )
                     if marked > 0:
                         signal["state"] = "POI_TOUCHED"
-                        signal["poi_touched_at"] = touched_at
+                        signal["poi_touched_at"] = int(touched_at)
                         if _signal_poi_touched_notifier is not None:
                             await _signal_poi_touched_notifier(signal)
                         state = "POI_TOUCHED"
