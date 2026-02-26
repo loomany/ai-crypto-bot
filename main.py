@@ -972,6 +972,26 @@ def _format_channel_blurred_ai_signal(signal: Dict[str, Any], lang: str) -> str:
     )
 
 
+def _format_channel_blurred_pumpdump_signal(signal: Dict[str, Any], *, symbol: str, lang: str) -> str:
+    signal_type = str(signal.get("type") or "").lower()
+    header_key = "PUMP_HEADER_PUMP" if signal_type == "pump" else "PUMP_HEADER_DUMP"
+    return "\n".join(
+        [
+            i18n.t(lang, header_key),
+            "",
+            i18n.t(lang, "PUMP_COIN_LINE", symbol=_blurred_pd_symbol(symbol)),
+            i18n.t(lang, "PUMP_PRICE_LINE", price="•••"),
+            "",
+            i18n.t(lang, "PUMP_MOVE_HEADER"),
+            i18n.t(lang, "PUMP_MOVE_1M", change="•••"),
+            i18n.t(lang, "PUMP_MOVE_5M", change="•••"),
+            i18n.t(lang, "PUMP_VOLUME_LINE", volume="•••"),
+            "",
+            i18n.t(lang, "PUMP_SOURCE"),
+        ]
+    )
+
+
 def _public_ai_state_cleanup(now_ts: int | None = None) -> None:
     now = int(time.time()) if now_ts is None else int(now_ts)
     expired_keys = [
@@ -1099,7 +1119,14 @@ async def _send_free_pumpdump_to_channel(signal: Dict[str, Any], *, symbol: str,
         min_gap_sec=CHANNEL_FREE_PD_MIN_GAP_SEC,
     )
     if not allow:
-        return False, reason
+        blurred_text = _format_channel_blurred_pumpdump_signal(signal, symbol=symbol, lang=lang)
+        await bot.send_message(
+            TELEGRAM_CHANNEL_ID,
+            blurred_text,
+            parse_mode="Markdown",
+            reply_markup=_public_ai_channel_lead_kb(lang=lang),
+        )
+        return True, f"sent_blurred:{reason}"
 
     collapsed_text = format_pump_message(signal, lang, expanded=False)
     expanded_text = format_pump_message(signal, lang, expanded=True)
