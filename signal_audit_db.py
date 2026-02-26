@@ -11,6 +11,21 @@ from symbol_cache import get_blocked_symbols
 from utils.safe_math import safe_div, safe_pct
 
 
+def _tp_zone_hit(row: sqlite3.Row | dict[str, Any]) -> bool:
+    try:
+        value = row["tp1_hit"]
+    except Exception:
+        try:
+            value = row.get("tp1_hit")  # type: ignore[call-arg]
+        except Exception:
+            return False
+    try:
+        return int(value or 0) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+
 def init_signal_audit_tables() -> None:
     conn = sqlite3.connect(get_db_path())
     try:
@@ -133,6 +148,22 @@ def init_signal_audit_tables() -> None:
             UPDATE signal_audit
             SET state = 'WAITING_ENTRY'
             WHERE COALESCE(state, '') = '' AND status = 'open'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE signal_audit
+            SET outcome = CASE
+                    WHEN COALESCE(tp1_hit, 0) = 1 THEN 'TP1'
+                    ELSE outcome
+                END,
+                final_status = CASE
+                    WHEN COALESCE(tp1_hit, 0) = 1 THEN 'TP1'
+                    ELSE final_status
+                END
+            WHERE status = 'closed'
+              AND COALESCE(tp1_hit, 0) = 1
+              AND COALESCE(outcome, '') NOT IN ('TP1', 'TP2');
             """
         )
         conn.commit()
@@ -580,7 +611,7 @@ def get_public_stats(days: int = 30, *, include_legacy: bool = False) -> dict:
         filled_rows = [row for row in closed_rows if row["outcome"] not in excluded_outcomes]
         filled_closed = len(filled_rows)
 
-        wins = sum(1 for row in filled_rows if row["outcome"] in ("TP1", "TP2") or (row["outcome"] == "BE" and int(row["tp1_hit"] or 0) == 1))
+        wins = sum(1 for row in filled_rows if row["outcome"] in ("TP1", "TP2") or _tp_zone_hit(row))
         winrate = safe_div(wins, filled_closed, 0.0) if filled_closed else 0.0
 
         pnl_values = [row["pnl_r"] for row in filled_rows if row["pnl_r"] is not None]
@@ -639,17 +670,17 @@ def get_public_stats(days: int = 30, *, include_legacy: bool = False) -> dict:
             [since_ts, min_score, *blocked_params],
         )
         streak_rows = [
-            ("BE_TP1" if row["outcome"] == "BE" and int(row["tp1_hit"] or 0) == 1 else row["outcome"])
+            ("TP1" if _tp_zone_hit(row) else row["outcome"])
             for row in cur.fetchall()
             if row["outcome"] not in excluded_outcomes
         ]
         streak = "-"
         if streak_rows:
             first = streak_rows[0]
-            is_win = first in ("TP1", "TP2") or first == "BE_TP1"
+            is_win = first in ("TP1", "TP2")
             count = 0
             for outcome in streak_rows:
-                outcome_is_win = outcome in ("TP1", "TP2", "BE_TP1")
+                outcome_is_win = outcome in ("TP1", "TP2")
                 if outcome_is_win == is_win:
                     count += 1
                 else:
@@ -841,7 +872,7 @@ def get_ai_signal_stats(days: int | None, *, include_legacy: bool = False) -> di
 
         total = len(rows)
         tp2 = sum(1 for row in rows if row["outcome"] == "TP2")
-        tp1 = sum(1 for row in rows if row["outcome"] in ("TP1", "TP2", "BE"))
+        tp1 = sum(1 for row in rows if row["outcome"] in ("TP1", "TP2") or _tp_zone_hit(row))
         sl = sum(1 for row in rows if row["outcome"] == "SL")
         exp = 0
         winrate = safe_pct(tp1, total, 0.0) if total else 0.0
@@ -863,7 +894,7 @@ def get_ai_signal_stats(days: int | None, *, include_legacy: bool = False) -> di
             else:
                 bucket = buckets["80-100"]
             bucket["total"] += 1
-            if row["outcome"] in ("TP1", "TP2", "BE"):
+            if row["outcome"] in ("TP1", "TP2") or _tp_zone_hit(row):
                 bucket["tp1plus"] += 1
 
         for bucket in buckets.values():

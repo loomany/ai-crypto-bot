@@ -27,6 +27,29 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _recalculate_tp_zone_archive(conn: sqlite3.Connection) -> None:
+    """Reclassify archived signals: any TP-zone touch is final TP."""
+    conn.execute(
+        """
+        UPDATE signal_events
+        SET result = CASE
+                WHEN COALESCE(tp2_hit, 0) = 1 THEN 'TP2'
+                ELSE 'TP1'
+            END,
+            status = CASE
+                WHEN status IN ('OPEN', 'ACTIVE') THEN status
+                ELSE CASE
+                    WHEN COALESCE(tp2_hit, 0) = 1 THEN 'TP2'
+                    ELSE 'TP1'
+                END
+            END
+        WHERE COALESCE(tp1_hit, 0) = 1
+          AND COALESCE(result, status, '') NOT IN ('TP1', 'TP2');
+        """
+    )
+
+
+
 def init_db() -> None:
     conn = get_conn()
     try:
@@ -241,6 +264,7 @@ def init_db() -> None:
             WHERE COALESCE(state, '') = '' AND status IN ('OPEN', 'ACTIVE')
             """
         )
+        _recalculate_tp_zone_archive(conn)
         conn.commit()
     finally:
         conn.close()
@@ -1452,9 +1476,9 @@ def get_history_winrate_summary(
         outcome_type = get_signal_status_key(dict(row))
         raw_outcome = str(row["outcome"] or "").upper()
         effective_outcome = raw_outcome
-        if raw_outcome == "BE" and _is_tp_reached_after_be(row):
+        if _is_tp_reached_after_be(row):
             # Recalculate archive by business rule:
-            # if BE was triggered and TP was reached later, count signal as TP.
+            # any signal that touched TP zone must be counted as TP.
             effective_outcome = "TP"
 
         totals = summary["totals"]
