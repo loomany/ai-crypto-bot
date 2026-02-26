@@ -8191,8 +8191,9 @@ async def ai_scan_once() -> None:
                 await send_signal_to_all(signal)
                 with suppress(Exception):
                     ok_channel, reason_channel = await _send_free_ai_signal_to_channel(signal, lang="ru")
+                    channel_score = int(round(float(signal.get("score", 0) or 0)))
                     if ok_channel:
-                        logger.info("[channel_free] ai sent symbol=%s score=%s", signal.get("symbol"), score)
+                        logger.info("[channel_free] ai sent symbol=%s score=%s", signal.get("symbol"), channel_score)
                     else:
                         logger.info("[channel_free] ai skipped symbol=%s reason=%s", signal.get("symbol"), reason_channel)
                 meta = signal.get("meta") if isinstance(signal, dict) else None
@@ -8416,6 +8417,12 @@ async def ai_scan_once() -> None:
                 update_current_symbol("ai_signals", signal.get("symbol", ""))
                 print(f"[ai_signals] DIRECT SEND {signal['symbol']} {signal['direction']} score={score} confirm_strict={bool(signal.get('confirm_strict', False))}")
                 await send_signal_to_all(signal)
+                with suppress(Exception):
+                    ok_channel, reason_channel = await _send_free_ai_signal_to_channel(signal, lang="ru")
+                    if ok_channel:
+                        logger.info("[channel_free] ai sent symbol=%s score=%s", signal.get("symbol"), score)
+                    else:
+                        logger.info("[channel_free] ai skipped symbol=%s reason=%s", signal.get("symbol"), reason_channel)
                 meta = signal.get("meta") if isinstance(signal, dict) else None
                 setup_id = meta.get("setup_id") if isinstance(meta, dict) else None
                 if setup_id:
