@@ -46,32 +46,6 @@ BE_TRIGGER_PCT = BE_LEVELS[0]
 DEFAULT_LEVERAGE = 10.0
 
 
-def _resolve_be_to_tp_outcome(signal: dict[str, Any], result: dict[str, Any]) -> str:
-    """Convert BE into TP when the signal has an explicit TP touch."""
-    outcome = str(result.get("outcome") or "").upper()
-    if outcome != "BE":
-        return outcome
-
-    tp1_hit = bool(result.get("tp1_hit") or signal.get("tp1_hit"))
-    tp2_hit = bool(result.get("tp2_hit") or signal.get("tp2_hit"))
-
-    if not (tp1_hit or tp2_hit):
-        module = str(signal.get("module", ""))
-        symbol = str(signal.get("symbol", ""))
-        ts_value = int(signal.get("sent_at", 0))
-        for event in list_signal_events_by_identity(module=module, symbol=symbol, ts=ts_value):
-            tp1_hit = tp1_hit or bool(event.get("tp1_hit"))
-            tp2_hit = tp2_hit or bool(event.get("tp2_hit"))
-            if tp2_hit:
-                break
-
-    if tp2_hit:
-        return "TP2"
-    if tp1_hit:
-        return "TP1"
-    return "BE"
-
-
 def be_level_label(max_profit_pct: float) -> float:
     level = 0.0
     for value in BE_LEVELS:
@@ -575,11 +549,6 @@ async def evaluate_open_signals(
                 str(signal.get("direction", "")).upper(),
                 result.get("outcome"),
             )
-            effective_outcome = _resolve_be_to_tp_outcome(signal, result)
-            if effective_outcome != str(result.get("outcome") or "").upper():
-                result = dict(result)
-                result["outcome"] = effective_outcome
-
             close_state_map = {
                 "TP1": "CLOSED_TP1",
                 "TP2": "CLOSED_TP2",
