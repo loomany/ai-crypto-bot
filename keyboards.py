@@ -18,6 +18,9 @@ def build_main_menu_kb(lang: str, is_admin: bool = False) -> ReplyKeyboardMarkup
             KeyboardButton(text=i18n.t(lang, "MENU_STATS")),
             KeyboardButton(text=i18n.t(lang, "MENU_SYSTEM")),
         ],
+        [
+            KeyboardButton(text=i18n.t(lang, "btn_binance_status")),
+        ],
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
@@ -89,6 +92,16 @@ def build_admin_channel_panel_kb(lang: str) -> InlineKeyboardMarkup:
         ]
     )
 
+
+
+
+def build_binance_status_kb(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=i18n.t(lang, "btn_refresh"), callback_data="binance:refresh")],
+            [InlineKeyboardButton(text=i18n.t(lang, "btn_back"), callback_data="menu:main")],
+        ]
+    )
 
 def ai_signals_inline_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
