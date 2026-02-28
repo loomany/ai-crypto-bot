@@ -141,9 +141,6 @@ from db import (
     apply_ai_public_partial_fix,
     reset_ai_public_test_trade,
     reset_ai_public_balance_to_start,
-    trade_order_exists_by_client_id,
-    insert_trade_order,
-    insert_trade_event,
 )
 from db_path import ensure_db_writable, get_db_path
 from history_status import get_signal_badge, get_signal_status_key
@@ -183,26 +180,12 @@ from keyboards import (
     build_offer_inline_kb,
     build_payment_inline_kb,
     build_system_menu_kb,
-    build_binance_status_kb,
     pumpdump_inline_kb,
     stats_inline_kb,
     stats_period_inline_kb,
 )
 from settings import SIGNAL_TTL_SECONDS
 from signal_inversion import apply_inversion
-from services.binance_futures import (
-    TradingBlockedError,
-    futures_ping,
-    futures_balance_usdt,
-    futures_positions,
-    futures_open_orders,
-    futures_set_leverage,
-    futures_set_margin_type,
-    place_market_order,
-    close_position_market,
-)
-from services.risk_manager import calc_qty_by_risk
-from services.binance_status import build_binance_status_text
 
 logger = logging.getLogger(__name__)
 DEFAULT_LANG = "ru"
@@ -279,17 +262,6 @@ CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_BLURRED_MIN
 CHANNEL_FREE_PD_ENABLED = os.getenv("CHANNEL_FREE_PD_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 CHANNEL_FREE_PD_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_PD_DAILY_LIMIT", "1") or 1)
 CHANNEL_FREE_PD_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_PD_MIN_GAP_SEC", str(24 * 60 * 60)) or 86400)
-BINANCE_TESTNET = str(os.getenv("BINANCE_TESTNET", "1") or "1").strip()
-TRADING_MODE = str(os.getenv("TRADING_MODE", "signals") or "signals").strip().lower()
-TRADING_RISK_PCT = float(os.getenv("TRADING_RISK_PCT", "1") or 1)
-TRADING_LEVERAGE = int(os.getenv("TRADING_LEVERAGE", "10") or 10)
-TRADING_DEFAULT_SYMBOL = str(os.getenv("TRADING_DEFAULT_SYMBOL", "BTCUSDT") or "BTCUSDT").upper().strip()
-TRADING_NOTIFY_ADMIN = str(os.getenv("TRADING_NOTIFY_ADMIN", "1") or "1").strip() in ("1", "true", "yes", "on")
-TRADING_ALLOWLIST = {
-    item.strip().upper()
-    for item in str(os.getenv("TRADING_ALLOWLIST", "BTCUSDT,ETHUSDT") or "BTCUSDT,ETHUSDT").split(",")
-    if item.strip()
-}
 SUB_DAYS = 30
 SUB_PRICE_USD = 39
 PAY_WALLET_TRX = "TGnSveNVrBHytZyA5AfqAj3hDK3FbFCtBY"
@@ -301,152 +273,6 @@ SUB_SOURCE_AI = 2
 SUB_SOURCE_PUMP = 3
 SIGNAL_DELAY_NON_SUB_HOURS = int(os.getenv("SIGNAL_DELAY_NON_SUB_HOURS", "12"))
 PD_ARCHIVE_UNLOCK_DELAY_SEC = 60 * 60
-
-
-def _is_trade_enabled() -> bool:
-    return get_state("trading_enabled", os.getenv("TRADING_ENABLED", "0")) == "1"
-
-
-def _set_trade_enabled(enabled: bool) -> None:
-    set_state("trading_enabled", "1" if enabled else "0")
-
-
-def _trading_guard() -> tuple[bool, str]:
-    if BINANCE_TESTNET != "1":
-        return False, "MAINNET DISABLED"
-    if not _is_trade_enabled():
-        return False, "TRADING DISABLED"
-    return True, "OK"
-
-
-def _is_symbol_allowed(symbol: str) -> bool:
-    return str(symbol or "").upper() in TRADING_ALLOWLIST
-
-
-async def _notify_admin_trade(text: str) -> None:
-    if not TRADING_NOTIFY_ADMIN or bot is None:
-        return
-    admin_chat_id = ADMIN_CHAT_ID or ADMIN_USER_ID
-    if admin_chat_id == 0:
-        return
-    try:
-        await bot.send_message(admin_chat_id, text)
-    except Exception as exc:
-        logger.warning("[trade_notify] admin send failed: %s", exc)
-
-
-async def _trade_error(message: str, *, order_id: int | None = None) -> None:
-    insert_trade_event(event_type="ERROR", message=message, order_id=order_id)
-    logger.error("TRADE ERROR: %s", message)
-    await _notify_admin_trade(f"❌ TRADE ERROR: {message}")
-
-
-def _parse_symbol_qty_args(text: str | None) -> tuple[str | None, float | None]:
-    if not text:
-        return None, None
-    parts = text.strip().split()
-    if len(parts) < 3:
-        return None, None
-    symbol = parts[1].strip().upper()
-    try:
-        qty = float(parts[2])
-    except (TypeError, ValueError):
-        return symbol or None, None
-    return symbol or None, qty
-
-
-async def _auto_trade_signal(signal: dict) -> None:
-    if TRADING_MODE != "signals":
-        return
-    if BINANCE_TESTNET != "1":
-        await _trade_error("MAINNET DISABLED")
-        return
-    if not _is_trade_enabled():
-        return
-
-    symbol = str(signal.get("symbol") or "").upper().strip()
-    if not _is_symbol_allowed(symbol):
-        logger.info("[trade] skip symbol not in allowlist: %s", symbol)
-        return
-
-    stop_price = float(signal.get("sl") or 0.0)
-    entry_price = float(signal.get("entry_price") or 0.0)
-    side_raw = str(signal.get("direction") or "").upper()
-    side = "BUY" if side_raw in {"LONG", "BUY"} else "SELL"
-    if stop_price <= 0:
-        await _trade_error(f"{symbol}: stop loss is required")
-        return
-    if entry_price <= 0:
-        await _trade_error(f"{symbol}: entry price missing")
-        return
-
-    signal_id = f"{signal.get('module', 'ai')}_{symbol}_{int(signal.get('sent_at') or time.time())}"
-    client_order_id = f"krypton_{signal_id}"
-    if trade_order_exists_by_client_id(client_order_id):
-        logger.warning("[trade] duplicate order prevented: %s", client_order_id)
-        return
-
-    try:
-        balance = futures_balance_usdt()
-        risk = calc_qty_by_risk(
-            symbol=symbol,
-            entry_price=entry_price,
-            stop_price=stop_price,
-            balance_usdt=balance,
-            risk_pct=TRADING_RISK_PCT,
-            leverage=TRADING_LEVERAGE,
-        )
-        qty = float(risk["qty"])
-        futures_set_leverage(symbol, TRADING_LEVERAGE)
-        try:
-            futures_set_margin_type(symbol, "ISOLATED")
-        except Exception:
-            pass
-        logger.info("PLACE_ORDER symbol=%s side=%s qty=%s", symbol, side, qty)
-        order = place_market_order(
-            symbol=symbol,
-            side=side,
-            qty=qty,
-            reduce_only=False,
-            client_order_id=client_order_id,
-        )
-        logger.info("ORDER_FILLED symbol=%s order_id=%s", symbol, order.get("orderId"))
-        order_row_id = insert_trade_order(
-            symbol=symbol,
-            side=side,
-            qty=qty,
-            entry_price=entry_price,
-            stop_price=stop_price,
-            tp1_price=float(signal.get("tp1") or 0.0) or None,
-            tp2_price=float(signal.get("tp2") or 0.0) or None,
-            leverage=TRADING_LEVERAGE,
-            risk_pct=TRADING_RISK_PCT,
-            mode="testnet" if BINANCE_TESTNET == "1" else "mainnet",
-            status="FILLED",
-            order_id=str(order.get("orderId") or ""),
-            client_order_id=client_order_id,
-            raw_json=json.dumps(order, ensure_ascii=False),
-        )
-        insert_trade_event(
-            event_type="OPEN_ORDER",
-            message=f"AUTO {symbol} {side} qty={qty}",
-            order_id=order_row_id,
-        )
-        await _notify_admin_trade(
-            "\n".join(
-                [
-                    "🤖 AUTO TRADE (TESTNET)",
-                    f"{symbol} {'LONG' if side == 'BUY' else 'SHORT'}",
-                    f"Qty: {qty} | Lev: x{TRADING_LEVERAGE} | Risk: {TRADING_RISK_PCT}%",
-                    f"Entry: {entry_price}",
-                    f"SL: {stop_price} ({-risk['stop_pct'] * 100:.2f}%)",
-                    f"OrderId: {order.get('orderId')}",
-                ]
-            )
-        )
-    except Exception as exc:
-        logger.exception("ERROR PLACE_ORDER symbol=%s", symbol)
-        await _trade_error(str(exc)[:200])
 
 
 def _env_bool(name: str, default: str = "0") -> bool:
@@ -2907,7 +2733,6 @@ async def notify_signal_activation(signal: dict) -> bool:
         return False
 
     _ = await _ai_public_on_activation(signal)
-    await _auto_trade_signal(signal)
 
     events = list_signal_events_by_identity(module=module, symbol=symbol, ts=ts_value)
     if not events:
@@ -6007,50 +5832,6 @@ async def show_system_menu(message: Message) -> None:
     )
 
 
-async def _render_binance_status(*, user_id: int, lang: str) -> str:
-    admin_id = ADMIN_USER_ID or ADMIN_CHAT_ID
-    return await build_binance_status_text(lang, user_id=user_id, admin_user_id=admin_id)
-
-
-@dp.message(F.text.in_(i18n.all_labels("btn_binance_status")))
-async def binance_status_menu_message(message: Message):
-    user_id = message.from_user.id if message.from_user else message.chat.id
-    lang = get_user_lang(user_id) or "ru"
-    text = await _render_binance_status(user_id=user_id, lang=lang)
-    await message.answer(text, reply_markup=build_binance_status_kb(lang))
-
-
-@dp.callback_query(F.data == "binance:status")
-async def binance_status_callback(callback: CallbackQuery):
-    lang = _resolve_user_lang(callback.from_user.id if callback.from_user else None)
-    user_id = callback.from_user.id if callback.from_user else 0
-    text = await _render_binance_status(user_id=user_id, lang=lang)
-    await callback.answer()
-    if callback.message:
-        await callback.message.edit_text(text, reply_markup=build_binance_status_kb(lang))
-
-
-@dp.callback_query(F.data == "binance:refresh")
-async def binance_refresh_callback(callback: CallbackQuery):
-    lang = _resolve_user_lang(callback.from_user.id if callback.from_user else None)
-    user_id = callback.from_user.id if callback.from_user else 0
-    text = await _render_binance_status(user_id=user_id, lang=lang)
-    await callback.answer(i18n.t(lang, "PD_LOCKED_UPDATE_TOAST"))
-    if callback.message:
-        await callback.message.edit_text(text, reply_markup=build_binance_status_kb(lang))
-
-
-@dp.callback_query(F.data == "menu:main")
-async def menu_main_callback(callback: CallbackQuery):
-    lang = _resolve_user_lang(callback.from_user.id if callback.from_user else None)
-    await callback.answer()
-    if callback.message:
-        await callback.message.answer(
-            i18n.t(lang, "START_TEXT"),
-            reply_markup=build_main_menu_kb(lang, is_admin=is_admin(callback.from_user.id) if callback.from_user else False),
-        )
-
-
 @dp.callback_query(F.data == "about_back")
 async def about_back_callback(callback: CallbackQuery):
     lang = _resolve_user_lang(callback.from_user.id if callback.from_user else None)
@@ -6837,176 +6618,6 @@ async def show_stats(message: Message):
         _format_stats_message(stats, lang),
         reply_markup=build_main_menu_kb(lang, is_admin=True),
     )
-
-
-@dp.message(Command("trade_mode"))
-async def trade_mode_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    mode = "TESTNET" if BINANCE_TESTNET == "1" else "MAINNET"
-    enabled = "ON" if _is_trade_enabled() else "OFF"
-    allowlist = ", ".join(sorted(TRADING_ALLOWLIST)) or "-"
-    await message.answer(
-        "\n".join(
-            [
-                f"Mode: {mode}",
-                f"TRADING_ENABLED: {enabled}",
-                f"TRADING_MODE: {TRADING_MODE}",
-                f"Allowlist: {allowlist}",
-                f"Leverage: x{TRADING_LEVERAGE}",
-                f"Risk: {TRADING_RISK_PCT}%",
-            ]
-        )
-    )
-
-
-@dp.message(Command("trade_on"))
-async def trade_on_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    if BINANCE_TESTNET != "1":
-        await message.answer("❌ MAINNET DISABLED")
-        return
-    _set_trade_enabled(True)
-    await message.answer("✅ AutoTrading ON (TESTNET)")
-
-
-@dp.message(Command("trade_off"))
-async def trade_off_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    _set_trade_enabled(False)
-    await message.answer("🛑 AutoTrading OFF")
-
-
-@dp.message(Command("binance_ping"))
-async def binance_ping_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    try:
-        payload = futures_ping()
-        await message.answer(f"🏓 serverTime={payload['serverTime']} localTime={payload['localTime']}")
-    except Exception as exc:
-        await message.answer(f"❌ {exc}")
-
-
-@dp.message(Command("binance_balance"))
-async def binance_balance_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    try:
-        balance = futures_balance_usdt()
-        await message.answer(f"💰 USDT available: {balance:.4f}")
-    except Exception as exc:
-        await message.answer(f"❌ {exc}")
-
-
-@dp.message(Command("binance_positions"))
-async def binance_positions_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    try:
-        rows = futures_positions()
-        if not rows:
-            await message.answer("No open positions")
-            return
-        lines = [f"{r.get('symbol')} amt={r.get('positionAmt')} entry={r.get('entryPrice')} pnl={r.get('unRealizedProfit')}" for r in rows]
-        await message.answer("\n".join(lines[:20]))
-    except Exception as exc:
-        await message.answer(f"❌ {exc}")
-
-
-@dp.message(Command("binance_orders"))
-async def binance_orders_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    symbol = _parse_symbol_arg(message.text)
-    try:
-        rows = futures_open_orders(symbol=symbol)
-        if not rows:
-            await message.answer("No open orders")
-            return
-        lines = [f"{r.get('symbol')} {r.get('side')} qty={r.get('origQty')} type={r.get('type')} id={r.get('orderId')}" for r in rows]
-        await message.answer("\n".join(lines[:20]))
-    except Exception as exc:
-        await message.answer(f"❌ {exc}")
-
-
-@dp.message(Command("trade_buy"))
-async def trade_buy_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    await _manual_trade_cmd(message, side="BUY")
-
-
-@dp.message(Command("trade_sell"))
-async def trade_sell_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    await _manual_trade_cmd(message, side="SELL")
-
-
-async def _manual_trade_cmd(message: Message, *, side: str) -> None:
-    symbol, qty = _parse_symbol_qty_args(message.text)
-    if not symbol or qty is None or qty <= 0:
-        await message.answer(f"Usage: /trade_{side.lower()} BTCUSDT 0.001")
-        return
-    ok, reason = _trading_guard()
-    if not ok:
-        await message.answer(f"❌ {reason}")
-        return
-    if not _is_symbol_allowed(symbol):
-        await message.answer("❌ Symbol not in allowlist")
-        return
-
-    client_order_id = f"krypton_manual_{symbol}_{side}_{int(time.time())}"
-    if trade_order_exists_by_client_id(client_order_id):
-        await message.answer("⚠️ Duplicate order")
-        return
-    try:
-        logger.info("PLACE_ORDER manual symbol=%s side=%s qty=%s", symbol, side, qty)
-        order = place_market_order(symbol=symbol, side=side, qty=qty, client_order_id=client_order_id)
-        row_id = insert_trade_order(
-            symbol=symbol,
-            side=side,
-            qty=qty,
-            entry_price=0.0,
-            stop_price=0.0,
-            tp1_price=None,
-            tp2_price=None,
-            leverage=TRADING_LEVERAGE,
-            risk_pct=TRADING_RISK_PCT,
-            mode="testnet",
-            status="FILLED",
-            order_id=str(order.get("orderId") or ""),
-            client_order_id=client_order_id,
-            raw_json=json.dumps(order, ensure_ascii=False),
-        )
-        insert_trade_event(event_type="OPEN_ORDER", message=f"MANUAL {symbol} {side} qty={qty}", order_id=row_id)
-        await message.answer(f"✅ {side} {symbol} qty={qty} orderId={order.get('orderId')}")
-        await _notify_admin_trade(f"Manual trade: {side} {symbol} qty={qty} orderId={order.get('orderId')}")
-    except (TradingBlockedError, Exception) as exc:
-        await _trade_error(str(exc)[:200])
-        await message.answer(f"❌ {exc}")
-
-
-@dp.message(Command("trade_close"))
-async def trade_close_cmd(message: Message):
-    if message.from_user is None or not is_admin(message.from_user.id):
-        return
-    symbol = _parse_symbol_arg(message.text) or TRADING_DEFAULT_SYMBOL
-    ok, reason = _trading_guard()
-    if not ok:
-        await message.answer(f"❌ {reason}")
-        return
-    try:
-        order = close_position_market(symbol)
-        insert_trade_event(event_type="CLOSE", message=f"CLOSE {symbol} {order}")
-        await message.answer(f"✅ Closed {symbol}: {order}")
-        await _notify_admin_trade(f"Closed {symbol}: {order}")
-    except Exception as exc:
-        await _trade_error(str(exc)[:200])
-        await message.answer(f"❌ {exc}")
 
 
 @dp.message(Command("lock"))
@@ -8910,7 +8521,6 @@ async def main():
     set_signal_progress_notifier(notify_signal_progress)
     set_signal_finalizer_notifier(notify_signal_finalized)
     print("Бот запущен!")
-    print(f"TRADING MODE: {'TESTNET' if BINANCE_TESTNET == '1' else 'MAINNET'}")
     init_app_db()
 
     async def _delayed_task(delay_sec: float, coro: Awaitable[Any]):
