@@ -249,6 +249,42 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pumpdump_events_symbol_ts ON pumpdump_events(symbol, ts DESC)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trade_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                qty REAL NOT NULL,
+                entry_price REAL,
+                stop_price REAL,
+                tp1_price REAL,
+                tp2_price REAL,
+                leverage INTEGER,
+                risk_pct REAL,
+                mode TEXT NOT NULL,
+                status TEXT NOT NULL,
+                order_id TEXT,
+                client_order_id TEXT,
+                raw_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_orders_client_order_id ON trade_orders(client_order_id)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trade_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                order_id INTEGER
+            )
+            """
+        )
         cur = conn.execute("PRAGMA table_info(pumpdump_events)")
         pd_cols = {row["name"] for row in cur.fetchall()}
         if "created_at" not in pd_cols:
@@ -727,6 +763,83 @@ def set_state(key: str, value: str) -> None:
             (key, value, now),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def trade_order_exists_by_client_id(client_order_id: str) -> bool:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id FROM trade_orders WHERE client_order_id = ? LIMIT 1",
+            (client_order_id,),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def insert_trade_order(
+    *,
+    symbol: str,
+    side: str,
+    qty: float,
+    entry_price: float,
+    stop_price: float,
+    tp1_price: float | None,
+    tp2_price: float | None,
+    leverage: int,
+    risk_pct: float,
+    mode: str,
+    status: str,
+    order_id: str | None,
+    client_order_id: str | None,
+    raw_json: str,
+) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO trade_orders (
+                created_at, symbol, side, qty, entry_price,
+                stop_price, tp1_price, tp2_price,
+                leverage, risk_pct, mode, status,
+                order_id, client_order_id, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(time.time()),
+                symbol,
+                side,
+                float(qty),
+                float(entry_price),
+                float(stop_price),
+                float(tp1_price) if tp1_price is not None else None,
+                float(tp2_price) if tp2_price is not None else None,
+                int(leverage),
+                float(risk_pct),
+                mode,
+                status,
+                str(order_id) if order_id is not None else None,
+                client_order_id,
+                raw_json,
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    finally:
+        conn.close()
+
+
+def insert_trade_event(*, event_type: str, message: str, order_id: int | None = None) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO trade_events (created_at, type, message, order_id) VALUES (?, ?, ?, ?)",
+            (int(time.time()), event_type, message, order_id),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
     finally:
         conn.close()
 
