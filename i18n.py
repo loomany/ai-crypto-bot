@@ -655,8 +655,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Используется для торговли"
         ),
         "SIGNAL_QUALITY_HIGH_RISK": (
-            "⚠️ ПОВЫШЕННЫЙ РИСК\n"
-            "Только для опытных трейдеров (Score 80–89)\n"
+            "🔥 АКТИВНЫЙ СЦЕНАРИЙ\n"
+            "Для опытных трейдеров (Score 80–89)\n"
             "Использовать выборочно"
         ),
         "SIGNAL_QUALITY_ANALYSIS_ONLY": (
@@ -664,7 +664,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Ниже порога качества (Score < 80)\n"
             "Не рекомендуется к торговле"
         ),
-        "SIGNAL_COMPACT_HIGH_RISK_HEADER": "⚠️ ПОВЫШЕННЫЙ РИСК (Score 80–89)",
+        "SIGNAL_COMPACT_HIGH_RISK_HEADER": "🔥 АКТИВНЫЙ СЦЕНАРИЙ (Score 80–89)",
         "SIGNAL_COMPACT_META_LINE": "{side} · TF: {timeframe} · Entry: {entry_tf}",
         "SIGNAL_COMPACT_POI_LINE": "POI: {poi_from}–{poi_to}",
         "SIGNAL_COMPACT_SL_LINE": "SL: {sl}",
@@ -699,8 +699,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SIGNAL_SHORT_80_89_SCORE_LINE": "Score: {score}",
         "SIGNAL_SHORT_80_89_TTL_LINE": "TTL: ~{minutes} мин",
         "SIGNAL_SHORT_HIGH_RISK_WARNING": (
-            "⚠️ ПОВЫШЕННЫЙ РИСК\n"
-            "Только для опытных трейдеров\n"
+            "🔥 АКТИВНЫЙ СЦЕНАРИЙ\n"
+            "Для опытных трейдеров\n"
             "Использовать выборочно"
         ),
         "SIGNAL_BUTTON_SOUND_ON": "🔔 Звук: Сигнал + Вход",
