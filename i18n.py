@@ -1433,7 +1433,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PD_EXPLAIN_LINE_1": "🚀 PUMP — sharp rise in 1–5m",
         "PD_EXPLAIN_LINE_2": "🔻 DUMP — sharp drop in 1–5m",
         "PD_EXPLAIN_LINE_3": "📌 Not a trade entry. Volatility alert only.",
-        "PD_EXPLAIN_LINE_4": "",
+        "PD_EXPLAIN_LINE_4": "Used as an alert to check the chart.",
         "explanation_block": (
             "━━━━━━━━━━━━━━━━\n"
             "ℹ️ Explanation\n"
