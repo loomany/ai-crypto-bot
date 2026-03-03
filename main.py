@@ -1407,7 +1407,7 @@ async def cmd_start(message: Message):
             set_user_pref(message.chat.id, "notif_elite_enabled", 1)
     if not lang:
         await message.answer(
-            i18n.t("ru", "LANG_PICK_TEXT"),
+            i18n.t("en", "LANG_PICK_TEXT"),
             reply_markup=build_lang_select_kb(),
         )
         return
