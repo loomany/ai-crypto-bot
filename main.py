@@ -15,15 +15,12 @@ from typing import Any, Dict, List, Awaitable
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
-from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
     ReplyKeyboardMarkup,
-    TelegramObject,
-    User,
 )
 from aiogram.filters import CommandStart, Command
 from dotenv import load_dotenv
@@ -387,17 +384,6 @@ def init_app_db():
             )
             """
         )
-        cur = conn.execute("PRAGMA table_info(users)")
-        users_cols = {row[1] for row in cur.fetchall()}
-        if "created_at" not in users_cols:
-            conn.execute("ALTER TABLE users ADD COLUMN created_at INTEGER")
-            conn.execute("UPDATE users SET created_at = COALESCE(started_at, CAST(strftime('%s','now') AS INTEGER))")
-        if "last_seen_at" not in users_cols:
-            conn.execute("ALTER TABLE users ADD COLUMN last_seen_at INTEGER")
-            conn.execute("UPDATE users SET last_seen_at = COALESCE(last_seen, CAST(strftime('%s','now') AS INTEGER))")
-        if "is_active" not in users_cols:
-            conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1")
-            conn.execute("UPDATE users SET is_active = 1 WHERE is_active IS NULL")
         conn.commit()
     finally:
         conn.close()
@@ -1244,9 +1230,8 @@ def upsert_user(
                 """
                 INSERT INTO users (
                     chat_id, username, first_name, last_name,
-                    full_name, language, started_at, last_seen,
-                    created_at, last_seen_at, is_active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                    full_name, language, started_at, last_seen
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
@@ -1255,8 +1240,6 @@ def upsert_user(
                     last_name,
                     full_name,
                     resolved_lang,
-                    now,
-                    now,
                     now,
                     now,
                 ),
@@ -1268,7 +1251,7 @@ def upsert_user(
             """
             UPDATE users
             SET username = ?, first_name = ?, last_name = ?, full_name = ?,
-                language = ?, last_seen = ?, last_seen_at = ?, is_active = 1
+                language = ?, last_seen = ?
             WHERE chat_id = ?
             """,
             (
@@ -1278,7 +1261,6 @@ def upsert_user(
                 full_name,
                 resolved_lang,
                 now,
-                now,
                 chat_id,
             ),
         )
@@ -1286,20 +1268,6 @@ def upsert_user(
         return False
     finally:
         conn.close()
-
-
-def mark_user_inactive(chat_id: int) -> None:
-    conn = sqlite3.connect(get_db_path())
-    try:
-        conn.execute("UPDATE users SET is_active = 0 WHERE chat_id = ?", (chat_id,))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _is_blocked_error_text(error_text: str) -> bool:
-    text = (error_text or "").strip().lower()
-    return "forbidden: bot was blocked by the user" in text or "bot was blocked" in text
 
 
 def list_ai_subscribers() -> List[int]:
@@ -1368,24 +1336,6 @@ AI_PRIORITY_N = int(os.getenv("AI_PRIORITY_N", "15"))
 AI_UNIVERSE_TOP_N = int(os.getenv("AI_UNIVERSE_TOP_N", "250"))
 AI_DEEP_TOP_K = int(os.getenv("AI_DEEP_TOP_K", os.getenv("AI_MAX_DEEP_PER_CYCLE", "3")))
 AI_EXCLUDE_SYMBOLS_DEFAULT = "BTCUSDT"
-
-
-class UserActivityMiddleware(BaseMiddleware):
-    async def __call__(self, handler, event: TelegramObject, data: Dict[str, Any]):
-        tg_user: User | None = data.get("event_from_user")
-        if tg_user is not None and not tg_user.is_bot:
-            upsert_user(
-                chat_id=int(tg_user.id),
-                username=tg_user.username,
-                first_name=tg_user.first_name,
-                last_name=tg_user.last_name,
-                full_name=((tg_user.full_name or "").strip() or None),
-                language=tg_user.language_code,
-            )
-        return await handler(event, data)
-
-
-dp.update.outer_middleware(UserActivityMiddleware())
 
 
 def _get_ai_excluded_symbols() -> set[str]:
@@ -6083,94 +6033,70 @@ def _format_user_time(ts: int | None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
-def _load_users_page(page: int, page_size: int = 20) -> list[sqlite3.Row]:
-    safe_page = max(1, int(page))
-    offset = (safe_page - 1) * page_size
+def _load_users(limit: int = 50) -> list[sqlite3.Row]:
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.execute(
             """
-            SELECT chat_id, username, is_active
+            SELECT chat_id, username, started_at, last_seen
             FROM users
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
+            ORDER BY started_at DESC
+            LIMIT ?
             """,
-            (page_size, offset),
+            (limit,),
         )
         return cur.fetchall()
     finally:
         conn.close()
 
 
-def _users_analytics() -> dict[str, int]:
-    now = int(time.time())
-    t24 = now - 86400
-    conn = sqlite3.connect(get_db_path())
-    try:
-        total_users = int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] or 0)
-        active_users = int(conn.execute("SELECT COUNT(*) FROM users WHERE is_active = 1").fetchone()[0] or 0)
-        deleted_users = int(conn.execute("SELECT COUNT(*) FROM users WHERE is_active = 0").fetchone()[0] or 0)
-        new_24h = int(conn.execute("SELECT COUNT(*) FROM users WHERE created_at >= ?", (t24,)).fetchone()[0] or 0)
-        return {
-            "total_users": total_users,
-            "active_users": active_users,
-            "deleted_users": deleted_users,
-            "new_24h": new_24h,
-        }
-    finally:
-        conn.close()
-
-
-def _build_users_list_markup(page: int, total_pages: int) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    nav: list[InlineKeyboardButton] = []
-    if page > 1:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"users:page:{page - 1}"))
-    if page < total_pages:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"users:page:{page + 1}"))
-    if nav:
-        rows.append(nav)
-    rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data=f"users:refresh:{page}")])
-    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin:back")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _users_list_payload(
-    lang: str,
-    page: int = 1,
-    prefix: str | None = None,
-) -> tuple[str, InlineKeyboardMarkup | None]:
-    safe_page = max(1, int(page))
-    analytics = _users_analytics()
-    total_users = analytics["total_users"]
-    total_pages = max(1, math.ceil(total_users / 20))
-    if safe_page > total_pages:
-        safe_page = total_pages
-    rows = _load_users_page(safe_page, 20)
-
-    lines = [
-        "👥 Пользователи",
-        "",
-        f"Всего: {analytics['total_users']}",
-        f"🟢 Активные: {analytics['active_users']}",
-        f"🔴 Удалили: {analytics['deleted_users']}",
-        f"Новые 24ч: +{analytics['new_24h']}",
-        "",
-        f"Стр. {safe_page} / {total_pages}",
-        "",
-    ]
+def _build_users_list_markup(rows: list[sqlite3.Row], lang: str) -> InlineKeyboardMarkup:
+    buttons: list[list[InlineKeyboardButton]] = []
     for row in rows:
         chat_id = int(row["chat_id"])
         username = row["username"]
         username_text = f"@{username}" if username else "-"
-        icon = "🟢" if int(row["is_active"] or 0) == 1 else "🔴"
-        lines.append(f"{icon} {chat_id} ({username_text})")
+        status_icon = "🔴" if is_user_locked(chat_id) else "🟢"
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{status_icon} {chat_id} ({username_text})",
+                    callback_data=f"user_view:{chat_id}",
+                )
+            ]
+        )
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text=i18n.t(lang, "nav_back_label"),
+                callback_data="admin_back",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    text = "\n".join(lines)
-    if prefix:
-        text = f"{prefix}\n\n{text}"
-    return text, _build_users_list_markup(safe_page, total_pages)
+
+def _users_list_payload(
+    lang: str,
+    prefix: str | None = None,
+) -> tuple[str, InlineKeyboardMarkup | None]:
+    rows = _load_users()
+    if not rows:
+        markup = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t(lang, "nav_back_label"),
+                        callback_data="admin_back",
+                    )
+                ]
+            ]
+        )
+        return (i18n.t(lang, "USER_LIST_EMPTY"), markup)
+    header = i18n.t(lang, "USER_LIST_HEADER")
+    text = f"{prefix}\n\n{header}" if prefix else header
+    return text, _build_users_list_markup(rows, lang)
 
 
 def _load_user_row(user_id: int) -> sqlite3.Row | None:
@@ -6255,7 +6181,7 @@ def _build_user_card(user_id: int, lang: str) -> tuple[str, InlineKeyboardMarkup
             [
                 InlineKeyboardButton(
                     text=i18n.t(lang, "nav_back_label"),
-                    callback_data="users:open:1",
+                    callback_data="users_list",
                 )
             ],
         ]
@@ -6343,50 +6269,32 @@ async def admin_channel_test_callback(callback: CallbackQuery):
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_USERS")))
 async def users_list(message: Message):
-    if message.from_user is None or message.from_user.id != ADMIN_USER_ID:
-        await message.answer("Нет доступа")
+    if message.from_user is None or not is_admin(message.from_user.id):
         return
     lang = get_user_lang(message.from_user.id) or "ru"
-    text, markup = _users_list_payload(lang, page=1)
+    text, markup = _users_list_payload(lang)
     await message.answer(text, reply_markup=markup)
 
 
-@dp.callback_query(F.data == "users:open:1")
+@dp.callback_query(F.data == "users_list")
 async def users_list_callback(callback: CallbackQuery):
-    if callback.from_user is None or callback.from_user.id != ADMIN_USER_ID:
-        await callback.answer("Нет доступа", show_alert=True)
+    if not await _ensure_admin_callback(callback):
         return
     lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-    text, markup = _users_list_payload(lang or "ru", page=1)
+    text, markup = _users_list_payload(lang or "ru")
     await callback.answer()
     if callback.message:
         await callback.message.edit_text(text, reply_markup=markup)
 
 
-@dp.callback_query(F.data.regexp(r"^users:page:\d+$"))
-async def users_page_callback(callback: CallbackQuery):
-    if callback.from_user is None or callback.from_user.id != ADMIN_USER_ID:
-        await callback.answer("Нет доступа", show_alert=True)
+@dp.callback_query(F.data == "admin_back")
+async def admin_back_callback(callback: CallbackQuery):
+    if not await _ensure_admin_callback(callback):
         return
-    page = int(callback.data.split(":")[-1])
-    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-    text, markup = _users_list_payload(lang or "ru", page=page)
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text(text, reply_markup=markup)
-
-
-@dp.callback_query(F.data.regexp(r"^users:refresh:\d+$"))
-async def users_refresh_callback(callback: CallbackQuery):
-    if callback.from_user is None or callback.from_user.id != ADMIN_USER_ID:
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    page = int(callback.data.split(":")[-1])
-    lang = get_user_lang(callback.from_user.id) if callback.from_user else None
-    text, markup = _users_list_payload(lang or "ru", page=page)
-    await callback.answer()
-    if callback.message:
-        await callback.message.edit_text(text, reply_markup=markup)
+        lang = get_user_lang(callback.from_user.id) if callback.from_user else None
+        await callback.message.edit_text(i18n.t(lang or "ru", "BACK_TO_MAIN_TEXT"))
 
 
 @dp.callback_query(F.data.regexp(r"^user_view:\d+$"))
@@ -7577,7 +7485,6 @@ async def send_signal_to_all(
             stats["error_blocked"] += 1
             set_user_pref(chat_id, "tg_blocked", 1)
             set_user_pref(chat_id, "ai_signals_enabled", 0)
-            mark_user_inactive(chat_id)
             sample = {
                 "user_id": chat_id,
                 "chat_id": chat_id,
@@ -7594,12 +7501,8 @@ async def send_signal_to_all(
             continue
         except TelegramBadRequest as exc:
             stats["errors"] += 1
-            if _is_blocked_error_text(str(exc)):
-                stats["error_blocked"] += 1
-                mark_user_inactive(chat_id)
-            else:
-                stats["error_invalid_chat"] += 1
-                set_user_pref(chat_id, "invalid_chat_id", 1)
+            stats["error_invalid_chat"] += 1
+            set_user_pref(chat_id, "invalid_chat_id", 1)
             sample = {
                 "user_id": chat_id,
                 "chat_id": chat_id,
