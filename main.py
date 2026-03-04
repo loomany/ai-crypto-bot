@@ -6044,6 +6044,12 @@ def _build_sys_how_bot_works_payload(lang: str, expanded: bool) -> tuple[str, In
     return text, markup
 
 
+def _build_offer_payload(lang: str, expanded: bool) -> tuple[str, str]:
+    offer_point3_extra = i18n.t(lang, "OFFER_POINT3_EXTRA") if expanded else ""
+    callback_data = "offer_collapse" if expanded else "offer_expand"
+    return i18n.t(lang, "OFFER_TEXT", offer_point3_extra=offer_point3_extra), callback_data
+
+
 @dp.message(F.text.in_(i18n.all_labels("SYS_HOW_BOT_WORKS")))
 async def system_how_bot_works(message: Message):
     lang = get_user_lang(message.chat.id) or "ru"
@@ -6117,14 +6123,62 @@ async def subscription_pay_back_callback(callback: CallbackQuery):
     )
     if callback.message:
         lang = get_user_lang(callback.from_user.id) or "ru"
+        offer_text, offer_toggle_callback = _build_offer_payload(lang, expanded=False)
         await callback.message.edit_text(
-            i18n.t(lang, "OFFER_TEXT"),
+            offer_text,
             reply_markup=build_offer_inline_kb(
                 lang,
-                back_callback=_subscribe_back_callback(source)
+                back_callback=_subscribe_back_callback(source),
+                offer_toggle_callback=offer_toggle_callback,
+                offer_expanded=False,
             ),
         )
 
+
+
+
+@dp.callback_query(F.data == "offer_expand")
+async def offer_expand_callback(callback: CallbackQuery) -> None:
+    await callback.answer()
+    if not callback.message:
+        return
+    lang = _resolve_user_lang(callback.from_user.id if callback.from_user else None)
+    source = _subscribe_source_from_code(
+        get_user_pref(callback.from_user.id, "last_sub_source", SUB_SOURCE_SYSTEM)
+    ) if callback.from_user else "system"
+    offer_text, offer_toggle_callback = _build_offer_payload(lang, expanded=True)
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text(
+            offer_text,
+            reply_markup=build_offer_inline_kb(
+                lang,
+                back_callback=_subscribe_back_callback(source),
+                offer_toggle_callback=offer_toggle_callback,
+                offer_expanded=True,
+            ),
+        )
+
+
+@dp.callback_query(F.data == "offer_collapse")
+async def offer_collapse_callback(callback: CallbackQuery) -> None:
+    await callback.answer()
+    if not callback.message:
+        return
+    lang = _resolve_user_lang(callback.from_user.id if callback.from_user else None)
+    source = _subscribe_source_from_code(
+        get_user_pref(callback.from_user.id, "last_sub_source", SUB_SOURCE_SYSTEM)
+    ) if callback.from_user else "system"
+    offer_text, offer_toggle_callback = _build_offer_payload(lang, expanded=False)
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text(
+            offer_text,
+            reply_markup=build_offer_inline_kb(
+                lang,
+                back_callback=_subscribe_back_callback(source),
+                offer_toggle_callback=offer_toggle_callback,
+                offer_expanded=False,
+            ),
+        )
 
 @dp.callback_query(F.data.startswith("sub_back:"))
 async def subscription_back_callback(callback: CallbackQuery):
@@ -7332,11 +7386,17 @@ async def show_subscribe_offer(
 ) -> None:
     set_user_pref(user_id, "last_sub_source", _subscribe_source_code(source))
     lang = get_user_lang(user_id) or "ru"
-    reply_markup = build_offer_inline_kb(lang, back_callback=_subscribe_back_callback(source))
+    offer_text, offer_toggle_callback = _build_offer_payload(lang, expanded=False)
+    reply_markup = build_offer_inline_kb(
+        lang,
+        back_callback=_subscribe_back_callback(source),
+        offer_toggle_callback=offer_toggle_callback,
+        offer_expanded=False,
+    )
     if edit:
-        await message.edit_text(i18n.t(lang, "OFFER_TEXT"), reply_markup=reply_markup)
+        await message.edit_text(offer_text, reply_markup=reply_markup)
         return
-    await message.answer(i18n.t(lang, "OFFER_TEXT"), reply_markup=reply_markup)
+    await message.answer(offer_text, reply_markup=reply_markup)
 
 
 async def send_signal_to_all(

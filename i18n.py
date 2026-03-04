@@ -169,11 +169,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PERIOD_30D": "30 дней",
         "PERIOD_ALL": "Все время",
         "OFFER_TEXT": (
-            "🧾 Оферта на подписку (30/90/365 дней)\n\n"
+            "🧾 Оферта на подписку\n"
+            "30 Дней - 39$\n"
+            "Пожизненный - 299$\n\n"
             "1) Подписка предоставляет доступ к функционалу бота и сигналам с момента активации выбранного периода.\n"
             "2) Сигналы и аналитика не гарантируют прибыль и могут приводить к убыткам.\n"
-            "3) Бот не является финансовым консультантом и не дает персональных рекомендаций “войти/выйти”. "
-            "Материалы носят информационный характер.\n"
+            "3) Бот не является финансовым консультантом и не дает персональных рекомендаций “войти/выйти”.{offer_point3_extra}\n"
             "4) Сценарии формируются при помощи AI-аналитики, которая автоматически сканирует рынок по алгоритмам "
             "технического анализа (свечи/объёмы/волатильность/фильтры качества), близким к подходу профессионального трейдера.\n"
             "5) Вся ответственность за торговые решения и риски полностью лежит на пользователе.\n"
@@ -183,14 +184,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "PAYMENT_TEXT_TRX": (
             "39$ - 30 дней\n"
-            "99$ - 90 дней\n"
-            "299$ - 365 дней\n\n"
+            "299$ - пожизненный\n\n"
             "Отправь TRX (TRON) на адрес:\n"
             "{wallet}\n\n"
             "Твой ID (укажи в комментарии / чеке):\n"
             "{user_id}\n\n"
             "После оплаты нажми «Отправить чек + ID»."
         ),
+        "OFFER_POINT3_EXTRA": " Материалы носят информационный характер.",
         "PD_ENABLED_TEXT": (
             "✅ Pump/Dump уведомления включены.\n"
             "Бот будет присылать алерты при резких движениях рынка."
@@ -1063,11 +1064,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PERIOD_30D": "30 days",
         "PERIOD_ALL": "All time",
         "OFFER_TEXT": (
-            "🧾 Subscription offer (30/90/365 days)\n\n"
+            "🧾 Subscription offer\n"
+            "30 Days - $39\n"
+            "Lifetime - $299\n\n"
             "1) The subscription grants access to bot functionality and signals from the moment the selected period is activated.\n"
             "2) Signals and analytics do not guarantee profit and may result in losses.\n"
-            "3) The bot is not a financial advisor and does not provide personalized enter/exit recommendations. "
-            "Materials are for informational purposes only.\n"
+            "3) The bot is not a financial advisor and does not provide personalized enter/exit recommendations.{offer_point3_extra}\n"
             "4) Scenarios are generated using AI analytics that automatically scans the market by technical analysis "
             "algorithms (candles/volume/volatility/quality filters), close to a professional trader approach.\n"
             "5) Full responsibility for trading decisions and risks lies entirely with the user.\n"
@@ -1077,14 +1079,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "PAYMENT_TEXT_TRX": (
             "$39 - 30 days\n"
-            "$99 - 90 days\n"
-            "$299 - 365 days\n\n"
+            "$299 - lifetime\n\n"
             "Send TRX (TRON) to the address:\n"
             "{wallet}\n\n"
             "Your ID (include in comment / receipt):\n"
             "{user_id}\n\n"
             "After payment tap “Send receipt + ID”."
         ),
+        "OFFER_POINT3_EXTRA": " Materials are for informational purposes only.",
         "PD_ENABLED_TEXT": (
             "✅ Pump/Dump notifications enabled.\n"
             "The bot will now send alerts on sharp market movements."
