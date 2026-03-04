@@ -6091,6 +6091,12 @@ async def system_how_bot_works(message: Message):
     await message.answer(text, reply_markup=inline_markup)
 
 
+@dp.message(F.text.in_(i18n.all_labels("SYS_OFFER")))
+async def system_offer(message: Message) -> None:
+    lang = get_user_lang(message.chat.id) or "ru"
+    await message.answer(i18n.t(lang, "OFFER_FULL_TEXT"))
+
+
 @dp.callback_query(F.data == "about_expand")
 async def about_expand_callback(callback: CallbackQuery) -> None:
     await callback.answer()
