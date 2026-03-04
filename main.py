@@ -1081,8 +1081,10 @@ async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str =
     if TELEGRAM_CHANNEL_ID == 0:
         return False, "no_channel_id"
 
-    async def _send_blurred(slot_reason: str) -> tuple[bool, str]:
-        if CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT > 0 or CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC > 0:
+    async def _send_blurred(slot_reason: str, *, enforce_blurred_limits: bool = True) -> tuple[bool, str]:
+        if enforce_blurred_limits and (
+            CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT > 0 or CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC > 0
+        ):
             allow_blurred, blurred_reason = _channel_take_slot(
                 kind="ai_blurred",
                 daily_limit=CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT,
@@ -1104,7 +1106,8 @@ async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str =
     is_blurred = score > CHANNEL_FREE_AI_MAX_SCORE
 
     if is_blurred:
-        return await _send_blurred("score_limit")
+        # Score 90+ signals are always published to the channel in blurred form immediately.
+        return await _send_blurred("score_limit", enforce_blurred_limits=False)
 
     allow, reason = _channel_take_slot(
         kind="ai",
