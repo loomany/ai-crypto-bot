@@ -2642,8 +2642,8 @@ async def notify_signal_result_short(signal: dict) -> bool:
     if not message_text:
         return False
 
-    if _normalize_signal_status(status_raw) != "TP2" and _should_blur_ai_notifications(user_id):
-        message_text = _blur_ai_notification_text(message_text)
+    # Final close results must stay readable even after a trial is exhausted:
+    # users should still see exact TP1/TP2/SL and BE (+8/+10/+12%) outcomes.
 
     logger.info(
         "[close_notify] notify attempt event_id=%s user_id=%s status=%s",
