@@ -224,14 +224,9 @@ def build_offer_inline_kb(
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=i18n.t(lang, "BTN_ACCEPT"), callback_data="sub_accept")],
-            [
-                InlineKeyboardButton(
-                    text=i18n.t(lang, "BTN_COLLAPSE" if offer_expanded else "BTN_EXPAND"),
-                    callback_data=offer_toggle_callback,
-                )
-            ],
-            [InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data=back_callback)],
+            [InlineKeyboardButton(text=i18n.t(lang, "BTN_PAY_TON"), callback_data="sub_pay_ton")],
+            [InlineKeyboardButton(text=i18n.t(lang, "BTN_PAY_USDT"), callback_data="sub_pay_usdt")],
+            [InlineKeyboardButton(text=i18n.t(lang, "BTN_CONTACT_ADMIN"), callback_data="sub_contact")],
         ]
     )
 
