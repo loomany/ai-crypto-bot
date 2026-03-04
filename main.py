@@ -6045,9 +6045,32 @@ def _build_sys_how_bot_works_payload(lang: str, expanded: bool) -> tuple[str, In
 
 
 def _build_offer_payload(lang: str, expanded: bool) -> tuple[str, str]:
-    offer_point3_extra = i18n.t(lang, "OFFER_POINT3_EXTRA") if expanded else ""
+    full_text = i18n.t(
+        lang,
+        "OFFER_TEXT",
+        offer_point3_extra=i18n.t(lang, "OFFER_POINT3_EXTRA"),
+    )
+    marker = i18n.t(lang, "OFFER_CUTOFF_MARKER").strip()
+    if not marker:
+        callback_data = "offer_collapse" if expanded else "offer_expand"
+        return full_text, callback_data
+
+    marker_pos = full_text.find(marker)
+    if marker_pos < 0:
+        callback_data = "offer_collapse" if expanded else "offer_expand"
+        return full_text, callback_data
+
+    cutoff_pos = marker_pos + len(marker)
+    visible_text = full_text[:cutoff_pos].rstrip()
+    hidden_text = full_text[cutoff_pos:].lstrip("\n")
+    if not hidden_text:
+        callback_data = "offer_collapse" if expanded else "offer_expand"
+        return full_text, callback_data
+
     callback_data = "offer_collapse" if expanded else "offer_expand"
-    return i18n.t(lang, "OFFER_TEXT", offer_point3_extra=offer_point3_extra), callback_data
+    if expanded:
+        return f"{visible_text}\n\n{hidden_text}", callback_data
+    return visible_text, callback_data
 
 
 @dp.message(F.text.in_(i18n.all_labels("SYS_HOW_BOT_WORKS")))
