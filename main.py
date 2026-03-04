@@ -4486,8 +4486,11 @@ def _parse_user_id_arg(text: str | None) -> int | None:
     parts = text.strip().split()
     if len(parts) < 2:
         return None
+    raw_user_id = parts[1].strip()
+    if raw_user_id.lower().startswith("id"):
+        raw_user_id = raw_user_id[2:]
     try:
-        return int(parts[1])
+        return int(raw_user_id)
     except (TypeError, ValueError):
         return None
 
