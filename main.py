@@ -7872,9 +7872,10 @@ async def pump_scan_once(bot: Bot) -> None:
 
         mark_tick("pumpdump", extra=f"подписчиков: {len(subscribers)}")
 
-        if not subscribers:
+        channel_delivery_enabled = CHANNEL_FREE_PD_ENABLED and TELEGRAM_CHANNEL_ID != 0
+        if not subscribers and not channel_delivery_enabled:
             if log_level >= 1:
-                print("[pumpdump] no notify subscribers -> skip")
+                print("[pumpdump] no notify subscribers and channel delivery disabled -> skip")
             return
 
         reset_binance_metrics("pumpdump")
