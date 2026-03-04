@@ -3703,14 +3703,31 @@ def _channel_daily_history_kb() -> InlineKeyboardMarkup:
 
 def _render_channel_daily_history_text() -> str:
     include_legacy = allow_legacy_for_user(is_admin_user=False)
-    page_value, pages, _, rows = _get_history_page(
-        time_window="1d",
-        page=1,
-        viewer_user_id=None,
+    page_size = 12
+    raw_total = count_signal_history(
+        time_window="all",
+        user_id=None,
+        min_score=None,
         include_legacy=include_legacy,
         module="ai_signals",
     )
-    history_summary = _history_summary_from_rows(rows)
+    all_rows = [
+        dict(row)
+        for row in get_signal_history(
+            time_window="all",
+            user_id=None,
+            limit=raw_total,
+            offset=0,
+            include_legacy=include_legacy,
+            module="ai_signals",
+        )
+    ]
+    deduped_rows = _dedupe_signals(all_rows)
+    total = len(deduped_rows)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page_value = 1
+
+    history_summary = _history_summary_from_rows(deduped_rows)
     totals = history_summary.get("totals", {}) if isinstance(history_summary, dict) else {}
     metrics = history_summary.get("metrics", {}) if isinstance(history_summary, dict) else {}
 
@@ -3725,7 +3742,7 @@ def _render_channel_daily_history_text() -> str:
 
     return "\n".join(
         [
-            "📜 История сигналов — 1 день",
+            "📜 История сигналов — всё время",
             f"Стр. {page_value}/{max(1, pages)}",
             "",
             "📈 Итоги",
