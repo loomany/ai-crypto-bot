@@ -6146,15 +6146,6 @@ async def subscription_pay_usdt_callback(callback: CallbackQuery):
     )
 
 
-@dp.callback_query(F.data == "sub_offer")
-async def subscription_offer_callback(callback: CallbackQuery):
-    await callback.answer()
-    if callback.from_user is None or callback.message is None:
-        return
-    lang = get_user_lang(callback.from_user.id) or "ru"
-    await callback.message.answer(i18n.t(lang, "PAYMENT_OFFER_TEXT"))
-
-
 async def _create_and_send_invoice(callback: CallbackQuery, plan: str, amount: str) -> None:
     if callback.from_user is None or callback.message is None:
         return
