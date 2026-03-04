@@ -182,6 +182,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "После оплаты нажми «Отправить чек + ID»."
         ),
         "OFFER_POINT3_EXTRA": " Материалы носят информационный характер.",
+        "OFFER_CUTOFF_MARKER": "3) Бот не является финансовым консультантом и не дает персональных рекомендаций “войти/выйти”.",
         "PD_ENABLED_TEXT": (
             "✅ Pump/Dump уведомления включены.\n"
             "Бот будет присылать алерты при резких движениях рынка."
@@ -1069,6 +1070,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "After payment tap “Send receipt + ID”."
         ),
         "OFFER_POINT3_EXTRA": " Materials are for informational purposes only.",
+        "OFFER_CUTOFF_MARKER": "3) The bot is not a financial advisor and does not provide personalized enter/exit recommendations.",
         "PD_ENABLED_TEXT": (
             "✅ Pump/Dump notifications enabled.\n"
             "The bot will now send alerts on sharp market movements."
