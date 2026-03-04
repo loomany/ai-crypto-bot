@@ -49,7 +49,7 @@ def build_system_menu_kb(
             ],
             [KeyboardButton(text=i18n.t(lang, "SYS_CHANNEL_PANEL"))],
             [KeyboardButton(text=i18n.t(lang, "SYS_HOW_BOT_WORKS"))],
-            [KeyboardButton(text=i18n.t(lang, "SYS_OFFER"))],
+            [KeyboardButton(text=i18n.t(lang, "MENU_BACK"))],
         ]
     else:
         keyboard = [
@@ -58,7 +58,7 @@ def build_system_menu_kb(
                 KeyboardButton(text=i18n.t(lang, "SYS_PAY")),
                 KeyboardButton(text=i18n.t(lang, "SYS_HOW_BOT_WORKS")),
             ],
-            [KeyboardButton(text=i18n.t(lang, "SYS_OFFER"))],
+            [KeyboardButton(text=i18n.t(lang, "MENU_BACK"))],
         ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
