@@ -12,6 +12,7 @@ from contextlib import suppress
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Awaitable
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
@@ -141,6 +142,11 @@ from db import (
     apply_ai_public_partial_fix,
     reset_ai_public_test_trade,
     reset_ai_public_balance_to_start,
+    create_payment,
+    get_payment,
+    mark_payment_paid,
+    grant_subscription,
+    get_subscription,
 )
 from db_path import ensure_db_writable, get_db_path
 from history_status import get_signal_badge, get_signal_status_key
@@ -186,6 +192,7 @@ from keyboards import (
 )
 from settings import SIGNAL_TTL_SECONDS
 from signal_inversion import apply_inversion
+from billing.cryptobot_api import create_invoice_usdt, get_invoice, CryptoBotAPIError
 
 logger = logging.getLogger(__name__)
 DEFAULT_LANG = "ru"
@@ -262,9 +269,13 @@ CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_BLURRED_MIN
 CHANNEL_FREE_PD_ENABLED = os.getenv("CHANNEL_FREE_PD_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 CHANNEL_FREE_PD_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_PD_DAILY_LIMIT", "2") or 2)
 CHANNEL_FREE_PD_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_PD_MIN_GAP_SEC", str(12 * 60 * 60)) or 43200)
+PAYMENT_ASSET = (os.getenv("CRYPTOBOT_ASSET", "USDT") or "USDT").strip().upper()
+PAYMENT_PRICE_USDT_30D = (os.getenv("PAYMENT_PRICE_USDT_30D", "39") or "39").strip()
+PAYMENT_PRICE_USDT_LIFE = (os.getenv("PAYMENT_PRICE_USDT_LIFE", "299") or "299").strip()
+PORT = int(os.getenv("PORT", "8080") or "8080")
 SUB_DAYS = 30
 SUB_PRICE_USD = 39
-PAY_WALLET_TRX = "TGnSveNVrBHytZyA5AfqAj3hDK3FbFCtBY"
+PAY_WALLET_TRX = ""
 ADMIN_CONTACT = "@loomany"
 PREF_AWAITING_RECEIPT = "awaiting_receipt"
 PAYWALL_COOLDOWN_SEC = int(os.getenv("PAYWALL_COOLDOWN_SEC", "60"))
@@ -6125,22 +6136,56 @@ async def subscription_pay_callback(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "sub_pay_usdt")
 async def subscription_pay_usdt_callback(callback: CallbackQuery):
-    user_id = callback.from_user.id if callback.from_user else 0
+    await callback.answer()
+    if callback.from_user is None or callback.message is None:
+        return
+    lang = get_user_lang(callback.from_user.id) or "ru"
+    await callback.message.edit_text(
+        i18n.t(lang, "PAYMENT_PICK_PLAN_TEXT"),
+        reply_markup=build_payment_inline_kb(lang),
+    )
+
+
+async def _create_and_send_invoice(callback: CallbackQuery, plan: str, amount: str) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    user_id = int(callback.from_user.id)
     lang = get_user_lang(user_id) or "ru"
-    payment_text = i18n.t(lang, "PAYMENT_TEXT_TRX", wallet=PAY_WALLET_TRX, user_id=user_id)
-    await callback.answer()
-    if callback.message:
-        await callback.message.edit_text(
-            payment_text,
-            reply_markup=build_payment_inline_kb(lang),
+    plan_label = i18n.t(lang, "PLAN_30D") if plan == "30d" else i18n.t(lang, "PLAN_LIFE")
+    try:
+        invoice = await create_invoice_usdt(user_id=user_id, plan=plan, amount=amount)
+        invoice_id = str(invoice.get("invoice_id") or "")
+        pay_url = str(invoice.get("pay_url") or "")
+        if not invoice_id or not pay_url:
+            raise ValueError(f"Bad invoice payload: {invoice}")
+        create_payment(
+            invoice_id=invoice_id,
+            user_id=user_id,
+            plan=plan,
+            asset=PAYMENT_ASSET,
+            amount=str(amount),
+            status="created",
         )
+        text = i18n.t(lang, "PAYMENT_INVOICE_TEXT", plan=plan_label, amount=amount)
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="💳 Pay", url=pay_url)]]
+        )
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception as exc:
+        logger.exception("[payment] create invoice failed user_id=%s plan=%s", user_id, plan)
+        await callback.message.answer(i18n.t(lang, "PAYMENT_CREATE_FAIL"))
 
 
-
-
-@dp.callback_query(F.data == "sub_pay_ton")
-async def subscription_pay_ton_callback(callback: CallbackQuery):
+@dp.callback_query(F.data == "sub_plan_30d")
+async def subscription_plan_30d_callback(callback: CallbackQuery):
     await callback.answer()
+    await _create_and_send_invoice(callback, plan="30d", amount=PAYMENT_PRICE_USDT_30D)
+
+
+@dp.callback_query(F.data == "sub_plan_life")
+async def subscription_plan_life_callback(callback: CallbackQuery):
+    await callback.answer()
+    await _create_and_send_invoice(callback, plan="life", amount=PAYMENT_PRICE_USDT_LIFE)
 
 @dp.callback_query(F.data == "sub_pay_back")
 async def subscription_pay_back_callback(callback: CallbackQuery):
@@ -6164,6 +6209,98 @@ async def subscription_pay_back_callback(callback: CallbackQuery):
         )
 
 
+
+
+def _extract_invoice_id(payload: dict[str, Any]) -> str:
+    invoice = payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
+    if not isinstance(invoice, dict):
+        return ""
+    invoice_id = invoice.get("invoice_id") or invoice.get("id")
+    return str(invoice_id or "").strip()
+
+
+def _parse_invoice_payload(payload: str) -> tuple[int, str]:
+    m = re.match(r"^sub:(30d|life):user:(\d+)$", str(payload or "").strip())
+    if not m:
+        return 0, ""
+    return int(m.group(2)), m.group(1)
+
+
+async def _notify_payment_success(user_id: int, paid_until: int) -> None:
+    if not bot:
+        return
+    lang = get_user_lang(user_id) or "ru"
+    text = i18n.t(lang, "USER_CARD_ACTIVE_UNTIL", date=_format_user_time(paid_until))
+    try:
+        await bot.send_message(user_id, f"✅ Оплата получена. Подписка активна до { _format_user_time(paid_until)}")
+    except Exception as exc:
+        _log_throttled(
+            "tg_send_fail_payment_success",
+            "[tg_send_fail] user_id=%s action=payment_success err=%s",
+            user_id,
+            exc,
+            exc=exc,
+        )
+
+
+async def crypto_webhook_handler(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"ok": True})
+
+    invoice_id = _extract_invoice_id(payload if isinstance(payload, dict) else {})
+    if not invoice_id:
+        return web.json_response({"ok": True})
+
+    try:
+        invoice = await get_invoice(invoice_id)
+    except CryptoBotAPIError:
+        logger.exception("[crypto_webhook] failed to verify invoice_id=%s", invoice_id)
+        return web.json_response({"ok": True})
+
+    if str(invoice.get("status") or "").lower() != "paid":
+        return web.json_response({"ok": True})
+    if str(invoice.get("asset") or "").upper() != "USDT":
+        return web.json_response({"ok": True})
+
+    existing = get_payment(invoice_id)
+    if existing is not None and str(existing["status"]).lower() == "paid":
+        return web.json_response({"ok": True})
+
+    payload_text = str(invoice.get("payload") or "")
+    user_id, plan = _parse_invoice_payload(payload_text)
+    if user_id <= 0 or plan not in {"30d", "life"}:
+        logger.warning("[crypto_webhook] bad payload invoice_id=%s payload=%s", invoice_id, payload_text)
+        return web.json_response({"ok": True})
+
+    if existing is None:
+        create_payment(
+            invoice_id=invoice_id,
+            user_id=user_id,
+            plan=plan,
+            asset="USDT",
+            amount=str(invoice.get("amount") or ""),
+            status="created",
+        )
+    mark_payment_paid(invoice_id)
+    paid_until = grant_subscription(user_id, plan)
+    await _notify_payment_success(user_id, paid_until)
+    return web.json_response({"ok": True})
+
+
+async def _run_webhook_server() -> None:
+    app = web.Application()
+    app.router.add_post("/crypto/webhook", crypto_webhook_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    logger.info("[webhook] server started on 0.0.0.0:%s", PORT)
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await runner.cleanup()
 
 
 @dp.callback_query(F.data == "offer_expand")
@@ -8786,7 +8923,7 @@ async def main():
     daily_history_task = asyncio.create_task(_delayed_task(20, channel_daily_history_worker_loop()))
     watchdog_task = asyncio.create_task(watchdog())
     try:
-        await dp.start_polling(bot)
+        await asyncio.gather(dp.start_polling(bot), _run_webhook_server())
     finally:
         daily_history_task.cancel()
         with suppress(asyncio.CancelledError):

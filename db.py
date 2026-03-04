@@ -55,6 +55,30 @@ def init_db() -> None:
     try:
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS payments (
+                invoice_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                plan TEXT NOT NULL,
+                asset TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                paid_at INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                user_id INTEGER PRIMARY KEY,
+                plan TEXT NOT NULL,
+                paid_until INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS user_prefs (
                 user_id INTEGER NOT NULL,
                 key TEXT NOT NULL,
@@ -604,8 +628,106 @@ def is_user_locked(user_id: int) -> bool:
 
 
 def is_sub_active(user_id: int) -> bool:
+    sub = get_subscription(user_id)
+    if sub is not None:
+        return time.time() < int(sub["paid_until"])
     sub_until = get_user_pref(user_id, "sub_until", 0)
     return time.time() < sub_until
+
+
+def create_payment(
+    invoice_id: str,
+    user_id: int,
+    plan: str,
+    asset: str,
+    amount: str,
+    status: str = "created",
+) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO payments (invoice_id, user_id, plan, asset, amount, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(invoice_id) DO UPDATE SET
+                user_id = excluded.user_id,
+                plan = excluded.plan,
+                asset = excluded.asset,
+                amount = excluded.amount,
+                status = excluded.status
+            """,
+            (str(invoice_id), int(user_id), str(plan), str(asset), str(amount), str(status), now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_payment(invoice_id: str) -> Optional[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT * FROM payments WHERE invoice_id = ?", (str(invoice_id),))
+        return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def mark_payment_paid(invoice_id: str) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE payments SET status = 'paid', paid_at = ? WHERE invoice_id = ?",
+            (now, str(invoice_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_subscription(user_id: int) -> Optional[sqlite3.Row]:
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT * FROM subscriptions WHERE user_id = ?", (int(user_id),))
+        return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def grant_subscription(user_id: int, plan: str) -> int:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT paid_until FROM subscriptions WHERE user_id = ?",
+            (int(user_id),),
+        )
+        row = cur.fetchone()
+        current_paid_until = int(row["paid_until"]) if row is not None else 0
+
+        if plan == "life":
+            sub_plan = "life"
+            paid_until = now + 10 * 365 * 86400
+        else:
+            sub_plan = "pro30"
+            paid_until = max(current_paid_until, now) + 30 * 86400
+
+        conn.execute(
+            """
+            INSERT INTO subscriptions (user_id, plan, paid_until, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id)
+            DO UPDATE SET plan = excluded.plan, paid_until = excluded.paid_until, updated_at = excluded.updated_at
+            """,
+            (int(user_id), sub_plan, int(paid_until), now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    set_user_pref(user_id, "sub_until", paid_until)
+    return paid_until
 
 
 def ensure_trial_defaults(user_id: int) -> None:

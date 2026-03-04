@@ -172,15 +172,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "30 Дней - 39$\n"
             "Пожизненный - 299$"
         ),
-        "PAYMENT_TEXT_TRX": (
-            "30 Дней - 39$\n"
-            "Пожизненный - 299$\n\n"
-            "Отправь USDT на адрес:\n"
-            "{wallet}\n\n"
-            "Твой ID (укажи в комментарии / чеке):\n"
-            "{user_id}\n\n"
-            "После оплаты нажми «Отправить чек + ID»."
-        ),
+        "PAYMENT_PICK_PLAN_TEXT": "Выберите план для оплаты в USDT:",
+        "PAYMENT_INVOICE_TEXT": "💳 Оплата подписки Krypton AI\nПлан: {plan}\nСумма: {amount} USDT\nНажмите Pay.",
+        "PAYMENT_CREATE_FAIL": "Не удалось создать счёт. Попробуйте позже.",
         "OFFER_POINT3_EXTRA": " Материалы носят информационный характер.",
         "OFFER_CUTOFF_MARKER": "3) Бот не является финансовым консультантом и не дает персональных рекомендаций “войти/выйти”.",
         "PD_ENABLED_TEXT": (
@@ -206,8 +200,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "LANG_RU": "🇷🇺 Русский",
         "LANG_EN": "🇬🇧 English",
         "BTN_ACCEPT": "✅ Принять",
-        "BTN_PAY_TON": "Оплатить - 💎 TON",
+        "BTN_PAY_TON": "Оплатить USDT (39$)",
         "BTN_PAY_USDT": "Оплатить - USDT",
+        "BTN_PLAN_30D_USDT": "30 дней — 39$ (USDT)",
+        "BTN_PLAN_LIFE_USDT": "Пожизненный — 299$ (USDT)",
+        "PLAN_30D": "30 дней",
+        "PLAN_LIFE": "пожизненный",
         "BTN_CONTACT_ADMIN": "Связь с админом",
         "BTN_COPY_ADDRESS": "📋 Скопировать адрес",
         "BTN_SEND_RECEIPT": "📎 Отправить чек + ID",
@@ -1060,15 +1058,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "30 Days - $39\n"
             "Lifetime - $299"
         ),
-        "PAYMENT_TEXT_TRX": (
-            "30 Days - $39\n"
-            "Lifetime - $299\n\n"
-            "Send USDT to the address:\n"
-            "{wallet}\n\n"
-            "Your ID (include in comment / receipt):\n"
-            "{user_id}\n\n"
-            "After payment tap “Send receipt + ID”."
-        ),
+        "PAYMENT_PICK_PLAN_TEXT": "Choose a USDT payment plan:",
+        "PAYMENT_INVOICE_TEXT": "💳 Krypton AI subscription payment\nPlan: {plan}\nAmount: {amount} USDT\nTap Pay.",
+        "PAYMENT_CREATE_FAIL": "Could not create invoice. Please try again later.",
         "OFFER_POINT3_EXTRA": " Materials are for informational purposes only.",
         "OFFER_CUTOFF_MARKER": "3) The bot is not a financial advisor and does not provide personalized enter/exit recommendations.",
         "PD_ENABLED_TEXT": (
@@ -1123,8 +1115,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "LANG_RU": "🇷🇺 Русский",
         "LANG_EN": "🇬🇧 English",
         "BTN_ACCEPT": "✅ Accept",
-        "BTN_PAY_TON": "Pay - 💎 TON",
+        "BTN_PAY_TON": "Pay USDT ($39)",
         "BTN_PAY_USDT": "Pay - USDT",
+        "BTN_PLAN_30D_USDT": "30 days — $39 (USDT)",
+        "BTN_PLAN_LIFE_USDT": "Lifetime — $299 (USDT)",
+        "PLAN_30D": "30 days",
+        "PLAN_LIFE": "lifetime",
         "BTN_CONTACT_ADMIN": "Contact admin",
         "BTN_COPY_ADDRESS": "📋 Copy address",
         "BTN_SEND_RECEIPT": "📎 Send receipt + ID",
