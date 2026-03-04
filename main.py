@@ -178,6 +178,7 @@ from keyboards import (
     build_lang_select_kb,
     build_main_menu_kb,
     build_offer_inline_kb,
+    build_payment_methods_inline_kb,
     build_payment_inline_kb,
     build_system_menu_kb,
     pumpdump_inline_kb,
@@ -6096,6 +6097,24 @@ async def subscription_pay_callback(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "sub_accept")
 async def subscription_accept_callback(callback: CallbackQuery):
+    user_id = callback.from_user.id if callback.from_user else 0
+    lang = get_user_lang(user_id) or "ru"
+    payment_text = i18n.t(lang, "PAYMENT_METHODS_TEXT")
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            payment_text,
+            reply_markup=build_payment_methods_inline_kb(lang),
+        )
+
+
+@dp.callback_query(F.data == "sub_pay_ton")
+async def subscription_pay_ton_callback(callback: CallbackQuery):
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "sub_pay_usdt")
+async def subscription_pay_usdt_callback(callback: CallbackQuery):
     user_id = callback.from_user.id if callback.from_user else 0
     lang = get_user_lang(user_id) or "ru"
     payment_text = i18n.t(lang, "PAYMENT_TEXT_TRX", wallet=PAY_WALLET_TRX, user_id=user_id)

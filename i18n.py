@@ -191,6 +191,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "{user_id}\n\n"
             "После оплаты нажми «Отправить чек + ID»."
         ),
+        "PAYMENT_METHODS_TEXT": (
+            "30 Дней - 39$\n"
+            "Пожизненный - 299$"
+        ),
         "PD_ENABLED_TEXT": (
             "✅ Pump/Dump уведомления включены.\n"
             "Бот будет присылать алерты при резких движениях рынка."
@@ -217,6 +221,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "BTN_CONTACT_ADMIN": "💬 Связь с админом",
         "BTN_COPY_ADDRESS": "📋 Скопировать адрес",
         "BTN_SEND_RECEIPT": "📎 Отправить чек + ID",
+        "BTN_PAY_TON": "Оплатить - 💎 TON",
+        "BTN_PAY_USDT": "Оплатить - USDT",
         "BTN_BUY_SUB": "💳 Купить подписку",
         "BTN_EXPAND": "📖 Раскрыть",
         "BTN_COLLAPSE": "🔽 Скрыть",
@@ -1085,6 +1091,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "{user_id}\n\n"
             "After payment tap “Send receipt + ID”."
         ),
+        "PAYMENT_METHODS_TEXT": (
+            "30 Days - 39$\n"
+            "Lifetime - 299$"
+        ),
         "PD_ENABLED_TEXT": (
             "✅ Pump/Dump notifications enabled.\n"
             "The bot will now send alerts on sharp market movements."
@@ -1140,6 +1150,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "BTN_CONTACT_ADMIN": "💬 Contact admin",
         "BTN_COPY_ADDRESS": "📋 Copy address",
         "BTN_SEND_RECEIPT": "📎 Send receipt + ID",
+        "BTN_PAY_TON": "Pay - 💎 TON",
+        "BTN_PAY_USDT": "Pay - USDT",
         "BTN_BUY_SUB": "💳 Buy subscription",
         "BTN_EXPAND": "📖 Expand",
         "BTN_COLLAPSE": "🔽 Collapse",
