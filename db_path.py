@@ -2,11 +2,26 @@ import os
 from pathlib import Path
 
 
+def _default_db_path() -> Path:
+    railway_mount = (os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or "").strip()
+    if railway_mount:
+        mount_path = Path(railway_mount)
+        if mount_path.suffix:
+            return mount_path
+        return mount_path / "bot.db"
+
+    data_path = Path("/data")
+    if data_path.exists() and os.access(data_path, os.W_OK):
+        return data_path / "bot.db"
+
+    return Path("./data") / "bot.db"
+
+
 def get_db_path() -> str:
     db_path = os.getenv("DB_PATH")
     if db_path:
         return db_path
-    return str(Path("./data") / "bot.db")
+    return str(_default_db_path())
 
 
 def ensure_db_writable() -> str:
