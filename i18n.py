@@ -1574,8 +1574,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Used for trading"
         ),
         "SIGNAL_QUALITY_HIGH_RISK": (
-            "⚠️ HIGHER RISK\n"
-            "Experienced traders only (Score 80–89)\n"
+            "🔥 ACTIVE SCENARIO\n"
+            "For experienced traders (Score 80–89)\n"
             "Use selectively"
         ),
         "SIGNAL_QUALITY_ANALYSIS_ONLY": (
@@ -1583,7 +1583,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Below quality threshold (Score < 80)\n"
             "Not recommended for trading"
         ),
-        "SIGNAL_COMPACT_HIGH_RISK_HEADER": "⚠️ HIGH RISK (Score 80–89)",
+        "SIGNAL_COMPACT_HIGH_RISK_HEADER": "🔥 ACTIVE SCENARIO (Score 80–89)",
         "SIGNAL_COMPACT_META_LINE": "{side} · TF: {timeframe} · Entry: {entry_tf}",
         "SIGNAL_COMPACT_POI_LINE": "POI: {poi_from}–{poi_to}",
         "SIGNAL_COMPACT_SL_LINE": "SL: {sl}",
@@ -1618,8 +1618,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SIGNAL_SHORT_80_89_SCORE_LINE": "Score: {score}",
         "SIGNAL_SHORT_80_89_TTL_LINE": "TTL: ~{minutes} min",
         "SIGNAL_SHORT_HIGH_RISK_WARNING": (
-            "⚠️ HIGHER RISK\n"
-            "Experienced traders only\n"
+            "🔥 ACTIVE SCENARIO\n"
+            "For experienced traders\n"
             "Use selectively"
         ),
         "SIGNAL_BUTTON_SOUND_ON": "🔔 Sound: Signal + Entry",
