@@ -1061,22 +1061,14 @@ async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str =
     if TELEGRAM_CHANNEL_ID == 0:
         return False, "no_channel_id"
 
-    score = int(round(float(signal.get("score", 0) or 0)))
-    is_blurred = score > CHANNEL_FREE_AI_MAX_SCORE
-
-    slot_kind = "ai_blurred" if is_blurred else "ai"
-    daily_limit = CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT if is_blurred else CHANNEL_FREE_AI_DAILY_LIMIT
-    min_gap_sec = CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC if is_blurred else CHANNEL_FREE_AI_MIN_GAP_SEC
-
-    allow, reason = _channel_take_slot(
-        kind=slot_kind,
-        daily_limit=daily_limit,
-        min_gap_sec=min_gap_sec,
-    )
-    if not allow:
-        return False, reason
-
-    if is_blurred:
+    async def _send_blurred(slot_reason: str) -> tuple[bool, str]:
+        allow_blurred, blurred_reason = _channel_take_slot(
+            kind="ai_blurred",
+            daily_limit=CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT,
+            min_gap_sec=CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC,
+        )
+        if not allow_blurred:
+            return False, f"{slot_reason}|blurred:{blurred_reason}"
         blurred_text = _format_channel_blurred_ai_signal(signal, lang)
         await bot.send_message(
             TELEGRAM_CHANNEL_ID,
@@ -1085,7 +1077,21 @@ async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str =
             disable_web_page_preview=True,
             reply_markup=_public_ai_channel_lead_kb(lang=lang),
         )
-        return True, "sent"
+        return True, f"sent_blurred:{slot_reason}"
+
+    score = int(round(float(signal.get("score", 0) or 0)))
+    is_blurred = score > CHANNEL_FREE_AI_MAX_SCORE
+
+    if is_blurred:
+        return await _send_blurred("score_limit")
+
+    allow, reason = _channel_take_slot(
+        kind="ai",
+        daily_limit=CHANNEL_FREE_AI_DAILY_LIMIT,
+        min_gap_sec=CHANNEL_FREE_AI_MIN_GAP_SEC,
+    )
+    if not allow:
+        return await _send_blurred(f"fallback:{reason}")
 
     collapsed_text, expanded_text = _build_signal_text_variants(signal, lang, is_admin_user=False)
     sent = await bot.send_message(
