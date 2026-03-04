@@ -73,6 +73,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SYS_CHANNEL_PANEL": "📣 Телеграм канал",
         "SYS_PAY": "💳 Оплатить подписку",
         "SYS_HOW_BOT_WORKS": "🧠 Как работает бот",
+        "SYS_OFFER": "🧾 Оферта",
         "INVERSION_TOGGLE_BUTTON": "🔁 Инверсия: {state}",
         "INVERSION_STATE_ON": "ВКЛ",
         "INVERSION_STATE_OFF": "ВЫКЛ",
@@ -177,6 +178,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PAYMENT_CREATE_FAIL": "Не удалось создать счёт. Попробуйте позже.",
         "OFFER_POINT3_EXTRA": " Материалы носят информационный характер.",
         "OFFER_CUTOFF_MARKER": "3) Бот не является финансовым консультантом и не дает персональных рекомендаций “войти/выйти”.",
+        "OFFER_FULL_TEXT": (
+            "🧾 Оферта на подписку\n\n"
+            "1) Подписка предоставляет доступ к функционалу бота и сигналам сроком, выбранным в тарифе, с момента активации.\n"
+            "2) Сигналы и аналитика не гарантируют прибыль и могут приводить к убыткам.\n"
+            "3) Бот не является финансовым консультантом и не дает персональных рекомендаций по входу/выходу. Материалы носят информационный характер.\n"
+            "4) Сценарии формируются при помощи AI-аналитики, которая автоматически сканирует рынок по алгоритмам технического анализа.\n"
+            "5) Вся ответственность за торговые решения и риски полностью лежит на пользователе.\n"
+            "6) Оплата подписки означает согласие с условиями оферты.\n"
+            "7) Оплата производится в доступной в боте валюте и сети, указанной в момент оплаты."
+        ),
         "PD_ENABLED_TEXT": (
             "✅ Pump/Dump уведомления включены.\n"
             "Бот будет присылать алерты при резких движениях рынка."
@@ -988,6 +999,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "SYS_CHANNEL_PANEL": "📣 Telegram channel",
         "SYS_PAY": "💳 Buy subscription",
         "SYS_HOW_BOT_WORKS": "🧠 How the bot works",
+        "SYS_OFFER": "🧾 Offer",
         "INVERSION_TOGGLE_BUTTON": "🔁 Inversion: {state}",
         "INVERSION_STATE_ON": "ON",
         "INVERSION_STATE_OFF": "OFF",
@@ -1063,6 +1075,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PAYMENT_CREATE_FAIL": "Could not create invoice. Please try again later.",
         "OFFER_POINT3_EXTRA": " Materials are for informational purposes only.",
         "OFFER_CUTOFF_MARKER": "3) The bot is not a financial advisor and does not provide personalized enter/exit recommendations.",
+        "OFFER_FULL_TEXT": (
+            "🧾 Subscription Offer\n\n"
+            "1) The subscription grants access to the bot features and signals for the period selected in the plan from the moment of activation.\n"
+            "2) Signals and analytics do not guarantee profit and may result in losses.\n"
+            "3) The bot is not a financial advisor and does not provide personalized entry/exit recommendations. Materials are for informational purposes only.\n"
+            "4) Scenarios are generated using AI analytics that automatically scans the market using technical analysis algorithms.\n"
+            "5) Full responsibility for trading decisions and risks lies with the user.\n"
+            "6) Subscription payment means acceptance of this offer.\n"
+            "7) Payment is made in the currency and network available in the bot at the time of payment."
+        ),
         "PD_ENABLED_TEXT": (
             "✅ Pump/Dump notifications enabled.\n"
             "The bot will now send alerts on sharp market movements."
