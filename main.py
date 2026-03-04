@@ -2634,8 +2634,6 @@ async def notify_signal_result_short(signal: dict) -> bool:
         return False
     if is_user_locked(user_id):
         return False
-    if not is_sub_active(user_id):
-        return False
     if not is_notify_enabled(user_id, "ai_signals"):
         return False
 
@@ -2643,6 +2641,9 @@ async def notify_signal_result_short(signal: dict) -> bool:
     message_text = _format_short_result_message(signal, lang)
     if not message_text:
         return False
+
+    if _normalize_signal_status(status_raw) != "TP2" and _should_blur_ai_notifications(user_id):
+        message_text = _blur_ai_notification_text(message_text)
 
     logger.info(
         "[close_notify] notify attempt event_id=%s user_id=%s status=%s",
@@ -2746,7 +2747,7 @@ async def notify_signal_activation(signal: dict) -> bool:
         user_id = int(event.get("user_id", 0))
         if user_id <= 0:
             continue
-        if is_user_locked(user_id) or not is_sub_active(user_id):
+        if is_user_locked(user_id):
             continue
         if not is_notify_enabled(user_id, "ai_signals"):
             continue
@@ -2765,6 +2766,8 @@ async def notify_signal_activation(signal: dict) -> bool:
             market_direction=signal.get("btc_direction"),
             market_trend=signal.get("btc_trend"),
         )
+        if _should_blur_ai_notifications(user_id):
+            message_text = _blur_ai_notification_text(message_text)
         try:
             await bot.send_message(
                 user_id,
@@ -2816,7 +2819,7 @@ async def notify_signal_poi_touched(signal: dict) -> bool:
         user_id = int(event.get("user_id", 0))
         if user_id <= 0:
             continue
-        if is_user_locked(user_id) or not is_sub_active(user_id):
+        if is_user_locked(user_id):
             continue
         if not is_notify_enabled(user_id, "ai_signals"):
             continue
@@ -2832,6 +2835,8 @@ async def notify_signal_poi_touched(signal: dict) -> bool:
             market_direction=signal.get("btc_direction"),
             market_trend=signal.get("btc_trend"),
         )
+        if _should_blur_ai_notifications(user_id):
+            message_text = _blur_ai_notification_text(message_text)
         try:
             await bot.send_message(
                 user_id,
@@ -2877,7 +2882,7 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
         user_id = int(event.get("user_id", 0))
         if user_id <= 0:
             continue
-        if is_user_locked(user_id) or not is_sub_active(user_id):
+        if is_user_locked(user_id):
             continue
         if not is_notify_enabled(user_id, "ai_signals"):
             continue
@@ -2909,6 +2914,8 @@ async def notify_signal_progress(signal: dict, event_type: str) -> bool:
                         f"{ui_symbol(symbol)} {side}",
                     ]
                 )
+            if _should_blur_ai_notifications(user_id):
+                message_text = _blur_ai_notification_text(message_text)
             await bot.send_message(
                 user_id,
                 message_text,
@@ -6704,6 +6711,25 @@ def _blurred_pd_symbol(symbol: str) -> str:
         if normalized.endswith(quote) and len(normalized) > len(quote):
             return f"***{quote}"
     return "***"
+
+
+def _has_ai_trial_balance(user_id: int) -> bool:
+    ensure_trial_defaults(user_id)
+    return int(get_user_pref(user_id, "trial_ai_left", TRIAL_AI_LIMIT) or 0) > 0
+
+
+def _should_blur_ai_notifications(user_id: int) -> bool:
+    if is_admin(user_id) or is_sub_active(user_id):
+        return False
+    return not _has_ai_trial_balance(user_id)
+
+
+def _blur_ai_notification_text(text: str) -> str:
+    if not text:
+        return text
+    blurred = re.sub(r"\b[A-Z]{2,12}(?:/USDT|USDT)\b", "***USDT", text)
+    blurred = re.sub(r"\d+[\d.,]*", "***", blurred)
+    return blurred
 
 
 def _binance_spot_url(symbol: str) -> str:
