@@ -3692,6 +3692,110 @@ def _archive_inline_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _channel_daily_history_kb() -> InlineKeyboardMarkup:
+    target_url = AI_PUBLIC_FREE_SIGNAL_URL or "https://t.me/Kryptoon_ai_bot"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Получать сигналы", url=target_url)],
+        ]
+    )
+
+
+def _render_channel_daily_history_text() -> str:
+    include_legacy = allow_legacy_for_user(is_admin_user=False)
+    page_size = 12
+    raw_total = count_signal_history(
+        time_window="all",
+        user_id=None,
+        min_score=None,
+        include_legacy=include_legacy,
+        module="ai_signals",
+    )
+    all_rows = [
+        dict(row)
+        for row in get_signal_history(
+            time_window="all",
+            user_id=None,
+            limit=raw_total,
+            offset=0,
+            include_legacy=include_legacy,
+            module="ai_signals",
+        )
+    ]
+    deduped_rows = _dedupe_signals(all_rows)
+    total = len(deduped_rows)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page_value = 1
+
+    history_summary = _history_summary_from_rows(deduped_rows)
+    totals = history_summary.get("totals", {}) if isinstance(history_summary, dict) else {}
+    metrics = history_summary.get("metrics", {}) if isinstance(history_summary, dict) else {}
+
+    tp_total = _safe_int(totals.get("tp"), 0) if isinstance(totals, dict) else 0
+    be_total = _safe_int(totals.get("be"), 0) if isinstance(totals, dict) else 0
+    sl_total = _safe_int(totals.get("sl"), 0) if isinstance(totals, dict) else 0
+    exp_total = _safe_int(totals.get("expired_no_entry"), 0) if isinstance(totals, dict) else 0
+    active_total = _safe_int(totals.get("in_progress"), 0) if isinstance(totals, dict) else 0
+    be_avg = float(metrics.get("be_avg") or 0.0) if isinstance(metrics, dict) else 0.0
+    winrate_value = metrics.get("winrate") if isinstance(metrics, dict) else None
+    winrate_text = f"{float(winrate_value):.1f}" if isinstance(winrate_value, (int, float)) else "0.0"
+
+    return "\n".join(
+        [
+            "📜 История сигналов — всё время",
+            f"Стр. {page_value}/{max(1, pages)}",
+            "",
+            "📈 Итоги",
+            "",
+            f"🟢 TP: {tp_total}",
+            f"🟢 BE: {be_total} | средний результат +{be_avg:.1f}% к депозиту (x{int(AI_PUBLIC_LEVERAGE)})",
+            f"🔴 SL: {sl_total}",
+            f"⚪ EXP: {exp_total}",
+            f"🟣 Active: {active_total}",
+            "",
+            f"📊 Winrate: {winrate_text}% | Формула: (TP+BE)/(TP+BE+SL)",
+            "",
+            "━━━━━━━━━━━━━━━━",
+            "ℹ️ Пояснение",
+            "━━━━━━━━━━━━━━━━",
+            "🟢 BE — цена дала минимум прибыли, прибыль защищена.",
+            "Считается успешной сделкой.",
+            "⚪ EXP — сценарий устарел: вход не подтвердился за время жизни сигнала.",
+        ]
+    )
+
+
+def _channel_daily_history_key() -> str:
+    return "channel:daily_history:last_date"
+
+
+async def channel_daily_history_worker_loop() -> None:
+    while True:
+        now = datetime.now(ALMATY_TZ)
+        target = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        sleep_sec = max(1.0, (target - now).total_seconds())
+        await asyncio.sleep(sleep_sec)
+
+        today_key = datetime.now(ALMATY_TZ).strftime("%Y-%m-%d")
+        if str(get_state(_channel_daily_history_key()) or "") == today_key:
+            continue
+        if TELEGRAM_CHANNEL_ID == 0:
+            logger.warning("[channel_daily_history] skip: no TELEGRAM_CHANNEL_ID")
+            continue
+
+        try:
+            text = _render_channel_daily_history_text()
+            await bot.send_message(
+                TELEGRAM_CHANNEL_ID,
+                text,
+                reply_markup=_channel_daily_history_kb(),
+            )
+            set_state(_channel_daily_history_key(), today_key)
+            logger.info("[channel_daily_history] sent date=%s", today_key)
+        except Exception:
+            logger.exception("[channel_daily_history] send failed")
+
+
 def _archive_detail_kb(
     *,
     lang: str,
@@ -8582,10 +8686,14 @@ async def main():
         _delayed_task(12, safe_worker_loop("ai_signals", ai_scan_once))
     )
     audit_task = asyncio.create_task(_delayed_task(18, signal_audit_worker_loop()))
+    daily_history_task = asyncio.create_task(_delayed_task(20, channel_daily_history_worker_loop()))
     watchdog_task = asyncio.create_task(watchdog())
     try:
         await dp.start_polling(bot)
     finally:
+        daily_history_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await daily_history_task
         signals_task.cancel()
         with suppress(asyncio.CancelledError):
             await signals_task
