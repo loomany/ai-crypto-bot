@@ -236,7 +236,7 @@ def build_payment_inline_kb(lang: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text=i18n.t(lang, "BTN_PLAN_30D_USDT"), callback_data="sub_plan_30d")],
             [InlineKeyboardButton(text=i18n.t(lang, "BTN_PLAN_LIFE_USDT"), callback_data="sub_plan_life")],
-            [InlineKeyboardButton(text=i18n.t(lang, "BTN_OFFER"), callback_data="sub_offer")],
+            [InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data="sub_pay_back")],
         ]
     )
 
