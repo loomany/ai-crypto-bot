@@ -262,9 +262,9 @@ PUMP_DAILY_LIMIT = int(os.getenv("PUMP_DAILY_LIMIT", "6"))
 CHANNEL_FREE_AI_ENABLED = os.getenv("CHANNEL_FREE_AI_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 CHANNEL_FREE_AI_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_AI_DAILY_LIMIT", "2") or 2)
 CHANNEL_FREE_AI_MAX_SCORE = int(os.getenv("CHANNEL_FREE_AI_MAX_SCORE", "89") or 89)
-CHANNEL_FREE_AI_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_MIN_GAP_SEC", str(6 * 60 * 60)) or 21600)
+CHANNEL_FREE_AI_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_MIN_GAP_SEC", str(12 * 60 * 60)) or 43200)
 CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT = int(
-    os.getenv("CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT", str(CHANNEL_FREE_AI_DAILY_LIMIT)) or CHANNEL_FREE_AI_DAILY_LIMIT
+    os.getenv("CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT", "0") or 0
 )
 CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC", "0") or 0)
 CHANNEL_FREE_PD_ENABLED = os.getenv("CHANNEL_FREE_PD_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
@@ -1082,13 +1082,14 @@ async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str =
         return False, "no_channel_id"
 
     async def _send_blurred(slot_reason: str) -> tuple[bool, str]:
-        allow_blurred, blurred_reason = _channel_take_slot(
-            kind="ai_blurred",
-            daily_limit=CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT,
-            min_gap_sec=CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC,
-        )
-        if not allow_blurred:
-            return False, f"{slot_reason}|blurred:{blurred_reason}"
+        if CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT > 0 or CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC > 0:
+            allow_blurred, blurred_reason = _channel_take_slot(
+                kind="ai_blurred",
+                daily_limit=CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT,
+                min_gap_sec=CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC,
+            )
+            if not allow_blurred:
+                return False, f"{slot_reason}|blurred:{blurred_reason}"
         blurred_text = _format_channel_blurred_ai_signal(signal, lang)
         await bot.send_message(
             TELEGRAM_CHANNEL_ID,
