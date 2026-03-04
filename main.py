@@ -260,8 +260,8 @@ CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT = int(
 )
 CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC", "0") or 0)
 CHANNEL_FREE_PD_ENABLED = os.getenv("CHANNEL_FREE_PD_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
-CHANNEL_FREE_PD_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_PD_DAILY_LIMIT", "1") or 1)
-CHANNEL_FREE_PD_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_PD_MIN_GAP_SEC", str(24 * 60 * 60)) or 86400)
+CHANNEL_FREE_PD_DAILY_LIMIT = int(os.getenv("CHANNEL_FREE_PD_DAILY_LIMIT", "2") or 2)
+CHANNEL_FREE_PD_MIN_GAP_SEC = int(os.getenv("CHANNEL_FREE_PD_MIN_GAP_SEC", str(12 * 60 * 60)) or 43200)
 SUB_DAYS = 30
 SUB_PRICE_USD = 39
 PAY_WALLET_TRX = "TGnSveNVrBHytZyA5AfqAj3hDK3FbFCtBY"
@@ -1126,8 +1126,8 @@ async def _send_free_pumpdump_to_channel(signal: Dict[str, Any], *, symbol: str,
 
     allow_unblurred, reason = _channel_take_slot(
         kind="pump_unblurred",
-        daily_limit=1,
-        min_gap_sec=24 * 60 * 60,
+        daily_limit=CHANNEL_FREE_PD_DAILY_LIMIT,
+        min_gap_sec=CHANNEL_FREE_PD_MIN_GAP_SEC,
     )
 
     if allow_unblurred:
@@ -7883,9 +7883,10 @@ async def pump_scan_once(bot: Bot) -> None:
 
         mark_tick("pumpdump", extra=f"подписчиков: {len(subscribers)}")
 
-        if not subscribers:
+        channel_delivery_enabled = CHANNEL_FREE_PD_ENABLED and TELEGRAM_CHANNEL_ID != 0
+        if not subscribers and not channel_delivery_enabled:
             if log_level >= 1:
-                print("[pumpdump] no notify subscribers -> skip")
+                print("[pumpdump] no notify subscribers and channel delivery disabled -> skip")
             return
 
         reset_binance_metrics("pumpdump")
