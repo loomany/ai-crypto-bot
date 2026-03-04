@@ -169,23 +169,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PERIOD_30D": "30 дней",
         "PERIOD_ALL": "Все время",
         "OFFER_TEXT": (
-            "🧾 Оферта на подписку\n"
             "30 Дней - 39$\n"
-            "Пожизненный - 299$\n\n"
-            "1) Подписка предоставляет доступ к функционалу бота и сигналам с момента активации выбранного периода.\n"
-            "2) Сигналы и аналитика не гарантируют прибыль и могут приводить к убыткам.\n"
-            "3) Бот не является финансовым консультантом и не дает персональных рекомендаций “войти/выйти”.{offer_point3_extra}\n"
-            "4) Сценарии формируются при помощи AI-аналитики, которая автоматически сканирует рынок по алгоритмам "
-            "технического анализа (свечи/объёмы/волатильность/фильтры качества), близким к подходу профессионального трейдера.\n"
-            "5) Вся ответственность за торговые решения и риски полностью лежит на пользователе.\n"
-            "6) Оплата подписки означает согласие с условиями оферты.\n"
-            "7) Оплата принимается только в TRX (сеть TRON).\n\n"
-            "Нажимая «✅ Принять», вы подтверждаете согласие с условиями."
+            "Пожизненный - 299$"
         ),
         "PAYMENT_TEXT_TRX": (
-            "39$ - 30 дней\n"
-            "299$ - пожизненный\n\n"
-            "Отправь TRX (TRON) на адрес:\n"
+            "30 Дней - 39$\n"
+            "Пожизненный - 299$\n\n"
+            "Отправь USDT на адрес:\n"
             "{wallet}\n\n"
             "Твой ID (укажи в комментарии / чеке):\n"
             "{user_id}\n\n"
@@ -215,7 +205,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "LANG_RU": "🇷🇺 Русский",
         "LANG_EN": "🇬🇧 English",
         "BTN_ACCEPT": "✅ Принять",
-        "BTN_CONTACT_ADMIN": "💬 Связь с админом",
+        "BTN_PAY_TON": "Оплатить - 💎 TON",
+        "BTN_PAY_USDT": "Оплатить - USDT",
+        "BTN_CONTACT_ADMIN": "Связь с админом",
         "BTN_COPY_ADDRESS": "📋 Скопировать адрес",
         "BTN_SEND_RECEIPT": "📎 Отправить чек + ID",
         "BTN_BUY_SUB": "💳 Купить подписку",
@@ -526,7 +518,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "• «Без входа» — цена не дошла до подтверждения/входа,\n"
             "  либо сценарий был отменён"
         ),
-        "PAYMENT_COPY_ADDRESS": "📋 Адрес для оплаты (TRX):\n{wallet}",
+        "PAYMENT_COPY_ADDRESS": "📋 Адрес для оплаты (USDT):\n{wallet}",
         "RECEIPT_REQUEST_TEXT": (
             "📎 Отправьте сюда чек (скрин/фото) одним сообщением.\n"
             "Я автоматически прикреплю ваш ID и передам админу."
@@ -1064,23 +1056,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PERIOD_30D": "30 days",
         "PERIOD_ALL": "All time",
         "OFFER_TEXT": (
-            "🧾 Subscription offer\n"
             "30 Days - $39\n"
-            "Lifetime - $299\n\n"
-            "1) The subscription grants access to bot functionality and signals from the moment the selected period is activated.\n"
-            "2) Signals and analytics do not guarantee profit and may result in losses.\n"
-            "3) The bot is not a financial advisor and does not provide personalized enter/exit recommendations.{offer_point3_extra}\n"
-            "4) Scenarios are generated using AI analytics that automatically scans the market by technical analysis "
-            "algorithms (candles/volume/volatility/quality filters), close to a professional trader approach.\n"
-            "5) Full responsibility for trading decisions and risks lies entirely with the user.\n"
-            "6) Subscription payment means acceptance of the offer terms.\n"
-            "7) Payments are accepted only in TRX (TRON network).\n\n"
-            "By clicking «✅ Accept», you confirm agreement with the terms."
+            "Lifetime - $299"
         ),
         "PAYMENT_TEXT_TRX": (
-            "$39 - 30 days\n"
-            "$299 - lifetime\n\n"
-            "Send TRX (TRON) to the address:\n"
+            "30 Days - $39\n"
+            "Lifetime - $299\n\n"
+            "Send USDT to the address:\n"
             "{wallet}\n\n"
             "Your ID (include in comment / receipt):\n"
             "{user_id}\n\n"
@@ -1139,7 +1121,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "LANG_RU": "🇷🇺 Русский",
         "LANG_EN": "🇬🇧 English",
         "BTN_ACCEPT": "✅ Accept",
-        "BTN_CONTACT_ADMIN": "💬 Contact admin",
+        "BTN_PAY_TON": "Pay - 💎 TON",
+        "BTN_PAY_USDT": "Pay - USDT",
+        "BTN_CONTACT_ADMIN": "Contact admin",
         "BTN_COPY_ADDRESS": "📋 Copy address",
         "BTN_SEND_RECEIPT": "📎 Send receipt + ID",
         "BTN_BUY_SUB": "💳 Buy subscription",
@@ -1445,7 +1429,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "• “No entry” — price didn’t reach confirmation/entry,\n"
             "  or the scenario was canceled/expired"
         ),
-        "PAYMENT_COPY_ADDRESS": "📋 Payment address (TRX):\n{wallet}",
+        "PAYMENT_COPY_ADDRESS": "📋 Payment address (USDT):\n{wallet}",
         "RECEIPT_REQUEST_TEXT": (
             "📎 Send the receipt here (screenshot/photo) in one message.\n"
             "I will attach your ID and forward it to the admin."
