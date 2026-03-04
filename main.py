@@ -941,7 +941,7 @@ def _public_ai_channel_lead_kb(*, lang: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="забрать сигнал бесплатно",
+                    text="Забрать сигнал бесплатно",
                     url=free_url,
                 )
             ]
@@ -954,25 +954,39 @@ def _format_channel_blurred_ai_signal(signal: Dict[str, Any], lang: str) -> str:
     symbol_text = _signal_symbol_text(str(signal.get("symbol") or ""))
     side = "LONG" if str(signal.get("direction") or "").lower() == "long" else "SHORT"
     scenario_tf = str(signal.get("tf") or signal.get("timeframe") or "1H").strip().upper() or "1H"
+    ttl_minutes = max(1, int(signal.get("ttl_minutes") or SIGNAL_TTL_SECONDS // 60))
+
+    if score >= 90:
+        quality_header = [
+            "🔥 РЕКОМЕНДУЕМЫЙ СИГНАЛ",
+            "Основной рабочий диапазон (Score 90–100)",
+            "Используется для торговли",
+        ]
+    elif score >= 80:
+        quality_header = [
+            "🔥 АКТИВНЫЙ СЦЕНАРИЙ",
+            "Для опытных трейдеров (Score 80–89)",
+            "Использовать выборочно",
+        ]
+    else:
+        quality_header = [
+            "🚫 СИГНАЛ ДЛЯ АНАЛИЗА",
+            "Ниже порога качества (Score < 80)",
+            "Не рекомендуется к торговле",
+        ]
 
     return "\n".join(
         [
-            "🚨 AI обнаружил сильную аномалию рынка",
+            *quality_header,
             "",
-            f"🔥 УЛЬТРА СИГНАЛ — Score: {score}",
-            "",
-            f"Монета: {symbol_text}",
-            f"Сценарий: {side}",
-            "",
-            "📊 Алгоритм Krypton AI обнаружил высокую вероятность движения.",
-            f"⏱ Таймфрейм сценария: {scenario_tf}",
-            "⚡ Точка входа: 5–15 минут",
-            "",
-            "🎯 Зона входа (POI) — • • •",
-            "🛑 Stop Loss — • • •",
-            "💰 Цели",
-            "TP1 — • • •",
-            "TP2 — • • •",
+            f"{symbol_text} · {side}",
+            f"{side} · TF: {scenario_tf} · Entry: 5-15m",
+            "POI: •••–•••",
+            "SL: •••",
+            "TP1: •••",
+            "TP2: •••",
+            f"Score: {score}",
+            f"TTL: ~{ttl_minutes} мин",
         ]
     )
 
@@ -1074,8 +1088,12 @@ async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str =
         return True, f"sent_blurred:{slot_reason}"
 
     score = int(round(float(signal.get("score", 0) or 0)))
-    is_blurred = score > CHANNEL_FREE_AI_MAX_SCORE
 
+    # 90+ сигналы всегда отправляются в публичный канал в заблюренном виде.
+    if score >= 90:
+        return await _send_blurred("score_90_plus")
+
+    is_blurred = score > CHANNEL_FREE_AI_MAX_SCORE
     if is_blurred:
         return await _send_blurred("score_limit")
 
