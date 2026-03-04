@@ -7953,7 +7953,8 @@ async def send_signal_to_all(
             logger.exception(f"[{log_tag}] unexpected send error user_id=%s chat_id=%s", chat_id, chat_id)
             continue
 
-        if is_test or not should_log:
+        should_track_event = not is_test and (should_log or kind == "paywall")
+        if not should_track_event:
             await asyncio.sleep(random.uniform(0.05, 0.15))
             continue
 
@@ -7984,18 +7985,19 @@ async def send_signal_to_all(
             await asyncio.sleep(random.uniform(0.05, 0.15))
             continue
 
-        with suppress(Exception):
-            await bot.edit_message_reply_markup(
-                chat_id=chat_id,
-                message_id=int(res.message_id),
-                reply_markup=_signal_inline_kb(
-                    lang=lang,
-                    symbol=symbol,
-                    signal_id=event_id,
-                    expanded=False,
-                    access_level=access_level if not is_test else "FULL",
-                ),
-            )
+        if kind != "paywall":
+            with suppress(Exception):
+                await bot.edit_message_reply_markup(
+                    chat_id=chat_id,
+                    message_id=int(res.message_id),
+                    reply_markup=_signal_inline_kb(
+                        lang=lang,
+                        symbol=symbol,
+                        signal_id=event_id,
+                        expanded=False,
+                        access_level=access_level if not is_test else "FULL",
+                    ),
+                )
         await asyncio.sleep(random.uniform(0.05, 0.15))
     return stats if return_stats else stats["sent"]
 
