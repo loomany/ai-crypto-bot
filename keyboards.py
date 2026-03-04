@@ -189,7 +189,6 @@ def build_about_inline_kb(
 ) -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton(text=i18n.t(lang, "SYS_PAY"), callback_data="sub_pay")],
-        [InlineKeyboardButton(text=i18n.t(lang, "BTN_CONTACT_ADMIN"), callback_data="sub_contact")],
     ]
     if is_admin:
         keyboard.append(
@@ -216,11 +215,22 @@ def build_about_inline_kb(
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def build_offer_inline_kb(lang: str, back_callback: str = "system_back") -> InlineKeyboardMarkup:
+def build_offer_inline_kb(
+    lang: str,
+    back_callback: str = "system_back",
+    *,
+    offer_toggle_callback: str = "offer_expand",
+    offer_expanded: bool = False,
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=i18n.t(lang, "BTN_ACCEPT"), callback_data="sub_accept")],
-            [InlineKeyboardButton(text=i18n.t(lang, "BTN_CONTACT_ADMIN"), callback_data="sub_contact")],
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(lang, "BTN_COLLAPSE" if offer_expanded else "BTN_EXPAND"),
+                    callback_data=offer_toggle_callback,
+                )
+            ],
             [InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data=back_callback)],
         ]
     )
@@ -231,7 +241,6 @@ def build_payment_inline_kb(lang: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text=i18n.t(lang, "BTN_COPY_ADDRESS"), callback_data="sub_copy_address")],
             [InlineKeyboardButton(text=i18n.t(lang, "BTN_SEND_RECEIPT"), callback_data="sub_send_receipt")],
-            [InlineKeyboardButton(text=i18n.t(lang, "BTN_CONTACT_ADMIN"), callback_data="sub_contact")],
             [InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data="sub_pay_back")],
         ]
     )
