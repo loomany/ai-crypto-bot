@@ -958,16 +958,27 @@ def _format_channel_blurred_ai_signal(signal: Dict[str, Any], lang: str) -> str:
 
     return "\n".join(
         [
-            "🔥 Сигнал 90+",
+            "🚨 AI обнаружил сильную аномалию рынка",
             "",
-            i18n.t(lang, "SIGNAL_SHORT_SYMBOL_SIDE_LINE", symbol=symbol_text, side=side),
-            i18n.t(lang, "SIGNAL_SHORT_80_89_META_LINE", side=side, timeframe=scenario_tf, entry_tf=entry_tf),
-            f"Score: {score}",
+            "🔥 УЛЬТРА СИГНАЛ — Score 100",
             "",
-            "POI: ••• – •••",
-            "SL: •••",
-            "TP1: •••",
-            "TP2: •••",
+            f"Монета: {symbol_text}",
+            f"Сценарий: {side}",
+            "",
+            "📊 Алгоритм Krypton AI обнаружил высокую вероятность движения.",
+            "",
+            f"⏱ Таймфрейм сценария: {scenario_tf}",
+            f"⚡ Точка входа: {entry_tf}",
+            "",
+            f"📈 Score сигнала: {score}",
+            "",
+            "🎯 Зона входа (POI)",
+            "• • • — • • •",
+            "",
+            "🛑 Stop Loss — • • •",
+            "💰 Цели",
+            "TP1 — • • •",
+            "TP2 — • • •",
         ]
     )
 
