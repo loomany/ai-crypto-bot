@@ -184,6 +184,7 @@ from keyboards import (
     build_lang_select_kb,
     build_main_menu_kb,
     build_offer_inline_kb,
+    build_offer_terms_inline_kb,
     build_payment_inline_kb,
     build_system_menu_kb,
     pumpdump_inline_kb,
@@ -6144,6 +6145,40 @@ async def subscription_pay_usdt_callback(callback: CallbackQuery):
         i18n.t(lang, "PAYMENT_PICK_PLAN_TEXT"),
         reply_markup=build_payment_inline_kb(lang),
     )
+
+
+@dp.callback_query(F.data == "sub_offer_terms")
+async def subscription_offer_terms_callback(callback: CallbackQuery):
+    await callback.answer()
+    if callback.from_user is None or callback.message is None:
+        return
+    lang = get_user_lang(callback.from_user.id) or "ru"
+    await callback.message.edit_text(
+        i18n.t(lang, "OFFER_TERMS_TEXT"),
+        reply_markup=build_offer_terms_inline_kb(lang),
+    )
+
+
+@dp.callback_query(F.data == "sub_offer_terms_back")
+async def subscription_offer_terms_back_callback(callback: CallbackQuery):
+    await callback.answer()
+    if callback.from_user is None:
+        return
+    source = _subscribe_source_from_code(
+        get_user_pref(callback.from_user.id, "last_sub_source", SUB_SOURCE_SYSTEM)
+    )
+    if callback.message:
+        lang = get_user_lang(callback.from_user.id) or "ru"
+        offer_text, offer_toggle_callback = _build_offer_payload(lang, expanded=False)
+        await callback.message.edit_text(
+            offer_text,
+            reply_markup=build_offer_inline_kb(
+                lang,
+                back_callback=_subscribe_back_callback(source),
+                offer_toggle_callback=offer_toggle_callback,
+                offer_expanded=False,
+            ),
+        )
 
 
 async def _create_and_send_invoice(callback: CallbackQuery, plan: str, amount: str) -> None:

@@ -172,6 +172,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "30 Дней - 39$\n"
             "Пожизненный - 299$"
         ),
+        "OFFER_TERMS_TEXT": (
+            "🧾 Оферта на подписку\n"
+            "30 Дней - 39$\n"
+            "Пожизненный - 299$\n\n"
+            "1) Подписка предоставляет доступ к функционалу бота и сигналам с момента активации выбранного периода.\n"
+            "2) Сигналы и аналитика не гарантируют прибыль и могут приводить к убыткам.\n"
+            "3) Бот не является финансовым консультантом и не дает персональных рекомендаций “войти/выйти”.\n"
+            "4) Сценарии формируются при помощи AI-аналитики, которая автоматически сканирует рынок по алгоритмам технического анализа (свечи/объёмы/волатильность/фильтры качества), близким к подходу профессионального трейдера.\n"
+            "5) Вся ответственность за торговые решения и риски полностью лежит на пользователе.\n"
+            "6) Оплата подписки означает согласие с условиями оферты.\n"
+            "7) Оплата принимается только в TRX (сеть TRON).\n"
+            "8) Оплачивая подписку, Вы соглашаетесь с условиями оферты"
+        ),
         "PAYMENT_PICK_PLAN_TEXT": "Выберите план для оплаты в USDT:",
         "PAYMENT_INVOICE_TEXT": "💳 Оплата подписки Krypton AI\nПлан: {plan}\nСумма: {amount} USDT\nНажмите Pay.",
         "PAYMENT_CREATE_FAIL": "Не удалось создать счёт. Попробуйте позже.",
@@ -207,6 +220,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PLAN_30D": "30 дней",
         "PLAN_LIFE": "пожизненный",
         "BTN_CONTACT_ADMIN": "Связь с админом",
+        "BTN_OFFER": "🧾 Оферта",
+        "BTN_OFFER_BACK": "◀️ Назад",
         "BTN_COPY_ADDRESS": "📋 Скопировать адрес",
         "BTN_SEND_RECEIPT": "📎 Отправить чек + ID",
         "BTN_BUY_SUB": "💳 Купить подписку",
@@ -1058,6 +1073,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "30 Days - $39\n"
             "Lifetime - $299"
         ),
+        "OFFER_TERMS_TEXT": (
+            "🧾 Subscription Offer\n"
+            "30 Days - $39\n"
+            "Lifetime - $299\n\n"
+            "1) The subscription grants access to bot features and signals from the moment the selected period is activated.\n"
+            "2) Signals and analytics do not guarantee profit and may result in losses.\n"
+            "3) The bot is not a financial advisor and does not provide personalized enter/exit recommendations.\n"
+            "4) Scenarios are generated using AI analytics that automatically scans the market with technical-analysis algorithms (candles/volume/volatility/quality filters), close to a professional trader's approach.\n"
+            "5) Full responsibility for trading decisions and risks lies with the user.\n"
+            "6) Subscription payment means acceptance of the offer terms.\n"
+            "7) Payment is accepted only in TRX (TRON network).\n"
+            "8) By paying for the subscription, you agree to the offer terms"
+        ),
         "PAYMENT_PICK_PLAN_TEXT": "Choose a USDT payment plan:",
         "PAYMENT_INVOICE_TEXT": "💳 Krypton AI subscription payment\nPlan: {plan}\nAmount: {amount} USDT\nTap Pay.",
         "PAYMENT_CREATE_FAIL": "Could not create invoice. Please try again later.",
@@ -1122,6 +1150,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "PLAN_30D": "30 days",
         "PLAN_LIFE": "lifetime",
         "BTN_CONTACT_ADMIN": "Contact admin",
+        "BTN_OFFER": "🧾 Offer",
+        "BTN_OFFER_BACK": "◀️ Back",
         "BTN_COPY_ADDRESS": "📋 Copy address",
         "BTN_SEND_RECEIPT": "📎 Send receipt + ID",
         "BTN_BUY_SUB": "💳 Buy subscription",

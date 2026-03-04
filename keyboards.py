@@ -226,7 +226,15 @@ def build_offer_inline_kb(
         inline_keyboard=[
             [InlineKeyboardButton(text=i18n.t(lang, "BTN_PAY_USDT"), callback_data="sub_pay_usdt")],
             [InlineKeyboardButton(text=i18n.t(lang, "BTN_CONTACT_ADMIN"), callback_data="sub_contact")],
-            [InlineKeyboardButton(text=i18n.t(lang, "MENU_BACK"), callback_data=back_callback)],
+            [InlineKeyboardButton(text=i18n.t(lang, "BTN_OFFER"), callback_data="sub_offer_terms")],
+        ]
+    )
+
+
+def build_offer_terms_inline_kb(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=i18n.t(lang, "BTN_OFFER_BACK"), callback_data="sub_offer_terms_back")],
         ]
     )
 
