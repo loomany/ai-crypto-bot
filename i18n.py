@@ -396,7 +396,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "HISTORY_DATE_LABEL": "Дата:",
         "HISTORY_LIST_TITLE": "📜 История сигналов — {period}",
         "HISTORY_PAGE_INFO": "Стр. {page}/{pages}",
-        "history_title": "📜 История сигналов за все время",
+        "history_title": "📜 История сигналов — {period}",
         "page_total": "Стр. {page}/{pages}",
         "section_recommended_title": "🔥 Рекомендуемые сигналы (Score 90–100)",
         "section_higher_risk_title": "⚠️ Повышенный риск (Score 80–89)",
