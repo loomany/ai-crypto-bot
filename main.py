@@ -2188,6 +2188,8 @@ def _format_history_pro_block(lang: str, history_summary: dict[str, Any]) -> str
 
     return "\n".join(
         [
+            i18n.t(lang, "totals_title"),
+            "",
             i18n.t(lang, "totals_tp", value=tp_total),
             i18n.t(lang, "totals_be_avg", value=be_total, avg=f"{be_avg:.1f}", lev=f"{int(AI_PUBLIC_LEVERAGE)}"),
             i18n.t(lang, "totals_sl", value=sl_total),
@@ -2234,14 +2236,22 @@ def _build_history_text(
 
     lines = [
         i18n.t(lang, "history_title", period=period_label),
+        i18n.t(lang, "page_total", page=page, pages=pages, total=total),
     ]
     lines.extend([
         "",
         _format_history_pro_block(lang, history_summary),
         "",
+        "━━━━━━━━━━━━━━━━",
         i18n.t(lang, "explanation_title"),
+        "━━━━━━━━━━━━━━━━",
+        i18n.t(lang, "explanation_line_1"),
+        i18n.t(lang, "explanation_line_2"),
         i18n.t(lang, "explanation_line_be"),
         i18n.t(lang, "explanation_line_be_2"),
+        i18n.t(lang, "history_indicator_waiting"),
+        i18n.t(lang, "history_indicator_poi_touched"),
+        i18n.t(lang, "history_indicator_activated"),
         i18n.t(lang, "explanation_line_exp"),
     ])
     if not rows:
