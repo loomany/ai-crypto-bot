@@ -576,18 +576,19 @@ async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
     score = max(0, min(100, int(signal.get("score") or 0)))
     if not signal_id or not symbol:
         return False, "invalid_signal"
-    trade_id = insert_ai_public_trade_open(
+    trade_open = insert_ai_public_trade_open(
         signal_id=signal_id,
         symbol=symbol,
         side=side,
         opened_at=datetime.now(timezone.utc).isoformat(),
     )
+    trade_id = int(trade_open.get("trade_id") or 0)
     if trade_id <= 0:
         return False, "already_exists"
-    state = get_ai_public_state() or {}
-    balance = float(state.get("balance_usd") or AI_PUBLIC_START_BALANCE)
-    risk_pct = float(state.get("risk_pct") or AI_PUBLIC_RISK_PCT)
-    risk_usd = balance * (risk_pct / 100.0)
+    balance_before = float(trade_open.get("balance_before") or AI_PUBLIC_START_BALANCE)
+    balance_after_open = float(trade_open.get("balance_after_open") or balance_before)
+    risk_pct = float(trade_open.get("risk_pct") or AI_PUBLIC_RISK_PCT)
+    risk_usd = float(trade_open.get("reserved_usd") or (balance_before * (risk_pct / 100.0)))
     class_label = _ai_public_signal_class(score)
     symbol_pair = _format_symbol_pair(symbol)
     text = (
@@ -598,7 +599,7 @@ async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
         f"⚠️ Класс: {class_label}\n\n"
         f"💼 Вход: {risk_pct:.1f}% риска (${_format_usd(risk_usd)})\n"
         f"📈 Плечо: x{int(AI_PUBLIC_LEVERAGE)}\n\n"
-        f"💰 Баланс модели: ${_format_usd(balance)}\n"
+        f"💰 Баланс модели: ${_format_usd(balance_after_open)}\n"
         "🟢 Статус: АКТИВЕН"
     )
     return await _ai_public_send_channel_message(text, reply_markup=_ai_public_entry_kb(symbol))

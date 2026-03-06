@@ -252,6 +252,7 @@ def init_db() -> None:
                 balance_after REAL,
                 p1_done INTEGER NOT NULL DEFAULT 0,
                 p2_done INTEGER NOT NULL DEFAULT 0,
+                reserved_usd REAL NOT NULL DEFAULT 0,
                 realized_usd REAL NOT NULL DEFAULT 0,
                 remaining_pct REAL NOT NULL DEFAULT 100
             )
@@ -263,6 +264,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE ai_public_trades ADD COLUMN p1_done INTEGER NOT NULL DEFAULT 0")
         if "p2_done" not in ai_public_trade_cols:
             conn.execute("ALTER TABLE ai_public_trades ADD COLUMN p2_done INTEGER NOT NULL DEFAULT 0")
+        if "reserved_usd" not in ai_public_trade_cols:
+            conn.execute("ALTER TABLE ai_public_trades ADD COLUMN reserved_usd REAL NOT NULL DEFAULT 0")
         if "realized_usd" not in ai_public_trade_cols:
             conn.execute("ALTER TABLE ai_public_trades ADD COLUMN realized_usd REAL NOT NULL DEFAULT 0")
         if "remaining_pct" not in ai_public_trade_cols:
@@ -341,28 +344,49 @@ def get_ai_public_state() -> dict | None:
         conn.close()
 
 
-def insert_ai_public_trade_open(*, signal_id: str, symbol: str, side: str, opened_at: str) -> int:
+def insert_ai_public_trade_open(*, signal_id: str, symbol: str, side: str, opened_at: str) -> dict:
     conn = get_conn()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         state_row = conn.execute("SELECT * FROM ai_public_state WHERE id = 1").fetchone()
         balance_before = float(state_row["balance_usd"] or 0.0) if state_row is not None else 0.0
+        risk_pct = float(state_row["risk_pct"] or 0.0) if state_row is not None else 0.0
+        reserved_usd = max(0.0, balance_before * (risk_pct / 100.0))
+        balance_after_open = max(0.0, balance_before - reserved_usd)
         cur = conn.execute(
             """
             INSERT OR IGNORE INTO ai_public_trades (
-                signal_id, symbol, side, opened_at, final_status, balance_before
-            ) VALUES (?, ?, ?, ?, 'OPEN', ?)
+                signal_id, symbol, side, opened_at, final_status, balance_before, reserved_usd
+            ) VALUES (?, ?, ?, ?, 'OPEN', ?, ?)
             """,
-            (str(signal_id), str(symbol), str(side), str(opened_at), float(balance_before)),
+            (str(signal_id), str(symbol), str(side), str(opened_at), float(balance_before), float(reserved_usd)),
         )
         trade_id = int(cur.lastrowid or 0)
+        inserted = int(cur.rowcount or 0) > 0
         if trade_id <= 0:
             existing = conn.execute(
                 "SELECT id FROM ai_public_trades WHERE signal_id = ?",
                 (str(signal_id),),
             ).fetchone()
             trade_id = int(existing["id"]) if existing is not None else 0
+        if inserted:
+            conn.execute(
+                """
+                UPDATE ai_public_state
+                SET balance_usd = ?, updated_at = datetime('now')
+                WHERE id = 1
+                """,
+                (float(balance_after_open),),
+            )
         conn.commit()
-        return trade_id
+        return {
+            "trade_id": int(trade_id),
+            "inserted": bool(inserted),
+            "balance_before": float(balance_before),
+            "balance_after_open": float(balance_after_open if inserted else balance_before),
+            "reserved_usd": float(reserved_usd),
+            "risk_pct": float(risk_pct),
+        }
     finally:
         conn.close()
 
@@ -471,6 +495,7 @@ def close_ai_public_trade(*, signal_id: str, final_status: str, be_level_pct: fl
         balance_before = float(trade_row["balance_before"] or 0.0)
         if balance_before <= 0.0:
             balance_before = float(state_row["balance_usd"] or 0.0)
+        reserved_usd = float(trade_row["reserved_usd"] or 0.0)
         risk_pct = float(state_row["risk_pct"] or 0.0)
         risk_usd = balance_before * (risk_pct / 100.0)
         remaining_pct = float(trade_row["remaining_pct"] or 100.0)
@@ -492,7 +517,11 @@ def close_ai_public_trade(*, signal_id: str, final_status: str, be_level_pct: fl
 
         pnl_r = (pnl_total / risk_usd) if risk_usd != 0 else 0.0
         pnl_usd = pnl_total
-        balance_after = balance_before + pnl_usd
+        state_balance_now = float(state_row["balance_usd"] or 0.0)
+        if reserved_usd > 0.0:
+            balance_after = state_balance_now + reserved_usd + pnl_usd
+        else:
+            balance_after = balance_before + pnl_usd
         roi_pct = (pnl_usd / balance_before) * 100.0 if balance_before != 0 else 0.0
 
         conn.execute(
