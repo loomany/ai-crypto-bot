@@ -139,10 +139,17 @@ from db import (
     claim_delayed_activation_notification,
     release_delayed_activation_notification_claim,
     mark_delayed_activation_notification_sent,
+    enqueue_delayed_channel_notification,
+    list_due_delayed_channel_notifications,
+    claim_delayed_channel_notification,
+    release_delayed_channel_notification_claim,
+    mark_delayed_channel_notification_sent,
+    mark_delayed_channel_notification_cancelled,
     set_last_pumpdump_signal,
     purge_test_signals,
     ensure_ai_public_state,
     get_ai_public_state,
+    get_ai_public_trade_by_signal_id,
     insert_ai_public_trade_open,
     close_ai_public_trade,
     apply_ai_public_partial_fix,
@@ -214,6 +221,8 @@ _CLOSE_NOTIFY_METRICS: Dict[str, Any] = {
 }
 
 _GUEST_ACTIVATION_DELAY_SEC = 30 * 60
+_AI_PUBLIC_ENTRY_DELAY_SEC = 30 * 60
+_DELAYED_CHANNEL_ENTRY_TYPE = "delayed_channel_entry_post"
 
 
 def _record_close_event(*, symbol: str, side: str, reason: str) -> None:
@@ -575,6 +584,33 @@ def _format_symbol_pair(symbol: str) -> str:
     return symbol_raw
 
 
+def _ai_public_entry_text(
+    *,
+    display_no: int,
+    symbol: str,
+    side: str,
+    score: int,
+    risk_pct: float,
+    risk_usd: float,
+    balance_after_open: float,
+) -> str:
+    class_label = _ai_public_signal_class(score)
+    symbol_pair = _format_symbol_pair(symbol)
+    return (
+        f"{_ai_public_header(display_no)}\n\n"
+        f"⚡️ AI ВХОД\n"
+        f"{symbol_pair} - {side}\n\n"
+        f"📊 Оценка сигнала: {score} / 100\n"
+        f"⚠️ Класс: {class_label}\n\n"
+        f"💼 Вход: {risk_pct:.1f}% риска (${_format_usd(risk_usd)})\n"
+        f"📈 Плечо: x{int(AI_PUBLIC_LEVERAGE)}\n\n"
+        f"💰 Баланс модели: ${_format_usd(balance_after_open)}\n"
+        "🟢 Статус: АКТИВЕН\n\n"
+        "⏱ Публичный вход опубликован с задержкой 30 минут.\n"
+        "🔒 Полный доступ к сигналам без задержки доступен по подписке."
+    )
+
+
 async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
     if not _ai_public_ready():
         return False, "disabled" if not AI_PUBLIC_ENABLED else "no_channel_id"
@@ -604,20 +640,24 @@ async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
     balance_after_open = float(trade_open.get("balance_after_open") or balance_before)
     risk_pct = float(trade_open.get("risk_pct") or AI_PUBLIC_RISK_PCT)
     risk_usd = float(trade_open.get("reserved_usd") or (balance_before * (risk_pct / 100.0)))
-    class_label = _ai_public_signal_class(score)
-    symbol_pair = _format_symbol_pair(symbol)
-    text = (
-        f"{_ai_public_header(display_no)}\n\n"
-        f"⚡️ AI ВХОД\n"
-        f"{symbol_pair} - {side}\n\n"
-        f"📊 Оценка сигнала: {score} / 100\n"
-        f"⚠️ Класс: {class_label}\n\n"
-        f"💼 Вход: {risk_pct:.1f}% риска (${_format_usd(risk_usd)})\n"
-        f"📈 Плечо: x{int(AI_PUBLIC_LEVERAGE)}\n\n"
-        f"💰 Баланс модели: ${_format_usd(balance_after_open)}\n"
-        "🟢 Статус: АКТИВЕН"
+    activated_at = int(signal.get("activated_at") or time.time())
+    send_at = activated_at + _AI_PUBLIC_ENTRY_DELAY_SEC
+    queued = enqueue_delayed_channel_notification(
+        signal_id=signal_id,
+        notification_type=_DELAYED_CHANNEL_ENTRY_TYPE,
+        channel_id=int(TELEGRAM_CHANNEL_ID),
+        payload={
+            "display_no": int(display_no),
+            "symbol": symbol,
+            "side": side,
+            "score": int(score),
+            "risk_pct": float(risk_pct),
+            "risk_usd": float(risk_usd),
+            "balance_after_open": float(balance_after_open),
+        },
+        send_at=send_at,
     )
-    return await _ai_public_send_channel_message(text, reply_markup=_ai_public_entry_kb(symbol))
+    return (True, "queued") if queued else (False, "already_queued")
 
 
 async def _ai_public_on_be_triggered(signal: dict) -> tuple[bool, str]:
@@ -2870,6 +2910,64 @@ async def dispatch_due_delayed_activation_notifications(limit: int = 200) -> int
                 exc,
             )
             release_delayed_activation_notification_claim(delayed_id)
+    return sent
+
+
+async def dispatch_due_delayed_channel_entry_posts(limit: int = 200) -> int:
+    if bot is None or not _ai_public_ready():
+        return 0
+    now_ts = int(time.time())
+    due_rows = list_due_delayed_channel_notifications(now_ts=now_ts, limit=limit)
+    sent = 0
+    for row in due_rows:
+        task = dict(row)
+        task_id = int(task.get("id", 0) or 0)
+        if task_id <= 0:
+            continue
+        if not claim_delayed_channel_notification(task_id):
+            continue
+        try:
+            if str(task.get("notification_type") or "") != _DELAYED_CHANNEL_ENTRY_TYPE:
+                mark_delayed_channel_notification_cancelled(task_id)
+                continue
+            if int(task.get("channel_id", 0) or 0) != int(TELEGRAM_CHANNEL_ID):
+                mark_delayed_channel_notification_cancelled(task_id)
+                continue
+
+            signal_id = str(task.get("signal_id") or "")
+            trade = get_ai_public_trade_by_signal_id(signal_id)
+            if trade is None:
+                mark_delayed_channel_notification_cancelled(task_id)
+                continue
+            final_status = str(trade.get("final_status") or "").upper()
+            if trade.get("closed_at") is not None or final_status not in {"OPEN", ""}:
+                mark_delayed_channel_notification_cancelled(task_id)
+                continue
+
+            payload_raw = str(task.get("payload_json") or "{}")
+            payload = json.loads(payload_raw)
+            text = _ai_public_entry_text(
+                display_no=int(payload.get("display_no") or 1),
+                symbol=str(payload.get("symbol") or ""),
+                side=str(payload.get("side") or "").upper(),
+                score=max(0, min(100, int(payload.get("score") or 0))),
+                risk_pct=float(payload.get("risk_pct") or AI_PUBLIC_RISK_PCT),
+                risk_usd=float(payload.get("risk_usd") or 0.0),
+                balance_after_open=float(payload.get("balance_after_open") or 0.0),
+            )
+            ok, reason = await _ai_public_send_channel_message(
+                text,
+                reply_markup=_ai_public_entry_kb(str(payload.get("symbol") or "")),
+            )
+            if not ok:
+                logger.warning("[ai_public] delayed entry send failed task_id=%s reason=%s", task_id, reason)
+                release_delayed_channel_notification_claim(task_id)
+                continue
+            mark_delayed_channel_notification_sent(task_id)
+            sent += 1
+        except Exception as exc:
+            logger.warning("[ai_public] delayed entry post processing failed task_id=%s err=%s", task_id, exc)
+            release_delayed_channel_notification_claim(task_id)
     return sent
 
 
@@ -8686,6 +8784,7 @@ async def ai_scan_once() -> None:
 
         retried_close_notifications = await retry_pending_close_notifications(limit=200)
         delayed_activation_sent = await dispatch_due_delayed_activation_notifications(limit=200)
+        delayed_channel_entry_sent = await dispatch_due_delayed_channel_entry_posts(limit=200)
 
         retry_sent = 0
         skipped_recent_symbol = 0
@@ -9044,7 +9143,8 @@ async def ai_scan_once() -> None:
             "[AI] "
             f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
             f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done} "
-            f"close_retry_sent={retried_close_notifications} delayed_activation_sent={delayed_activation_sent}"
+            f"close_retry_sent={retried_close_notifications} delayed_activation_sent={delayed_activation_sent} "
+            f"delayed_channel_entry_sent={delayed_channel_entry_sent}"
         )
         module_state = MODULES.get("ai_signals")
         if module_state:
@@ -9057,6 +9157,7 @@ async def ai_scan_once() -> None:
                 f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
                 f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done} "
                 f"close_retry_sent={retried_close_notifications} delayed_activation_sent={delayed_activation_sent} "
+                f"delayed_channel_entry_sent={delayed_channel_entry_sent} "
                 f"skip_recent_symbol={skipped_recent_symbol} "
                 f"current={current_symbol or '-'} cycle={int(time.time() - start)}s "
                 f"req={req_count} klines={klines_count} "

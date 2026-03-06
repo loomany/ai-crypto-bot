@@ -275,6 +275,27 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_delayed_activation_notifications_send_at ON delayed_activation_notifications(send_at)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS delayed_channel_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signal_id TEXT NOT NULL,
+                notification_type TEXT NOT NULL,
+                channel_id INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                send_at INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                claimed_at INTEGER,
+                sent_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(signal_id, notification_type, channel_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_delayed_channel_notifications_due ON delayed_channel_notifications(status, send_at)"
+        )
         cur = conn.execute("PRAGMA table_info(ai_public_trades)")
         ai_public_trade_cols = {row["name"] for row in cur.fetchall()}
         if "p1_done" not in ai_public_trade_cols:
@@ -356,6 +377,18 @@ def get_ai_public_state() -> dict | None:
     try:
         cur = conn.execute("SELECT * FROM ai_public_state WHERE id = 1")
         row = cur.fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def get_ai_public_trade_by_signal_id(signal_id: str) -> dict | None:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM ai_public_trades WHERE signal_id = ?",
+            (str(signal_id),),
+        ).fetchone()
         return dict(row) if row is not None else None
     finally:
         conn.close()
@@ -2788,6 +2821,169 @@ def mark_delayed_activation_notification_sent(delayed_id: int) -> None:
               AND sent_at IS NULL
             """,
             (now, now, int(delayed_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def enqueue_delayed_channel_notification(
+    *,
+    signal_id: str,
+    notification_type: str,
+    channel_id: int,
+    payload: dict,
+    send_at: int,
+) -> bool:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO delayed_channel_notifications (
+                signal_id,
+                notification_type,
+                channel_id,
+                payload_json,
+                send_at,
+                status,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+            """,
+            (
+                str(signal_id),
+                str(notification_type),
+                int(channel_id),
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                int(send_at),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0) > 0
+    finally:
+        conn.close()
+
+
+def list_due_delayed_channel_notifications(*, now_ts: int, limit: int = 200) -> List[sqlite3.Row]:
+    stale_claim_ts = int(now_ts) - 600
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM delayed_channel_notifications
+            WHERE status = 'pending'
+              AND send_at <= ?
+              AND (claimed_at IS NULL OR claimed_at < ?)
+            ORDER BY send_at ASC, id ASC
+            LIMIT ?
+            """,
+            (int(now_ts), stale_claim_ts, max(1, int(limit))),
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def claim_delayed_channel_notification(notification_id: int) -> bool:
+    now = int(time.time())
+    stale_claim_ts = now - 600
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE delayed_channel_notifications
+            SET claimed_at = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND status = 'pending'
+              AND (claimed_at IS NULL OR claimed_at < ?)
+            """,
+            (now, now, int(notification_id), stale_claim_ts),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0) > 0
+    finally:
+        conn.close()
+
+
+def release_delayed_channel_notification_claim(notification_id: int) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE delayed_channel_notifications
+            SET claimed_at = NULL,
+                updated_at = ?
+            WHERE id = ?
+              AND status = 'pending'
+            """,
+            (now, int(notification_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_delayed_channel_notification_sent(notification_id: int) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE delayed_channel_notifications
+            SET status = 'sent',
+                sent_at = ?,
+                claimed_at = NULL,
+                updated_at = ?
+            WHERE id = ?
+              AND status = 'pending'
+            """,
+            (now, now, int(notification_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_delayed_channel_notification_cancelled(notification_id: int) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE delayed_channel_notifications
+            SET status = 'cancelled',
+                claimed_at = NULL,
+                updated_at = ?
+            WHERE id = ?
+              AND status = 'pending'
+            """,
+            (now, int(notification_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_delayed_channel_notification_failed(notification_id: int) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE delayed_channel_notifications
+            SET status = 'failed',
+                claimed_at = NULL,
+                updated_at = ?
+            WHERE id = ?
+              AND status = 'pending'
+            """,
+            (now, int(notification_id)),
         )
         conn.commit()
     finally:
