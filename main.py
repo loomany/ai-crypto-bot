@@ -134,6 +134,11 @@ from db import (
     claim_signal_result_notification,
     release_signal_result_notification_claim,
     list_pending_result_notifications,
+    enqueue_delayed_activation_notification,
+    list_due_delayed_activation_notifications,
+    claim_delayed_activation_notification,
+    release_delayed_activation_notification_claim,
+    mark_delayed_activation_notification_sent,
     set_last_pumpdump_signal,
     purge_test_signals,
     ensure_ai_public_state,
@@ -207,6 +212,8 @@ _CLOSE_NOTIFY_METRICS: Dict[str, Any] = {
     "close_notifications_failed_total": 0,
     "last_close_event": None,
 }
+
+_GUEST_ACTIVATION_DELAY_SEC = 30 * 60
 
 
 def _record_close_event(*, symbol: str, side: str, reason: str) -> None:
@@ -2797,6 +2804,75 @@ async def retry_pending_close_notifications(limit: int = 200) -> int:
     return sent
 
 
+async def dispatch_due_delayed_activation_notifications(limit: int = 200) -> int:
+    if bot is None:
+        return 0
+    now_ts = int(time.time())
+    due_rows = list_due_delayed_activation_notifications(now_ts=now_ts, limit=limit)
+    sent = 0
+    for row in due_rows:
+        event = dict(row)
+        delayed_id = int(event.get("delayed_id", 0) or 0)
+        if delayed_id <= 0:
+            continue
+        if not claim_delayed_activation_notification(delayed_id):
+            continue
+        try:
+            if str(event.get("status", "")).upper() != "ACTIVE":
+                mark_delayed_activation_notification_sent(delayed_id)
+                continue
+            user_id = int(event.get("user_id", 0) or 0)
+            if user_id <= 0:
+                mark_delayed_activation_notification_sent(delayed_id)
+                continue
+            if is_user_locked(user_id):
+                mark_delayed_activation_notification_sent(delayed_id)
+                continue
+            if not is_notify_enabled(user_id, "ai_signals"):
+                mark_delayed_activation_notification_sent(delayed_id)
+                continue
+            if not _should_blur_ai_notifications(user_id):
+                mark_delayed_activation_notification_sent(delayed_id)
+                continue
+
+            lang = _resolve_user_lang(user_id)
+            symbol = str(event.get("symbol", ""))
+            message_text = format_signal_activation_message(
+                lang=lang,
+                symbol=symbol,
+                side=str(event.get("side", "")).upper(),
+                score=int(float(event.get("score", 0.0) or 0.0)),
+                entry_price=float(event.get("entry_price", 0.0) or 0.0),
+                sl=float(event.get("sl", 0.0) or 0.0),
+                tp1=float(event.get("tp1", 0.0) or 0.0),
+                tp2=float(event.get("tp2", 0.0) or 0.0),
+                include_guest_delay_note=True,
+            )
+            message_text = _blur_ai_notification_text(message_text)
+            await bot.send_message(
+                user_id,
+                message_text,
+                disable_notification=_disable_notification_for_event(
+                    user_id=user_id,
+                    event_type="ACTIVE_CONFIRMED",
+                ),
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[[build_binance_button(lang, symbol)]],
+                ),
+            )
+            mark_delayed_activation_notification_sent(delayed_id)
+            sent += 1
+        except Exception as exc:
+            logger.warning(
+                "[ai_signals] delayed activation notify failed delayed_id=%s user_id=%s error=%s",
+                delayed_id,
+                event.get("user_id"),
+                exc,
+            )
+            release_delayed_activation_notification_claim(delayed_id)
+    return sent
+
+
 async def notify_signal_activation(signal: dict) -> bool:
     if bot is None:
         return False
@@ -2861,8 +2937,17 @@ async def notify_signal_activation(signal: dict) -> bool:
             market_direction=signal.get("btc_direction"),
             market_trend=signal.get("btc_trend"),
         )
-        if _should_blur_ai_notifications(user_id):
-            message_text = _blur_ai_notification_text(message_text)
+        is_blurred_user = _should_blur_ai_notifications(user_id)
+        if is_blurred_user:
+            event_id = int(event.get("id", 0) or 0)
+            if event_id > 0:
+                send_at = activated_at + _GUEST_ACTIVATION_DELAY_SEC
+                _ = enqueue_delayed_activation_notification(
+                    event_id=event_id,
+                    user_id=user_id,
+                    send_at=send_at,
+                )
+            continue
         try:
             await bot.send_message(
                 user_id,
@@ -8600,6 +8685,7 @@ async def ai_scan_once() -> None:
         mark_tick("ai_signals", extra="сканирую рынок...")
 
         retried_close_notifications = await retry_pending_close_notifications(limit=200)
+        delayed_activation_sent = await dispatch_due_delayed_activation_notifications(limit=200)
 
         retry_sent = 0
         skipped_recent_symbol = 0
@@ -8957,7 +9043,8 @@ async def ai_scan_once() -> None:
         print(
             "[AI] "
             f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
-            f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done} close_retry_sent={retried_close_notifications}"
+            f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done} "
+            f"close_retry_sent={retried_close_notifications} delayed_activation_sent={delayed_activation_sent}"
         )
         module_state = MODULES.get("ai_signals")
         if module_state:
@@ -8968,7 +9055,8 @@ async def ai_scan_once() -> None:
             "ai_signals",
             extra=(
                 f"universe={total} chunk={len(chunk)} cursor={new_cursor} "
-                f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done} close_retry_sent={retried_close_notifications} "
+                f"signals_found={len(signals)} sent={sent_count} deep_scans={deep_scans_done} "
+                f"close_retry_sent={retried_close_notifications} delayed_activation_sent={delayed_activation_sent} "
                 f"skip_recent_symbol={skipped_recent_symbol} "
                 f"current={current_symbol or '-'} cycle={int(time.time() - start)}s "
                 f"req={req_count} klines={klines_count} "

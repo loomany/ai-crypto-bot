@@ -258,6 +258,23 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS delayed_activation_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id INTEGER NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL,
+                send_at INTEGER NOT NULL,
+                claimed_at INTEGER,
+                sent_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_delayed_activation_notifications_send_at ON delayed_activation_notifications(send_at)"
+        )
         cur = conn.execute("PRAGMA table_info(ai_public_trades)")
         ai_public_trade_cols = {row["name"] for row in cur.fetchall()}
         if "p1_done" not in ai_public_trade_cols:
@@ -2663,6 +2680,116 @@ def list_pending_result_notifications(limit: int = 200) -> List[sqlite3.Row]:
             (max(1, int(limit)),),
         )
         return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def enqueue_delayed_activation_notification(*, event_id: int, user_id: int, send_at: int) -> bool:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO delayed_activation_notifications (
+                event_id,
+                user_id,
+                send_at,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (int(event_id), int(user_id), int(send_at), now, now),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0) > 0
+    finally:
+        conn.close()
+
+
+def list_due_delayed_activation_notifications(*, now_ts: int, limit: int = 200) -> List[sqlite3.Row]:
+    stale_claim_ts = int(now_ts) - 600
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT
+                dan.id AS delayed_id,
+                dan.event_id AS delayed_event_id,
+                dan.user_id AS delayed_user_id,
+                dan.send_at AS delayed_send_at,
+                se.*
+            FROM delayed_activation_notifications dan
+            JOIN signal_events se ON se.id = dan.event_id
+            WHERE dan.sent_at IS NULL
+              AND dan.send_at <= ?
+              AND (dan.claimed_at IS NULL OR dan.claimed_at < ?)
+            ORDER BY dan.send_at ASC, dan.id ASC
+            LIMIT ?
+            """,
+            (int(now_ts), stale_claim_ts, max(1, int(limit))),
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def claim_delayed_activation_notification(delayed_id: int) -> bool:
+    now = int(time.time())
+    stale_claim_ts = now - 600
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE delayed_activation_notifications
+            SET claimed_at = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND sent_at IS NULL
+              AND (claimed_at IS NULL OR claimed_at < ?)
+            """,
+            (now, now, int(delayed_id), stale_claim_ts),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0) > 0
+    finally:
+        conn.close()
+
+
+def release_delayed_activation_notification_claim(delayed_id: int) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE delayed_activation_notifications
+            SET claimed_at = NULL,
+                updated_at = ?
+            WHERE id = ?
+              AND sent_at IS NULL
+            """,
+            (now, int(delayed_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_delayed_activation_notification_sent(delayed_id: int) -> None:
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE delayed_activation_notifications
+            SET sent_at = ?,
+                claimed_at = NULL,
+                updated_at = ?
+            WHERE id = ?
+              AND sent_at IS NULL
+            """,
+            (now, now, int(delayed_id)),
+        )
+        conn.commit()
     finally:
         conn.close()
 
