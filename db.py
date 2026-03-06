@@ -1503,6 +1503,86 @@ def count_signal_history(
         conn.close()
 
 
+def get_signal_history_sequence_number(
+    *,
+    module: str,
+    symbol: str,
+    ts: int,
+    include_legacy: bool = False,
+) -> int:
+    """Return 1-based index of a deduplicated signal in all-time history."""
+    if not module or not symbol or int(ts or 0) <= 0:
+        return 0
+
+    duplicate_window_sec = 24 * 60 * 60
+    conn = get_conn()
+    try:
+        clauses = [
+            "(is_test IS NULL OR is_test = 0)",
+            "module = ?",
+            "NOT ("
+            "symbol LIKE 'TEST%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(reason_json, '')) LIKE '%тест%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%test%' OR "
+            "LOWER(COALESCE(breakdown_json, '')) LIKE '%тест%')",
+        ]
+        where_params: list[object] = [str(module)]
+        _append_cutoff_filter(clauses, where_params, include_legacy=include_legacy)
+        _append_blocked_symbols_filter(clauses, where_params)
+        where_clause = " AND ".join(clauses)
+
+        dedup_subquery = f"""
+            SELECT MAX(base.id) AS id
+            FROM signal_events base
+            WHERE {where_clause}
+              AND NOT EXISTS (
+                SELECT 1
+                FROM signal_events newer
+                WHERE newer.module = base.module
+                  AND UPPER(newer.symbol) = UPPER(base.symbol)
+                  AND newer.ts > base.ts
+                  AND (newer.ts - base.ts) < ?
+                  AND newer.id > base.id
+              )
+            GROUP BY base.module, UPPER(base.symbol), base.ts
+        """
+
+        target_params = [*where_params, int(duplicate_window_sec), str(symbol), int(ts)]
+        target_cur = conn.execute(
+            f"""
+            SELECT se.id
+            FROM signal_events se
+            JOIN ({dedup_subquery}) uniq ON uniq.id = se.id
+            WHERE UPPER(se.symbol) = UPPER(?) AND se.ts = ?
+            ORDER BY se.id DESC
+            LIMIT 1
+            """,
+            target_params,
+        )
+        target_row = target_cur.fetchone()
+        if target_row is None:
+            return 0
+        target_id = int(target_row["id"] or 0)
+        if target_id <= 0:
+            return 0
+
+        count_params = [*where_params, int(duplicate_window_sec), int(ts), int(ts), int(target_id)]
+        count_cur = conn.execute(
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM signal_events se
+            JOIN ({dedup_subquery}) uniq ON uniq.id = se.id
+            WHERE se.ts < ? OR (se.ts = ? AND se.id <= ?)
+            """,
+            count_params,
+        )
+        row = count_cur.fetchone()
+        return int(row["cnt"] or 0) if row is not None else 0
+    finally:
+        conn.close()
+
+
 def get_history_winrate_summary(
     time_window: str,
     user_id: int | None = None,
