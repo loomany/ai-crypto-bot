@@ -111,6 +111,7 @@ from db import (
     list_signal_events,
     list_signal_events_by_identity,
     get_signal_history,
+    get_signal_history_sequence_number,
     count_signal_history,
     list_open_signal_events,
     count_signal_events,
@@ -585,6 +586,13 @@ async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
     trade_id = int(trade_open.get("trade_id") or 0)
     if trade_id <= 0:
         return False, "already_exists"
+    sequence_no = get_signal_history_sequence_number(
+        module=str(signal.get("module") or "ai_signals"),
+        symbol=symbol,
+        ts=int(signal.get("sent_at") or 0),
+        include_legacy=allow_legacy_for_user(is_admin_user=False),
+    )
+    display_no = int(sequence_no or trade_id)
     balance_before = float(trade_open.get("balance_before") or AI_PUBLIC_START_BALANCE)
     balance_after_open = float(trade_open.get("balance_after_open") or balance_before)
     risk_pct = float(trade_open.get("risk_pct") or AI_PUBLIC_RISK_PCT)
@@ -592,7 +600,7 @@ async def _ai_public_on_activation(signal: dict) -> tuple[bool, str]:
     class_label = _ai_public_signal_class(score)
     symbol_pair = _format_symbol_pair(symbol)
     text = (
-        f"{_ai_public_header(trade_id)}\n\n"
+        f"{_ai_public_header(display_no)}\n\n"
         f"⚡️ AI ВХОД\n"
         f"{symbol_pair} - {side}\n\n"
         f"📊 Оценка сигнала: {score} / 100\n"
