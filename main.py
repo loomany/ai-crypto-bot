@@ -1012,6 +1012,47 @@ def _format_channel_blurred_ai_signal(signal: Dict[str, Any], lang: str) -> str:
     )
 
 
+def _get_channel_ai_signal_number(signal: Dict[str, Any]) -> int:
+    symbol = str(signal.get("symbol") or "").strip()
+    ts_value = int(signal.get("sent_at") or signal.get("created_at") or 0)
+    if not symbol:
+        return 0
+
+    include_legacy = allow_legacy_for_user(is_admin_user=False)
+    if ts_value > 0:
+        sequence_no = get_signal_history_sequence_number(
+            module="ai_signals",
+            symbol=symbol,
+            ts=ts_value,
+            include_legacy=include_legacy,
+        )
+        if sequence_no > 0:
+            return int(sequence_no)
+
+    return int(
+        count_signal_history(
+            time_window="all",
+            user_id=None,
+            min_score=None,
+            include_legacy=include_legacy,
+            module="ai_signals",
+        )
+        + 1
+    )
+
+
+def _prepend_channel_signal_number(text: str, signal_no: int) -> str:
+    safe_no = int(signal_no or 0)
+    if safe_no <= 0:
+        return text
+    lines = text.split("\n")
+    if any(re.fullmatch(r"#\d+", line.strip()) for line in lines[:3]):
+        return text
+    insert_at = 1 if lines else 0
+    lines.insert(insert_at, f"#{safe_no}")
+    return "\n".join(lines)
+
+
 def _format_channel_blurred_pumpdump_signal(signal: Dict[str, Any], *, symbol: str, lang: str) -> str:
     signal_type = str(signal.get("type") or "").lower()
     header_key = "PUMP_HEADER_PUMP" if signal_type == "pump" else "PUMP_HEADER_DUMP"
@@ -1090,6 +1131,8 @@ async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str =
     if TELEGRAM_CHANNEL_ID == 0:
         return False, "no_channel_id"
 
+    channel_signal_no = _get_channel_ai_signal_number(signal)
+
     async def _send_blurred(slot_reason: str) -> tuple[bool, str]:
         if CHANNEL_FREE_AI_BLURRED_DAILY_LIMIT > 0 or CHANNEL_FREE_AI_BLURRED_MIN_GAP_SEC > 0:
             allow_blurred, blurred_reason = _channel_take_slot(
@@ -1099,7 +1142,10 @@ async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str =
             )
             if not allow_blurred:
                 return False, f"{slot_reason}|blurred:{blurred_reason}"
-        blurred_text = _format_channel_blurred_ai_signal(signal, lang)
+        blurred_text = _prepend_channel_signal_number(
+            _format_channel_blurred_ai_signal(signal, lang),
+            channel_signal_no,
+        )
         await bot.send_message(
             TELEGRAM_CHANNEL_ID,
             blurred_text,
@@ -1124,6 +1170,8 @@ async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str =
         return await _send_blurred(f"fallback:{reason}")
 
     collapsed_text, expanded_text = _build_signal_text_variants(signal, lang, is_admin_user=False)
+    collapsed_text = _prepend_channel_signal_number(collapsed_text, channel_signal_no)
+    expanded_text = _prepend_channel_signal_number(expanded_text, channel_signal_no)
     sent = await bot.send_message(
         TELEGRAM_CHANNEL_ID,
         collapsed_text,
