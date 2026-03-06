@@ -1060,12 +1060,17 @@ def _format_channel_blurred_ai_signal(signal: Dict[str, Any], lang: str) -> str:
 
 
 def _get_channel_ai_signal_number(signal: Dict[str, Any]) -> int:
+    include_legacy = allow_legacy_for_user(is_admin_user=False)
+
+    history_total = _get_channel_history_total_count(include_legacy=include_legacy)
+    if history_total > 0:
+        return int(history_total + 1)
+
     symbol = str(signal.get("symbol") or "").strip()
     ts_value = int(signal.get("sent_at") or signal.get("created_at") or 0)
     if not symbol:
         return 0
 
-    include_legacy = allow_legacy_for_user(is_admin_user=False)
     if ts_value > 0:
         sequence_no = get_signal_history_sequence_number(
             module="ai_signals",
@@ -1085,6 +1090,40 @@ def _get_channel_ai_signal_number(signal: Dict[str, Any]) -> int:
             module="ai_signals",
         )
         + 1
+    )
+
+
+def _get_channel_history_total_count(*, include_legacy: bool) -> int:
+    raw_total = count_signal_history(
+        time_window="all",
+        user_id=None,
+        min_score=None,
+        include_legacy=include_legacy,
+        module="ai_signals",
+    )
+    if raw_total <= 0:
+        return 0
+
+    all_rows = [
+        dict(row)
+        for row in get_signal_history(
+            time_window="all",
+            user_id=None,
+            limit=raw_total,
+            offset=0,
+            include_legacy=include_legacy,
+            module="ai_signals",
+        )
+    ]
+    deduped_rows = _dedupe_signals(all_rows)
+    history_summary = _history_summary_from_rows(deduped_rows)
+    totals = history_summary.get("totals", {}) if isinstance(history_summary, dict) else {}
+    if not isinstance(totals, dict):
+        return 0
+
+    return sum(
+        _safe_int(totals.get(key), 0)
+        for key in ("tp", "be", "sl", "expired_no_entry", "in_progress")
     )
 
 
