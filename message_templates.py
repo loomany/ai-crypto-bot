@@ -242,6 +242,7 @@ def format_signal_activation_message(
     market_regime: Optional[str] = None,
     market_direction: Optional[str] = None,
     market_trend: Optional[bool] = None,
+    include_guest_delay_note: bool = False,
 ) -> str:
     header = i18n.t(lang, "SIGNAL_ACTIVATED_HEADER")
     waiting = i18n.t(lang, "SIGNAL_ACTIVATED_WAITING")
@@ -257,8 +258,16 @@ def format_signal_activation_message(
         f"🎯 TP1: {_format_price(float(tp1), 4)}",
         f"🎯 TP2: {_format_price(float(tp2), 4)}",
         "",
-        waiting,
     ]
+    if include_guest_delay_note:
+        lines.extend(
+            [
+                i18n.t(lang, "SIGNAL_ACTIVATED_GUEST_DELAY_LINE"),
+                i18n.t(lang, "SIGNAL_ACTIVATED_GUEST_SUBSCRIPTION_LINE"),
+                "",
+            ]
+        )
+    lines.append(waiting)
     return "\n".join(lines)
 
 
