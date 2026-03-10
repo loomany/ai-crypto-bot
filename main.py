@@ -2140,38 +2140,30 @@ def _get_history_page(
     page_size: int = 12,
     include_legacy: bool = False,
     module: str = "ai_signals",
-) -> tuple[int, int, int, list[dict]]:
-    raw_total = count_signal_history(
-        time_window=time_window,
-        user_id=viewer_user_id,
-        min_score=None,
-        include_legacy=include_legacy,
-        module=module,
-    )
-
-    if raw_total <= 0:
-        return 1, 1, 0, []
-
-    # Сначала получаем весь отфильтрованный срез за период,
-    # затем применяем то же дедуп-правило, что и для отображения кнопок.
+) -> tuple[int, int, int, list[dict], dict[str, Any]]:
     all_rows = [
         dict(row)
         for row in get_signal_history(
             time_window=time_window,
             user_id=viewer_user_id,
-            limit=raw_total,
+            limit=-1,
             offset=0,
             include_legacy=include_legacy,
             module=module,
         )
     ]
+    if not all_rows:
+        return 1, 1, 0, [], _history_summary_from_rows([])
+
+    # Получаем весь отфильтрованный срез за период и применяем тот же
+    # дедуп-правило, что и для отображения кнопок/сводки.
     deduped_rows = _dedupe_signals(all_rows)
     total = len(deduped_rows)
     pages = max(1, (total + page_size - 1) // page_size)
     page_value = max(1, min(page, pages))
     offset = (page_value - 1) * page_size
     page_rows = deduped_rows[offset : offset + page_size]
-    return page_value, pages, total, page_rows
+    return page_value, pages, total, page_rows, _history_summary_from_rows(deduped_rows)
 
 
 def _history_summary_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2470,32 +2462,13 @@ async def _render_history(*, callback: CallbackQuery, time_window: str, page: in
     history_summary: dict[str, Any] = {}
     if history_type == "ai":
         module = "ai_signals"
-        page_value, pages, total, rows = _get_history_page(
+        page_value, pages, total, rows, history_summary = _get_history_page(
             time_window=time_window,
             page=page,
             viewer_user_id=None,
             include_legacy=include_legacy,
             module=module,
         )
-        raw_total = count_signal_history(
-            time_window=time_window,
-            user_id=None,
-            min_score=None,
-            include_legacy=include_legacy,
-            module=module,
-        )
-        all_rows = [
-            dict(row)
-            for row in get_signal_history(
-                time_window=time_window,
-                user_id=None,
-                limit=raw_total,
-                offset=0,
-                include_legacy=include_legacy,
-                module=module,
-            )
-        ]
-        history_summary = _history_summary_from_rows(_dedupe_signals(all_rows))
     else:
         page_size = 12
         total = count_pumpdump_history(time_window=time_window)
@@ -4459,21 +4432,25 @@ async def sig_refresh(callback: CallbackQuery):
             context = _get_history_context(callback.from_user.id)
             if context:
                 time_window, page, _, history_type = context
-                page, pages, events, outcome_counts, score_bucket_counts, avg_rr_90_100 = _get_history_page(
+                page, pages, total, events, history_summary = _get_history_page(
                     time_window=time_window,
                     page=page,
+                    viewer_user_id=None,
+                    include_legacy=allow_legacy_for_user(is_admin_user=True),
+                    module="ai_signals",
                 )
                 await _edit_message_with_chunks(
                     callback.message,
-                    _format_archive_list(
-                        lang,
-                        time_window,
-                        events,
-                        page,
-                        pages,
-                        outcome_counts,
-                        score_bucket_counts,
-                        avg_rr_90_100,
+                    _build_history_text(
+                        time_window=time_window,
+                        page=page,
+                        pages=pages,
+                        total=total,
+                        rows=events,
+                        lang=lang,
+                        history_summary=history_summary,
+                        include_legacy=allow_legacy_for_user(is_admin_user=True),
+                        history_type=history_type,
                     ),
                     reply_markup=_archive_inline_kb(
                         lang,
