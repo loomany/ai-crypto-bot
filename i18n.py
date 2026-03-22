@@ -253,7 +253,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "STATS_PRO_STATUS_SELECTIVE": "• Статус: 🟡 Использовать выборочно",
         "STATS_PRO_BELOW_THRESHOLD_HEADER": "🚫 Ниже порога качества",
         "STATS_PRO_BELOW_THRESHOLD_SUB": "(не рекомендуется к торговле)",
-        "STATS_PRO_BELOW_THRESHOLD_SCORE": "Score < 80",
+        "STATS_PRO_BELOW_THRESHOLD_SCORE": "Score ≤ 79",
         "STATS_PRO_BELOW_THRESHOLD_LINE1": "• В статистике не учитывается",
         "STATS_PRO_BELOW_THRESHOLD_LINE2": "• Используется только для анализа рынка",
         "STATS_PRO_SUMMARY_HEADER": "📈 Итоги по сделкам",
@@ -447,7 +447,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "• Всего сигналов: 14\n"
             "• Статус: 🟡 Использовать выборочно\n\n"
             "───────────\n\n"
-            "🚫 Score < 80\n"
+            "🚫 Score ≤ 79\n"
             "• В статистике не учитывается\n"
             "• Используется только для анализа рынка\n\n"
             "───────────\n\n"
@@ -460,7 +460,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "ℹ️ Пояснение\n"
             "━━━━━━━━━━━━━━━━\n"
             "• Score ≥ 80 — расчёт winrate и RR\n"
-            "• Score < 80 — анализ рынка"
+            "• Score ≤ 79 — анализ рынка"
         ),
         "HISTORY_LOAD_ERROR": "Ошибка загрузки истории. Попробуй позже.",
         "NAV_PREV_SHORT": "Назад",
@@ -597,10 +597,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "TEST_NOTIFY_ERROR": "❌ Ошибка: {error}",
         "PURGE_TESTS_DONE": "✅ Удалено тестовых сигналов: {removed}",
         "PURGE_SYMBOL_DONE": "✅ {symbol}: удалено signal_events={events}, signal_audit={audit}",
-        "CMD_USAGE_LOCK": "Использование: /lock <id>",
-        "CMD_USAGE_UNLOCK": "Использование: /unlock <id>",
-        "CMD_USAGE_DELETE": "Использование: /delete <id>",
-        "CMD_USAGE_PURGE": "Использование: /purge <symbol>",
+        "CMD_USAGE_LOCK": "Использование: /lock [id]",
+        "CMD_USAGE_UNLOCK": "Использование: /unlock [id]",
+        "CMD_USAGE_DELETE": "Использование: /delete [id]",
+        "CMD_USAGE_PURGE": "Использование: /purge [symbol]",
         "CMD_LOCK_OK": "✅ user_locked=1 для {user_id}",
         "CMD_UNLOCK_OK": "✅ user_locked=0 для {user_id}",
         "CMD_DELETE_OK": "✅ пользователь {user_id} удалён",
@@ -668,7 +668,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "SIGNAL_QUALITY_ANALYSIS_ONLY": (
             "🚫 СИГНАЛ ДЛЯ АНАЛИЗА\n"
-            "Ниже порога качества (Score < 80)\n"
+            "Ниже порога качества (Score ≤ 79)\n"
             "Не рекомендуется к торговле"
         ),
         "SIGNAL_COMPACT_HIGH_RISK_HEADER": "🔥 АКТИВНЫЙ СЦЕНАРИЙ (Score 80–89)",
@@ -1185,7 +1185,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "STATS_PRO_STATUS_SELECTIVE": "• Status: 🟡 Use selectively",
         "STATS_PRO_BELOW_THRESHOLD_HEADER": "🚫 Below quality threshold",
         "STATS_PRO_BELOW_THRESHOLD_SUB": "(not recommended for trading)",
-        "STATS_PRO_BELOW_THRESHOLD_SCORE": "Score < 80",
+        "STATS_PRO_BELOW_THRESHOLD_SCORE": "Score ≤ 79",
         "STATS_PRO_BELOW_THRESHOLD_LINE1": "• Not included in statistics",
         "STATS_PRO_BELOW_THRESHOLD_LINE2": "• Used for market analysis only",
         "STATS_PRO_SUMMARY_HEADER": "📈 Trade summary",
@@ -1385,7 +1385,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "• Total signals: {closed_80_89}\n"
             "• Status: 🟡 Use selectively\n\n"
             "───────────\n\n"
-            "🚫 Score < 80\n"
+            "🚫 Score ≤ 79\n"
             "• Not included in statistics\n"
             "• Used for market analysis only\n\n"
             "───────────\n\n"
@@ -1525,10 +1525,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "TEST_NOTIFY_ERROR": "❌ Error: {error}",
         "PURGE_TESTS_DONE": "✅ Test signals removed: {removed}",
         "PURGE_SYMBOL_DONE": "✅ {symbol}: deleted signal_events={events}, signal_audit={audit}",
-        "CMD_USAGE_LOCK": "Usage: /lock <id>",
-        "CMD_USAGE_UNLOCK": "Usage: /unlock <id>",
-        "CMD_USAGE_DELETE": "Usage: /delete <id>",
-        "CMD_USAGE_PURGE": "Usage: /purge <symbol>",
+        "CMD_USAGE_LOCK": "Usage: /lock [id]",
+        "CMD_USAGE_UNLOCK": "Usage: /unlock [id]",
+        "CMD_USAGE_DELETE": "Usage: /delete [id]",
+        "CMD_USAGE_PURGE": "Usage: /purge [symbol]",
         "CMD_LOCK_OK": "✅ user_locked=1 for {user_id}",
         "CMD_UNLOCK_OK": "✅ user_locked=0 for {user_id}",
         "CMD_DELETE_OK": "✅ user {user_id} deleted",
@@ -1596,7 +1596,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "SIGNAL_QUALITY_ANALYSIS_ONLY": (
             "🚫 ANALYSIS ONLY\n"
-            "Below quality threshold (Score < 80)\n"
+            "Below quality threshold (Score ≤ 79)\n"
             "Not recommended for trading"
         ),
         "SIGNAL_COMPACT_HIGH_RISK_HEADER": "🔥 ACTIVE SCENARIO (Score 80–89)",
