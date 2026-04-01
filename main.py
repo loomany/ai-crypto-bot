@@ -1242,8 +1242,12 @@ async def _send_free_ai_signal_to_channel(signal: Dict[str, Any], *, lang: str =
         return True, f"sent_blurred:{slot_reason}"
 
     score = int(round(float(signal.get("score", 0) or 0)))
-    is_blurred = score > CHANNEL_FREE_AI_MAX_SCORE
 
+    # 90+ сигналы всегда отправляются в публичный канал в заблюренном виде.
+    if score >= 90:
+        return await _send_blurred("score_90_plus")
+
+    is_blurred = score > CHANNEL_FREE_AI_MAX_SCORE
     if is_blurred:
         return await _send_blurred("score_limit")
 
